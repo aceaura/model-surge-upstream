@@ -1,0 +1,6 @@
+.kiro/
+*.exe
+*.db
+*.db-journal
+data/
+upstream.yaml

@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: msu
+      POSTGRES_PASSWORD: ${MSU_PG_PASSWORD:-msu}
+      POSTGRES_DB: msu
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U msu -d msu"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      MSU_PG_DSN: postgres://msu:${MSU_PG_PASSWORD:-msu}@postgres:5432/msu?sslmode=disable
+      MSU_REDIS_ADDR: redis:6379
+      # 密钥必须从环境传入，无默认值：缺失时服务启动即失败。
+      MSU_ADMIN_KEY: ${MSU_ADMIN_KEY:?MSU_ADMIN_KEY is required}
+      MSU_DELIVERY_KEY: ${MSU_DELIVERY_KEY:?MSU_DELIVERY_KEY is required}
+      MSU_LISTEN: ":8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
