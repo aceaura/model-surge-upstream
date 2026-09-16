@@ -4,7 +4,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
@@ -32,7 +31,7 @@ type Models interface {
 }
 
 type Resolver interface {
-	Resolve(ctx context.Context, modelID string, params json.RawMessage) (resolve.ResolvedTarget, error)
+	Resolve(ctx context.Context, modelID string) (resolve.ResolvedTarget, error)
 	List(ctx context.Context) ([]resolve.Listing, error)
 }
 

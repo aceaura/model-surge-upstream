@@ -17,6 +17,9 @@ import (
 // ResolvedTarget 是下发给调用方的目标描述。Headers 含认证头，
 // 因此 String() 脱敏而 MarshalJSON 输出原值——响应带凭据、日志不带凭据
 // 由类型本身保证，不依赖调用点自觉。
+//
+// Defaults 与 Overrides 原样下发而不在此合并：两者语义不同（前者缺失才填、
+// 后者强制压盖），调用方要把它们作用到自己构造的上游请求体上，合并后就分不清了。
 type ResolvedTarget struct {
 	ModelID       string            `json:"model_id"`
 	Account       string            `json:"account"`
@@ -26,7 +29,8 @@ type ResolvedTarget struct {
 	NativeModel   string            `json:"native_model"`
 	ContextWindow int               `json:"context_window,omitempty"`
 	Headers       map[string]string `json:"headers"`
-	Params        json.RawMessage   `json:"params"`
+	Defaults      json.RawMessage   `json:"defaults"`
+	Overrides     json.RawMessage   `json:"overrides"`
 }
 
 // 认证头名。
@@ -78,7 +82,7 @@ func NewResolver(accounts Accounts, models Models) *Resolver {
 	return &Resolver{accounts: accounts, models: models}
 }
 
-func (r *Resolver) Resolve(ctx context.Context, modelID string, clientParams json.RawMessage) (ResolvedTarget, error) {
+func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget, error) {
 	m, err := r.models.Get(ctx, modelID)
 	if err != nil {
 		return ResolvedTarget{}, err
@@ -100,11 +104,6 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string, clientParams jso
 			fmt.Sprintf("account %q references unknown provider %q", acc.Name, acc.ProviderID))
 	}
 
-	params, err := MergeParams(m.Defaults, clientParams, m.Overrides)
-	if err != nil {
-		return ResolvedTarget{}, err
-	}
-
 	return ResolvedTarget{
 		ModelID:       m.ID,
 		Account:       acc.Name,
@@ -114,7 +113,8 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string, clientParams jso
 		NativeModel:   m.NativeModel,
 		ContextWindow: m.ContextWindow,
 		Headers:       AuthHeaders(spec, acc),
-		Params:        params,
+		Defaults:      m.Defaults,
+		Overrides:     m.Overrides,
 	}, nil
 }
 

@@ -1,17 +1,15 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
-// resolveRequest 只接收模型标识与调用方参数。刻意不接收上游请求体：
-// 本服务不转发数据面流量，只回答目标长什么样。
+// resolveRequest 只接收模型标识。刻意不接收上游请求体或调用方参数：
+// 本服务不转发数据面流量，只回答目标长什么样；参数怎么叠加由调用方决定。
 type resolveRequest struct {
-	ModelID string          `json:"model_id"`
-	Params  json.RawMessage `json:"params"`
+	ModelID string `json:"model_id"`
 }
 
 func (h handler) resolve(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +21,7 @@ func (h handler) resolve(w http.ResponseWriter, r *http.Request) {
 		writeCode(w, apperr.InvalidRequest, "model_id is required")
 		return
 	}
-	target, err := h.Resolver.Resolve(r.Context(), req.ModelID, req.Params)
+	target, err := h.Resolver.Resolve(r.Context(), req.ModelID)
 	if err != nil {
 		writeError(w, err)
 		return

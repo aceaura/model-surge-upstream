@@ -76,7 +76,7 @@ func fixture() (fakeAccounts, fakeModels, *Resolver) {
 
 func TestResolve(t *testing.T) {
 	_, _, r := fixture()
-	got, err := r.Resolve(context.Background(), "kimi-1/k2", nil)
+	got, err := r.Resolve(context.Background(), "kimi-1/k2")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -96,8 +96,8 @@ func TestResolve(t *testing.T) {
 	if got.Headers[headerAnthropicVersion] == "" {
 		t.Error("anthropic_key scheme should set the version header")
 	}
-	if string(got.Params) != `{}` {
-		t.Errorf("params = %s", got.Params)
+	if string(got.Defaults) != `{}` || string(got.Overrides) != `{}` {
+		t.Errorf("defaults = %s, overrides = %s", got.Defaults, got.Overrides)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestResolveAccountBaseURLOverride(t *testing.T) {
 	acc.BaseURL = "https://gw.example.com"
 	accounts["kimi-1"] = acc
 
-	got, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2", nil)
+	got, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,30 +116,22 @@ func TestResolveAccountBaseURLOverride(t *testing.T) {
 	}
 }
 
-func TestResolveMergesParams(t *testing.T) {
+func TestResolvePassesParamLayersThrough(t *testing.T) {
 	accounts, models, _ := fixture()
 	m := models["kimi-1/k2"]
 	m.Defaults = json.RawMessage(`{"temperature":0.6,"top_p":0.9}`)
 	m.Overrides = json.RawMessage(`{"max_tokens":8192}`)
 	models["kimi-1/k2"] = m
 
-	got, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2",
-		json.RawMessage(`{"temperature":0.1,"max_tokens":100}`))
+	got, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var params map[string]any
-	if err := json.Unmarshal(got.Params, &params); err != nil {
-		t.Fatal(err)
+	if string(got.Defaults) != `{"temperature":0.6,"top_p":0.9}` {
+		t.Errorf("defaults = %s, want verbatim passthrough", got.Defaults)
 	}
-	if params["temperature"] != 0.1 {
-		t.Errorf("temperature = %v, client should win over defaults", params["temperature"])
-	}
-	if params["top_p"] != 0.9 {
-		t.Errorf("top_p = %v, defaults should fill gaps", params["top_p"])
-	}
-	if params["max_tokens"] != float64(8192) {
-		t.Errorf("max_tokens = %v, overrides should win", params["max_tokens"])
+	if string(got.Overrides) != `{"max_tokens":8192}` {
+		t.Errorf("overrides = %s, want verbatim passthrough", got.Overrides)
 	}
 }
 
@@ -149,7 +141,7 @@ func TestResolveDisabledBranches(t *testing.T) {
 		m := models["kimi-1/k2"]
 		m.Enabled = false
 		models["kimi-1/k2"] = m
-		_, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2", nil)
+		_, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
 		if !apperr.Is(err, apperr.ModelDisabled) {
 			t.Fatalf("code = %q, want model_disabled", apperr.CodeOf(err))
 		}
@@ -162,7 +154,7 @@ func TestResolveDisabledBranches(t *testing.T) {
 		acc := accounts["kimi-1"]
 		acc.Enabled = false
 		accounts["kimi-1"] = acc
-		_, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2", nil)
+		_, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
 		if !apperr.Is(err, apperr.AccountDisabled) {
 			t.Fatalf("code = %q, want account_disabled", apperr.CodeOf(err))
 		}
@@ -174,7 +166,7 @@ func TestResolveDisabledBranches(t *testing.T) {
 
 func TestResolveNotFound(t *testing.T) {
 	_, _, r := fixture()
-	if _, err := r.Resolve(context.Background(), "ghost/x", nil); !apperr.Is(err, apperr.NotFound) {
+	if _, err := r.Resolve(context.Background(), "ghost/x"); !apperr.Is(err, apperr.NotFound) {
 		t.Errorf("code = %q, want not_found", apperr.CodeOf(err))
 	}
 }
@@ -184,7 +176,7 @@ func TestResolveUnknownProvider(t *testing.T) {
 	acc := accounts["kimi-1"]
 	acc.ProviderID = "retired-provider"
 	accounts["kimi-1"] = acc
-	_, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2", nil)
+	_, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
 	if !apperr.Is(err, apperr.InvalidProvider) {
 		t.Errorf("code = %q, want invalid_provider", apperr.CodeOf(err))
 	}
@@ -225,7 +217,7 @@ func TestAuthHeadersAccountOverlay(t *testing.T) {
 
 func TestStringRedactsWhileJSONDoesNot(t *testing.T) {
 	_, _, r := fixture()
-	got, err := r.Resolve(context.Background(), "kimi-1/k2", nil)
+	got, err := r.Resolve(context.Background(), "kimi-1/k2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +237,7 @@ func TestStringRedactsBearer(t *testing.T) {
 	accounts, models, _ := fixture()
 	accounts["ds-1"] = acct("ds-1", "deepseek")
 	models["ds-1/v4"] = mdl("ds-1/v4", "ds-1", provider.ProtocolChatCompletions)
-	got, err := NewResolver(accounts, models).Resolve(context.Background(), "ds-1/v4", nil)
+	got, err := NewResolver(accounts, models).Resolve(context.Background(), "ds-1/v4")
 	if err != nil {
 		t.Fatal(err)
 	}
