@@ -3,10 +3,10 @@
 上游「配置中心 + 凭据下发」服务的 HTTP 接口规范。
 
 - **文档版本**：1.3（2026-09-17）
-- **对应实现**：`backend/httpapi`（`7150b91`；相对 1.2 无接口变更，本版把每个端点补齐为「使用场景 + 请求/响应字段表 + 错误表」的正式规格）
+- **对应实现**：`backend/httpapi`（`7150b91`；相对 1.2 无接口变更，本版把每个端点补齐为「使用场景 + 请求/响应字段表 + 请求体结构 + 错误表」的正式规格）
 - **服务定位**：管理上游账号、模型与参数配置；对调用方下发请求目标（地址、认证头、参数策略）。**不转发数据面聊天流量，不承载调度运行时状态。**
 
-每个端点按固定模板描述：**使用场景 → 请求（路径参数 / 查询参数 / 请求体字段表）→ 响应（字段表）→ 错误 → 示例**。字段表的类型与枚举取值以 §2.5、§2.8 的约定为准；跨端点复用的响应结构在 §3 定义为数据模型，端点章节直接引用。
+每个端点按固定模板描述：**使用场景 → 请求（路径参数 / 查询参数 / 请求体结构 + 字段表）→ 响应（字段表）→ 错误 → 示例**。带请求体的端点先给出字段表（类型与约束）再给出请求体结构（完整 JSON 形态）；无请求体的端点显式标注。字段表的类型与枚举取值以 §2.5、§2.8 的约定为准；跨端点复用的响应结构在 §3 定义为数据模型，端点章节直接引用。
 
 ---
 
@@ -471,6 +471,24 @@ POST /admin/accounts
 | `headers` | map[string]string | 否 | 缺省落库为 `{}`；键值不做内容校验 | 附加到上游请求的自定义头 |
 | `enabled` | bool | 否 | 缺省 `true` | 账号开关 |
 
+**请求体结构**（完整形态；`credential` 为正式写法）：
+
+```json
+{
+  "name": "ds-1",
+  "provider_id": "deepseek",
+  "credential": {
+    "kind": "api_key",
+    "api_key": "sk-…"
+  },
+  "base_url": "https://api.deepseek.com",
+  "headers": {"X-Custom-Header": "value"},
+  "enabled": true
+}
+```
+
+`api_key` 字段是 `credential.api_key` 的等价简写，两者给出其一即可。
+
 > **`name` 含 `/` 的后果**：创建本身不会被拒绝，但单段路由 `{name}` 无法匹配含 `/` 的名字——该账号创建后**无法再被 GET/PUT/DELETE 寻址**，只能整体重建数据清理。请避免。
 
 **响应** `201`：
@@ -511,6 +529,8 @@ GET /admin/accounts/{name}
 | 参数 | 类型 | 约束 | 含义 |
 |---|---|---|---|
 | `name` | string | 单段路由，匹配不含 `/` 的完整剩余路径段 | 账号名 |
+
+**请求体**：无。
 
 **响应** `200`：
 
@@ -567,6 +587,21 @@ PUT /admin/accounts/{name}
 | `base_url` | 置空串（回落 provider 默认） |
 | `headers` | 置 `{}` |
 | `enabled` | 置 `true` |
+
+**请求体结构**（完整替换形态——因替换语义，建议每次携带当前有效值；`name` 不出现在请求体中）：
+
+```json
+{
+  "provider_id": "deepseek",
+  "credential": {
+    "kind": "api_key",
+    "api_key": "sk-…"
+  },
+  "base_url": "https://api.deepseek.com",
+  "headers": {"X-Custom-Header": "value"},
+  "enabled": false
+}
+```
 
 > **`base_url`、`headers`、`enabled` 是替换语义**：只想改 `enabled` 时，须同时带上现有 `base_url` 与 `headers`，否则会被清空。
 
@@ -763,6 +798,8 @@ GET /admin/models?account={name}
 |---|---|---|---|---|
 | `account` | string | 否 | 精确匹配账号名 | 按账号过滤；缺省或空串 = 列出全部 |
 
+**请求体**：无。
+
 **响应** `200`：
 
 | 字段 | 类型 | 取值与含义 |
@@ -800,6 +837,21 @@ POST /admin/models
 | `defaults` | object | 否 | 须为 JSON 对象（数组/标量返回 `400 invalid_json`）；缺省或 `null` 落库为 `{}` | 缺省填充参数 |
 | `overrides` | object | 否 | 同 `defaults` | 强制覆盖参数 |
 | `enabled` | bool | 否 | 缺省 `true` | 模型开关 |
+
+**请求体结构**：
+
+```json
+{
+  "id": "ds-1/v4",
+  "account": "ds-1",
+  "native_model": "deepseek-v4.1-flash",
+  "protocol": "chat_completions",
+  "context_window": 1000000,
+  "defaults": {"temperature": 0.6, "top_p": 0.9},
+  "overrides": {"max_tokens": 8192},
+  "enabled": true
+}
+```
 
 > `defaults` 与 `overrides` 原样存储、原样下发（3.5），**本服务不做参数合并**；调用方按 `defaults ← 自身请求参数 ← overrides` 叠加（对象递归合并、数组与标量整体替换）。互斥参数组（如 anthropic 的 thinking 相关字段）应在 overrides 中整组写全，避免深合并拼出上游拒收的组合。
 
@@ -850,6 +902,8 @@ GET /admin/models/{id...}
 |---|---|---|---|
 | `id` | string | **通配路由**：匹配含尾部全部剩余路径（可含多个 `/`） | 模型标识 |
 
+**请求体**：无。
+
 **响应** `200`：
 
 | 字段 | 类型 | 取值与含义 |
@@ -887,6 +941,20 @@ PUT /admin/models/{id...}
 | `context_window` | 置 `0`（清除声明） |
 | `defaults` / `overrides` | 置 `{}`（清除） |
 | `enabled` | 置 `true`（重新启用） |
+
+**请求体结构**（完整替换形态；`id` 不出现在请求体中）：
+
+```json
+{
+  "account": "ds-1",
+  "native_model": "deepseek-v4.1-flash",
+  "protocol": "chat_completions",
+  "context_window": 1000000,
+  "defaults": {"temperature": 0.6, "top_p": 0.9},
+  "overrides": {"max_tokens": 16384},
+  "enabled": true
+}
+```
 
 > **`context_window`、`defaults`、`overrides`、`enabled` 是替换语义**：只改其中一项时须把其余项一并带上。
 
@@ -1011,6 +1079,14 @@ POST /v1/resolve
 |---|---|---|---|---|
 | `model_id` | string | 是 | 非空；未知模型返回 `404 not_found` | 待解析的模型标识，须与 6.1 中的 `id` 一致 |
 
+**请求体结构**：
+
+```json
+{
+  "model_id": "ds-1/v4"
+}
+```
+
 **响应** `200`：ResolvedTarget，结构见 3.5。
 
 **错误**（按判定顺序，命中即返回）：
@@ -1065,6 +1141,8 @@ GET /v1/accounts/{name}/quota
 |---|---|---|---|
 | `name` | string | 单段路由 | 账号名 |
 
+**请求体**：无。
+
 请求、响应、错误、缓存行为与 5.7 **完全一致**（同一实现）。下发面提供此接口供数据面运行时使用。
 
 **示例**：
@@ -1083,6 +1161,8 @@ GET /v1/accounts/{name}/upstream-models
 ```
 
 **路径参数**：同 6.3 的 `name`。
+
+**请求体**：无。
 
 请求、响应、错误、缓存行为与 5.8 **完全一致**（同一实现）。
 
