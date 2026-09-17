@@ -2,8 +2,8 @@
 
 上游「配置中心 + 凭据下发」服务的 HTTP 接口规范。
 
-- **文档版本**：1.1（2026-09-17）
-- **对应实现**：`backend/httpapi`（`0877137` 下发面拆分 defaults 与 overrides，之上新增上游可用模型查询）
+- **文档版本**：1.2（2026-09-17）
+- **对应实现**：`backend/httpapi`（`0877137` 下发面拆分 defaults 与 overrides，之上新增上游可用模型查询；额度报告改为多形态计量项列表——相对 1.1 为破坏性变更）
 - **服务定位**：管理上游账号、模型与参数配置；对调用方下发请求目标（地址、认证头、参数策略）。**不转发数据面聊天流量，不承载调度运行时状态。**
 
 ---
@@ -115,7 +115,7 @@ Authorization: Bearer <密钥>
 | `protocols` | []string | 支持的协议，取值见 3.3 的 `protocol` |
 | `auth` | string | 认证头形态：`bearer` 或 `anthropic_key` |
 | `credential` | string | 凭据形态，本期恒为 `api_key` |
-| `quota` | object \| 缺省 | 额度接口声明 `{path, method, reset}`，未声明则字段缺省 |
+| `quota` | object \| 缺省 | 额度接口声明 `{path, method, kind, unit, reset}`，未声明则字段缺省。声明了 `quota` 时 `kind` 与 `unit` 必填（注册期缺失直接 panic），二者为额度解析结果的兜底语义，取值见 3.6 |
 | `models` | object \| 缺省 | 上游模型列举接口声明 `{path, method}`，未声明则字段缺省（该上游无可用列举端点） |
 
 当前注册序（固定顺序，共 6 家）：
@@ -127,7 +127,9 @@ Authorization: Bearer <密钥>
 | `gemini` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
 | `kimi` | `https://api.moonshot.cn/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
 | `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
-| `deepseek` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | `{path: "/user/balance", method: "GET", reset: "prepaid"}` | `/models` |
+| `deepseek` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | `{path: "/user/balance", method: "GET", kind: "balance", unit: "currency", reset: "prepaid"}` | `/models` |
+
+> 除 `deepseek` 外五家均未声明 `quota`：它们没有可用的额度端点。注意速率窗口维度不依赖 `quota` 声明的形态字段，只要额度端点通了就会从响应头一并读出（见 3.6）。
 
 > `ark` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
@@ -207,12 +209,27 @@ Authorization: Bearer <密钥>
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `account` | string | |
-| `queryable` | bool | `false` 表示该 provider 未声明额度接口，**属正常答案而非错误**，此时数值字段全部缺省 |
-| `remaining` | number \| 缺省 | 剩余额度；上游响应中解析不出数值则缺省 |
-| `total` | number \| 缺省 | 总额度；同上 |
-| `currency` | string \| 缺省 | 币种，如 `CNY` |
-| `reset` | string \| 缺省 | 重置规律：`none` / `rolling` / `daily` / `monthly` / `prepaid` |
+| `queryable` | bool | `false` 表示该 provider 未声明额度接口，**属正常答案而非错误**，此时 `meters` 为空数组 |
+| `meters` | array of Meter | 计量项列表，可能为空数组（端点通了但响应中无可识别字段） |
 | `at` | time | 本次查询时刻 |
+
+**为什么是列表而非单值**：上游额度有四类形态——预付费余额（充值才涨）、后付费已用量（没有"余量"可言）、订阅周期配额（关键信息是下次重置时刻）、滚动速率窗口（`requests` 与 `tokens` 是并存的独立计数，各有各的余量与重置）。单值结构只能表达第一类，因此报告承载一组计量项，单值形态退化成只有一项。
+
+**Meter（计量项）**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `kind` | string | 形态：`balance`（预付费余额）/ `usage`（后付费已用量）/ `rate_limit`（滚动速率窗口） |
+| `unit` | string | 单位：`currency` / `requests` / `tokens` / `credits`。数值本身说不出自己是钱还是请求数，故必填 |
+| `label` | string \| 缺省 | 给人看的维度名，如币种 `CNY`、速率维度 `tokens` |
+| `currency` | string \| 缺省 | 币种，仅 `unit` 为 `currency` 时有意义 |
+| `remaining` | number \| 缺省 | 余量；解析不出则缺省 |
+| `total` | number \| 缺省 | 总量或上限 |
+| `used` | number \| 缺省 | 已用量。后付费形态往往只有此项 |
+| `reset` | string \| 缺省 | 重置规律：`none` / `rolling` / `daily` / `monthly` / `prepaid` |
+| `reset_at` | time \| 缺省 | 下次重置的绝对时刻，上游给了才有。周期配额与速率窗口下这比静态的 `reset` 规律更有用 |
+
+**数值来源**：响应体内的计量项，其 `kind`/`unit`/`reset` 以 provider 规格中的额度声明（见 3.1）兜底，上游响应自带更精确信息时以响应为准；速率窗口维度来自响应头 `x-ratelimit-{remaining,limit,reset}-{requests,tokens}`，重置时刻同时接受 RFC3339 与 Unix 秒两种写法。认不出的字段一律不猜——只报 `queryable: true` 而不产出计量项。
 
 额度报告只在进程内存缓存（带 TTL，默认 60s，`MSU_QUOTA_TTL`），不落库；账号更新或删除时缓存立即失效。查询上游使用与 resolve 相同的认证头。
 
@@ -397,9 +414,25 @@ GET /admin/accounts/{name}/quota
 {
   "account": "ds-1",
   "queryable": true,
-  "remaining": 42.5,
-  "currency": "CNY",
-  "reset": "prepaid",
+  "meters": [
+    {
+      "kind": "balance",
+      "unit": "currency",
+      "label": "CNY",
+      "currency": "CNY",
+      "remaining": 42.5,
+      "reset": "prepaid"
+    },
+    {
+      "kind": "rate_limit",
+      "unit": "tokens",
+      "label": "tokens",
+      "remaining": 9000,
+      "total": 10000,
+      "reset": "rolling",
+      "reset_at": "2026-09-17T02:01:00Z"
+    }
+  ],
   "at": "2026-09-17T02:00:00Z"
 }
 ```

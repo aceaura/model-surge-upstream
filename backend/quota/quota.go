@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,15 +24,30 @@ const (
 	bodyLimit      = 64 * 1024
 )
 
+// Meter 一条计量项。上游额度不是单一数值：预付费只有余额，后付费只有
+// 已用量，速率窗口则是 requests 与 tokens 两条独立计数各自重置。
+// 因此报告承载一组计量项，单值形态退化成只有一项。
+type Meter struct {
+	Kind  provider.MeterKind `json:"kind"`
+	Unit  provider.MeterUnit `json:"unit"`
+	Label string             `json:"label,omitempty"`
+	// Currency 仅在 Unit 为 currency 时有意义。
+	Currency  string             `json:"currency,omitempty"`
+	Remaining *float64           `json:"remaining,omitempty"`
+	Total     *float64           `json:"total,omitempty"`
+	Used      *float64           `json:"used,omitempty"`
+	Reset     provider.ResetRule `json:"reset,omitempty"`
+	// ResetAt 下次重置的绝对时刻，上游给了才有。周期配额与速率窗口下
+	// 这比静态的 Reset 规律更有用。
+	ResetAt *time.Time `json:"reset_at,omitempty"`
+}
+
 type Report struct {
 	Account string `json:"account"`
 	// Queryable 为假表示该 provider 未声明额度接口，这不是错误。
-	Queryable bool               `json:"queryable"`
-	Remaining *float64           `json:"remaining,omitempty"`
-	Total     *float64           `json:"total,omitempty"`
-	Currency  string             `json:"currency,omitempty"`
-	Reset     provider.ResetRule `json:"reset,omitempty"`
-	At        time.Time          `json:"at"`
+	Queryable bool      `json:"queryable"`
+	Meters    []Meter   `json:"meters"`
+	At        time.Time `json:"at"`
 }
 
 type Accounts interface {
@@ -80,7 +96,7 @@ func (q *Quota) Query(ctx context.Context, accountName string) (Report, error) {
 	}
 	if spec.Quota == nil {
 		// 不可查询是一种正常答案，不是错误。
-		report := Report{Account: acc.Name, Queryable: false, At: time.Now().UTC()}
+		report := Report{Account: acc.Name, Queryable: false, Meters: []Meter{}, At: time.Now().UTC()}
 		q.store(accountName, report)
 		return report, nil
 	}
@@ -125,49 +141,138 @@ func (q *Quota) fetch(ctx context.Context, spec provider.Spec, acc account.Accou
 	report := Report{
 		Account:   acc.Name,
 		Queryable: true,
-		Reset:     spec.Quota.Reset,
+		Meters:    parseMeters(body, resp.Header, *spec.Quota),
 		At:        time.Now().UTC(),
 	}
-	remaining, total, currency := parseBalance(body)
-	report.Remaining, report.Total, report.Currency = remaining, total, currency
 	return report, nil
 }
 
-// parseBalance 从上游响应里尽力提取余量。各家字段名不一，认不出就只回
-// Queryable=true 而不带数值，避免把猜测当事实报给运维者。
-func parseBalance(body []byte) (remaining, total *float64, currency string) {
+// parseMeters 从响应体与响应头里尽力提取计量项。各家字段名不一，认不出就
+// 回空列表而不是猜一个数出来——只报 Queryable=true 表示端点通了。
+// 声明的 kind/unit/reset 作为体内计量项的兜底语义。
+func parseMeters(body []byte, header http.Header, decl provider.QuotaAPI) []Meter {
+	out := parseBodyMeters(body, decl)
+	out = append(out, parseRateLimitMeters(header)...)
+	return out
+}
+
+func parseBodyMeters(body []byte, decl provider.QuotaAPI) []Meter {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) != nil {
-		return nil, nil, ""
+		return []Meter{}
 	}
+
+	base := Meter{Kind: decl.Kind, Unit: decl.Unit, Reset: decl.Reset}
+
 	// DeepSeek 形态：{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}
-	if infos, ok := payload["balance_infos"].([]any); ok && len(infos) > 0 {
-		if first, ok := infos[0].(map[string]any); ok {
-			if v, ok := numberOf(first["total_balance"]); ok {
-				remaining = &v
+	// 多币种时每种是一条独立计量项。
+	if infos, ok := payload["balance_infos"].([]any); ok {
+		out := []Meter{}
+		for _, raw := range infos {
+			info, ok := raw.(map[string]any)
+			if !ok {
+				continue
 			}
-			if c, ok := first["currency"].(string); ok {
-				currency = c
+			m := base
+			if v, ok := numberOf(info["total_balance"]); ok {
+				m.Remaining = &v
 			}
-			return remaining, nil, currency
+			if c, ok := info["currency"].(string); ok {
+				m.Currency, m.Label = c, c
+			}
+			if m.Remaining != nil {
+				out = append(out, m)
+			}
+		}
+		if len(out) > 0 {
+			return out
 		}
 	}
+
+	m := base
 	for _, key := range []string{"remaining", "remaining_credits", "balance", "credit_left"} {
 		if v, ok := numberOf(payload[key]); ok {
-			remaining = &v
+			m.Remaining = &v
 			break
 		}
 	}
-	for _, key := range []string{"total", "total_credits", "granted", "quota"} {
+	for _, key := range []string{"total", "total_credits", "granted", "quota", "hard_limit_usd"} {
 		if v, ok := numberOf(payload[key]); ok {
-			total = &v
+			m.Total = &v
+			break
+		}
+	}
+	// 后付费形态只报已用量，没有余量可言。
+	for _, key := range []string{"used", "usage", "total_usage", "spent"} {
+		if v, ok := numberOf(payload[key]); ok {
+			m.Used = &v
 			break
 		}
 	}
 	if c, ok := payload["currency"].(string); ok {
-		currency = c
+		m.Currency = c
 	}
-	return remaining, total, currency
+	if t, ok := timeOf(payload["reset_at"]); ok {
+		m.ResetAt = &t
+	}
+	if m.Remaining == nil && m.Total == nil && m.Used == nil {
+		return []Meter{}
+	}
+	return []Meter{m}
+}
+
+// parseRateLimitMeters 读取滚动速率窗口。这些维度只出现在响应头里，
+// requests 与 tokens 各自独立计数、各自重置，因此是两条计量项。
+func parseRateLimitMeters(header http.Header) []Meter {
+	if header == nil {
+		return nil
+	}
+	dims := []struct {
+		unit  provider.MeterUnit
+		label string
+		slug  string
+	}{
+		{provider.UnitRequests, "requests", "requests"},
+		{provider.UnitTokens, "tokens", "tokens"},
+	}
+	var out []Meter
+	for _, d := range dims {
+		m := Meter{
+			Kind:  provider.MeterRateLimit,
+			Unit:  d.unit,
+			Label: d.label,
+			Reset: provider.ResetRolling,
+		}
+		if v, ok := numberOf(header.Get("x-ratelimit-remaining-" + d.slug)); ok {
+			m.Remaining = &v
+		}
+		if v, ok := numberOf(header.Get("x-ratelimit-limit-" + d.slug)); ok {
+			m.Total = &v
+		}
+		if m.Remaining == nil && m.Total == nil {
+			continue
+		}
+		if t, ok := timeOf(header.Get("x-ratelimit-reset-" + d.slug)); ok {
+			m.ResetAt = &t
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// timeOf 接受 RFC3339 时刻与 Unix 秒两种写法：各家响应头两种都有。
+func timeOf(v any) (time.Time, bool) {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), true
+	}
+	if secs, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return time.Unix(secs, 0).UTC(), true
+	}
+	return time.Time{}, false
 }
 
 func numberOf(v any) (float64, bool) {

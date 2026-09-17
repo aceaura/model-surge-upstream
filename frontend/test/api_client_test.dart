@@ -126,13 +126,21 @@ void main() {
           'protocols': ['anthropic', 'chat_completions'],
           'auth': 'bearer',
           'credential': 'api_key',
-          'quota': {'path': '/user/balance', 'method': 'GET', 'reset': 'prepaid'},
+          'quota': {
+            'path': '/user/balance',
+            'method': 'GET',
+            'kind': 'balance',
+            'unit': 'currency',
+            'reset': 'prepaid',
+          },
         },
       ]
     }));
     final providers = await client.listProviders();
     expect(providers.first.quotaQueryable, isFalse);
     expect(providers.last.quotaQueryable, isTrue);
+    expect(providers.last.quotaKind, 'balance');
+    expect(providers.last.quotaUnit, 'currency');
     expect(providers.last.quotaReset, 'prepaid');
   });
 
@@ -152,11 +160,52 @@ void main() {
   });
 
   test('quota report parses the not-queryable shape', () async {
-    final client = clientReturning(
-        200, jsonEncode({'account': 'kimi-1', 'queryable': false}));
+    final client = clientReturning(200,
+        jsonEncode({'account': 'kimi-1', 'queryable': false, 'meters': []}));
     final report = await client.queryQuota('kimi-1');
     expect(report.queryable, isFalse);
-    expect(report.remaining, isNull);
+    expect(report.meters, isEmpty);
+  });
+
+  test('quota report parses every meter', () async {
+    final client = clientReturning(
+        200,
+        jsonEncode({
+          'account': 'ds-1',
+          'queryable': true,
+          'meters': [
+            {
+              'kind': 'balance',
+              'unit': 'currency',
+              'currency': 'CNY',
+              'label': 'CNY',
+              'remaining': 12.34,
+              'reset': 'prepaid',
+            },
+            {
+              'kind': 'usage',
+              'unit': 'currency',
+              'used': 42,
+              'reset': 'monthly',
+              'reset_at': '2026-10-01T00:00:00Z',
+            },
+            {
+              'kind': 'rate_limit',
+              'unit': 'tokens',
+              'label': 'tokens',
+              'remaining': 9000,
+              'total': 10000,
+            },
+          ],
+        }));
+    final report = await client.queryQuota('ds-1');
+    expect(report.meters, hasLength(3));
+    expect(report.meters[0].title, '余额·CNY');
+    expect(report.meters[0].amount(report.meters[0].remaining), '12.34 CNY');
+    expect(report.meters[1].used, 42);
+    expect(report.meters[1].resetAt, isNotNull);
+    expect(report.meters[2].unit, 'tokens');
+    expect(report.meters[2].amount(report.meters[2].total), '10000.0 token');
   });
 }
 

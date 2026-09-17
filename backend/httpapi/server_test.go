@@ -215,7 +215,7 @@ func newFixture(t *testing.T) *fixture {
 			Defaults: json.RawMessage(`{}`), Overrides: json.RawMessage(`{}`),
 		},
 	}}
-	q := &stubQuota{report: quota.Report{Account: "kimi-1", Queryable: false}}
+	q := &stubQuota{report: quota.Report{Account: "kimi-1", Queryable: false, Meters: []quota.Meter{}}}
 	up := &stubUpstreamModels{report: upmodels.Report{
 		Account:   "kimi-1",
 		Queryable: true,
@@ -619,6 +619,43 @@ func TestQuotaNotQueryable(t *testing.T) {
 	}
 	if report.Queryable {
 		t.Error("queryable should be false")
+	}
+	if report.Meters == nil {
+		t.Error("meters should serialize as an empty list, not null")
+	}
+}
+
+func TestQuotaCarriesEveryMeter(t *testing.T) {
+	f := newFixture(t)
+	used := 42.0
+	resetAt := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	f.quota.report = quota.Report{
+		Account:   "kimi-1",
+		Queryable: true,
+		Meters: []quota.Meter{
+			{Kind: provider.MeterUsage, Unit: provider.UnitCurrency, Currency: "USD", Used: &used, ResetAt: &resetAt},
+			{Kind: provider.MeterRateLimit, Unit: provider.UnitTokens, Label: "tokens"},
+		},
+	}
+	rec := f.do(t, "GET", "/v1/accounts/kimi-1/quota", deliveryKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var report quota.Report
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Meters) != 2 {
+		t.Fatalf("meters = %v, every dimension must survive the wire", report.Meters)
+	}
+	if report.Meters[0].Used == nil || *report.Meters[0].Used != used {
+		t.Errorf("used = %v, post-paid accounts report usage only", report.Meters[0].Used)
+	}
+	if report.Meters[0].ResetAt == nil || !report.Meters[0].ResetAt.Equal(resetAt) {
+		t.Errorf("reset_at = %v", report.Meters[0].ResetAt)
+	}
+	if report.Meters[1].Unit != provider.UnitTokens {
+		t.Errorf("unit = %q, want tokens", report.Meters[1].Unit)
 	}
 }
 

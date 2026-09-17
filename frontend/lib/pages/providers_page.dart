@@ -79,7 +79,12 @@ class _ProviderCard extends StatelessWidget {
             _row('支持协议', spec.protocols.join(', ')),
             _row('认证形态', spec.auth),
             _row('凭据形态', spec.credential),
-            _row('额度重置', spec.quotaReset ?? '不支持额度查询'),
+            if (!spec.quotaQueryable)
+              _row('额度查询', '不支持')
+            else ...[
+              _row('额度形态', '${spec.quotaKind} / ${spec.quotaUnit}'),
+              _row('额度重置', spec.quotaReset ?? '未声明'),
+            ],
           ],
         ),
       ),

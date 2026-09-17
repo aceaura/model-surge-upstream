@@ -10,6 +10,8 @@ class ProviderSpec {
     required this.protocols,
     required this.auth,
     required this.credential,
+    required this.quotaKind,
+    required this.quotaUnit,
     required this.quotaReset,
   });
 
@@ -21,10 +23,12 @@ class ProviderSpec {
   final String auth;
   final String credential;
 
-  /// null 表示该 provider 未声明额度接口。
+  /// 以下三项为 null 表示该 provider 未声明额度接口。
+  final String? quotaKind;
+  final String? quotaUnit;
   final String? quotaReset;
 
-  bool get quotaQueryable => quotaReset != null;
+  bool get quotaQueryable => quotaKind != null;
 
   factory ProviderSpec.fromJson(Map<String, dynamic> json) {
     final quota = json['quota'] as Map<String, dynamic>?;
@@ -37,6 +41,8 @@ class ProviderSpec {
           (json['protocols'] as List<dynamic>? ?? const []).cast<String>(),
       auth: json['auth'] as String? ?? '',
       credential: json['credential'] as String? ?? '',
+      quotaKind: quota?['kind'] as String?,
+      quotaUnit: quota?['unit'] as String?,
       quotaReset: quota?['reset'] as String?,
     );
   }
@@ -108,29 +114,90 @@ class UpstreamModel {
       );
 }
 
+/// 一条计量项。上游额度语义不止一种：预付费看余量，后付费只有已用量，
+/// 速率窗口下 requests 与 tokens 是两条独立计数。
+class QuotaMeter {
+  const QuotaMeter({
+    required this.kind,
+    required this.unit,
+    this.label,
+    this.currency,
+    this.remaining,
+    this.total,
+    this.used,
+    this.reset,
+    this.resetAt,
+  });
+
+  final String kind;
+  final String unit;
+  final String? label;
+  final String? currency;
+  final double? remaining;
+  final double? total;
+  final double? used;
+  final String? reset;
+  final DateTime? resetAt;
+
+  factory QuotaMeter.fromJson(Map<String, dynamic> json) => QuotaMeter(
+        kind: json['kind'] as String? ?? '',
+        unit: json['unit'] as String? ?? '',
+        label: json['label'] as String?,
+        currency: json['currency'] as String?,
+        remaining: (json['remaining'] as num?)?.toDouble(),
+        total: (json['total'] as num?)?.toDouble(),
+        used: (json['used'] as num?)?.toDouble(),
+        reset: json['reset'] as String?,
+        resetAt: DateTime.tryParse(json['reset_at'] as String? ?? ''),
+      );
+
+  static const _kindNames = {
+    'balance': '余额',
+    'usage': '用量',
+    'rate_limit': '速率',
+  };
+
+  static const _unitNames = {
+    'currency': '金额',
+    'requests': '请求数',
+    'tokens': 'token',
+    'credits': '点数',
+  };
+
+  String get title {
+    final l = label;
+    if (l != null && l.isNotEmpty) {
+      return '${_kindNames[kind] ?? kind}·$l';
+    }
+    return '${_kindNames[kind] ?? kind}·${_unitNames[unit] ?? unit}';
+  }
+
+  String amount(double? value) {
+    if (value == null) return '上游未提供';
+    final suffix = unit == 'currency'
+        ? (currency ?? '')
+        : (_unitNames[unit] ?? unit);
+    return suffix.isEmpty ? '$value' : '$value $suffix';
+  }
+}
+
 class QuotaReport {
   const QuotaReport({
     required this.account,
     required this.queryable,
-    this.remaining,
-    this.total,
-    this.currency,
-    this.reset,
+    required this.meters,
   });
 
   final String account;
   final bool queryable;
-  final double? remaining;
-  final double? total;
-  final String? currency;
-  final String? reset;
+  final List<QuotaMeter> meters;
 
   factory QuotaReport.fromJson(Map<String, dynamic> json) => QuotaReport(
         account: json['account'] as String? ?? '',
         queryable: json['queryable'] as bool? ?? false,
-        remaining: (json['remaining'] as num?)?.toDouble(),
-        total: (json['total'] as num?)?.toDouble(),
-        currency: json['currency'] as String?,
-        reset: json['reset'] as String?,
+        meters: (json['meters'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(QuotaMeter.fromJson)
+            .toList(growable: false),
       );
 }

@@ -36,10 +36,35 @@ const (
 	ResetPrepaid ResetRule = "prepaid"
 )
 
+// MeterKind 计量项形态。上游额度不止一种语义：预付费看余额，后付费只有
+// 已用量，订阅制与速率窗口则是周期配额。
+type MeterKind string
+
+const (
+	MeterBalance   MeterKind = "balance"    // 预付费余额，充值才涨
+	MeterUsage     MeterKind = "usage"      // 后付费已用量，可能带月度上限
+	MeterRateLimit MeterKind = "rate_limit" // 滚动速率窗口，如 RPM/TPM
+)
+
+// MeterUnit 计量单位。数值本身说不出自己是钱、请求数还是 token，
+// 必须显式声明，否则运维只能靠币种字段有没有值去猜。
+type MeterUnit string
+
+const (
+	UnitCurrency MeterUnit = "currency"
+	UnitRequests MeterUnit = "requests"
+	UnitTokens   MeterUnit = "tokens"
+	UnitCredits  MeterUnit = "credits"
+)
+
 // QuotaAPI 额度查询接口声明。provider 未声明时 Spec.Quota 为 nil。
+// Kind/Unit/Reset 描述该端点主计量项的形态，作为解析结果的兜底：
+// 上游响应自带更精确的信息时以响应为准。
 type QuotaAPI struct {
 	Path   string    `json:"path"`
 	Method string    `json:"method"`
+	Kind   MeterKind `json:"kind"`
+	Unit   MeterUnit `json:"unit"`
 	Reset  ResetRule `json:"reset"`
 }
 
@@ -92,6 +117,9 @@ func register(s Spec) {
 	}
 	if len(s.Protocols) == 0 {
 		panic(fmt.Sprintf("provider %q: at least one protocol is required", s.ID))
+	}
+	if s.Quota != nil && (s.Quota.Kind == "" || s.Quota.Unit == "") {
+		panic(fmt.Sprintf("provider %q: quota must declare kind and unit", s.ID))
 	}
 	byID[s.ID] = len(specs)
 	specs = append(specs, s)

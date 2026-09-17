@@ -45,8 +45,8 @@ func TestQueryNotQueryable(t *testing.T) {
 	if got.Queryable {
 		t.Error("Queryable should be false")
 	}
-	if got.Remaining != nil || got.Total != nil {
-		t.Error("no numbers should be reported")
+	if len(got.Meters) != 0 {
+		t.Errorf("meters = %v, want none", got.Meters)
 	}
 }
 
@@ -74,14 +74,21 @@ func TestQuerySuccess(t *testing.T) {
 	if !got.Queryable {
 		t.Error("Queryable should be true")
 	}
-	if got.Remaining == nil || *got.Remaining != 12.34 {
-		t.Errorf("remaining = %v, want 12.34", got.Remaining)
+	if len(got.Meters) != 1 {
+		t.Fatalf("meters = %v, want exactly one", got.Meters)
 	}
-	if got.Currency != "CNY" {
-		t.Errorf("currency = %q", got.Currency)
+	m := got.Meters[0]
+	if m.Kind != provider.MeterBalance || m.Unit != provider.UnitCurrency {
+		t.Errorf("kind/unit = %q/%q, should come from the provider spec", m.Kind, m.Unit)
 	}
-	if got.Reset != provider.ResetPrepaid {
-		t.Errorf("reset = %q, should come from the provider spec", got.Reset)
+	if m.Remaining == nil || *m.Remaining != 12.34 {
+		t.Errorf("remaining = %v, want 12.34", m.Remaining)
+	}
+	if m.Currency != "CNY" {
+		t.Errorf("currency = %q", m.Currency)
+	}
+	if m.Reset != provider.ResetPrepaid {
+		t.Errorf("reset = %q, should come from the provider spec", m.Reset)
 	}
 	if gotPath != "/user/balance" {
 		t.Errorf("path = %q", gotPath)
@@ -171,29 +178,125 @@ func TestForget(t *testing.T) {
 	}
 }
 
-func TestParseBalanceShapes(t *testing.T) {
+func TestParseBodyMeterShapes(t *testing.T) {
+	decl := provider.QuotaAPI{Kind: provider.MeterBalance, Unit: provider.UnitCurrency, Reset: provider.ResetPrepaid}
 	cases := map[string]struct {
-		body string
-		want *float64
+		body      string
+		wantCount int
+		remaining *float64
+		used      *float64
 	}{
-		"deepseek":     {`{"balance_infos":[{"total_balance":"12.34"}]}`, ptr(12.34)},
-		"plain number": {`{"balance":7}`, ptr(7)},
-		"remaining":    {`{"remaining":3.5}`, ptr(3.5)},
-		"unknown":      {`{"whatever":1}`, nil},
-		"not json":     {`nope`, nil},
+		"deepseek": {`{"balance_infos":[{"total_balance":"12.34"}]}`, 1, ptr(12.34), nil},
+		"multi currency": {`{"balance_infos":[{"currency":"CNY","total_balance":"12.34"},` +
+			`{"currency":"USD","total_balance":"1.5"}]}`, 2, ptr(12.34), nil},
+		"plain number": {`{"balance":7}`, 1, ptr(7), nil},
+		"remaining":    {`{"remaining":3.5}`, 1, ptr(3.5), nil},
+		"usage only":   {`{"total_usage":42}`, 1, nil, ptr(42)},
+		"unknown":      {`{"whatever":1}`, 0, nil, nil},
+		"not json":     {`nope`, 0, nil, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got, _, _ := parseBalance([]byte(tc.body))
-			switch {
-			case tc.want == nil && got != nil:
-				t.Errorf("remaining = %v, want nil", *got)
-			case tc.want != nil && got == nil:
-				t.Errorf("remaining = nil, want %v", *tc.want)
-			case tc.want != nil && *got != *tc.want:
-				t.Errorf("remaining = %v, want %v", *got, *tc.want)
+			got := parseBodyMeters([]byte(tc.body), decl)
+			if len(got) != tc.wantCount {
+				t.Fatalf("meters = %v, want %d", got, tc.wantCount)
 			}
+			if tc.wantCount == 0 {
+				return
+			}
+			assertNumber(t, "remaining", got[0].Remaining, tc.remaining)
+			assertNumber(t, "used", got[0].Used, tc.used)
 		})
+	}
+}
+
+func TestParseBodyMeterReadsResetAt(t *testing.T) {
+	decl := provider.QuotaAPI{Kind: provider.MeterUsage, Unit: provider.UnitRequests, Reset: provider.ResetMonthly}
+	got := parseBodyMeters([]byte(`{"used":10,"reset_at":"2026-10-01T00:00:00Z"}`), decl)
+	if len(got) != 1 {
+		t.Fatalf("meters = %v, want one", got)
+	}
+	if got[0].ResetAt == nil {
+		t.Fatal("reset_at should be parsed: it is the useful figure for periodic quota")
+	}
+	if got[0].ResetAt.Format(time.RFC3339) != "2026-10-01T00:00:00Z" {
+		t.Errorf("reset_at = %v", got[0].ResetAt)
+	}
+}
+
+func TestParseRateLimitMetersSplitsDimensions(t *testing.T) {
+	h := http.Header{}
+	h.Set("x-ratelimit-remaining-requests", "58")
+	h.Set("x-ratelimit-limit-requests", "60")
+	h.Set("x-ratelimit-reset-requests", "1790000000")
+	h.Set("x-ratelimit-remaining-tokens", "9000")
+	h.Set("x-ratelimit-limit-tokens", "10000")
+	h.Set("x-ratelimit-reset-tokens", "2026-10-01T00:00:00Z")
+
+	got := parseRateLimitMeters(h)
+	if len(got) != 2 {
+		t.Fatalf("meters = %v, requests and tokens are independent dimensions", got)
+	}
+	for _, m := range got {
+		if m.Kind != provider.MeterRateLimit {
+			t.Errorf("kind = %q, want rate_limit", m.Kind)
+		}
+		if m.Reset != provider.ResetRolling {
+			t.Errorf("reset = %q, want rolling", m.Reset)
+		}
+		if m.ResetAt == nil {
+			t.Errorf("%s: reset_at should be parsed", m.Unit)
+		}
+	}
+	if got[0].Unit != provider.UnitRequests || got[1].Unit != provider.UnitTokens {
+		t.Errorf("units = %q, %q", got[0].Unit, got[1].Unit)
+	}
+	if got[0].Remaining == nil || *got[0].Remaining != 58 {
+		t.Errorf("requests remaining = %v", got[0].Remaining)
+	}
+}
+
+func TestParseRateLimitMetersSkipsAbsentDimensions(t *testing.T) {
+	h := http.Header{}
+	h.Set("x-ratelimit-remaining-requests", "58")
+	if got := parseRateLimitMeters(h); len(got) != 1 {
+		t.Errorf("meters = %v, only the reported dimension should appear", got)
+	}
+	if got := parseRateLimitMeters(nil); got != nil {
+		t.Errorf("meters = %v, want none without headers", got)
+	}
+}
+
+func TestQueryCombinesBodyAndHeaderMeters(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-ratelimit-remaining-requests", "58")
+		w.Header().Set("x-ratelimit-limit-requests", "60")
+		_, _ = w.Write([]byte(`{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}`))
+	}))
+	defer srv.Close()
+
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek", srv.URL)}, time.Minute)
+	got, err := q.Query(context.Background(), "ds-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Meters) != 2 {
+		t.Fatalf("meters = %v, body balance and header rate limit should coexist", got.Meters)
+	}
+	if got.Meters[0].Kind != provider.MeterBalance || got.Meters[1].Kind != provider.MeterRateLimit {
+		t.Errorf("kinds = %q, %q", got.Meters[0].Kind, got.Meters[1].Kind)
+	}
+}
+
+func assertNumber(t *testing.T, field string, got, want *float64) {
+	t.Helper()
+	switch {
+	case want == nil && got != nil:
+		t.Errorf("%s = %v, want nil", field, *got)
+	case want != nil && got == nil:
+		t.Errorf("%s = nil, want %v", field, *want)
+	case want != nil && *got != *want:
+		t.Errorf("%s = %v, want %v", field, *got, *want)
 	}
 }
 

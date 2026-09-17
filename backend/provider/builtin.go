@@ -64,6 +64,8 @@ func init() {
 		Quota: &QuotaAPI{
 			Path:   "/user/balance",
 			Method: "GET",
+			Kind:   MeterBalance,
+			Unit:   UnitCurrency,
 			Reset:  ResetPrepaid,
 		},
 		Models: &ModelsAPI{Path: "/models", Method: "GET"},

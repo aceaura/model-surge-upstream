@@ -74,22 +74,40 @@ class _QuotaDialogState extends State<QuotaDialog> {
     if (!report.queryable) {
       return const Text('该提供商不支持额度查询。');
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _row('余量', _amount(report.remaining, report.currency)),
-        _row('总量', _amount(report.total, report.currency)),
-        _row('重置规律', report.reset ?? '未声明'),
-      ],
+    if (report.meters.isEmpty) {
+      return const Text('上游接口可访问，但响应中没有能识别的额度字段。');
+    }
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final meter in report.meters) _meterSection(context, meter),
+        ],
+      ),
     );
   }
 
-  String _amount(double? value, String? currency) {
-    if (value == null) return '上游未提供';
-    return currency == null || currency.isEmpty
-        ? '$value'
-        : '$value $currency';
+  Widget _meterSection(BuildContext context, QuotaMeter meter) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(meter.title, style: Theme.of(context).textTheme.titleSmall),
+            if (meter.remaining != null)
+              _row('余量', meter.amount(meter.remaining)),
+            if (meter.total != null) _row('总量', meter.amount(meter.total)),
+            if (meter.used != null) _row('已用', meter.amount(meter.used)),
+            _row('重置', _resetText(meter)),
+          ],
+        ),
+      );
+
+  String _resetText(QuotaMeter meter) {
+    final at = meter.resetAt;
+    if (at != null) return at.toLocal().toString();
+    return meter.reset ?? '未声明';
   }
 
   Widget _row(String label, String value) => Padding(
