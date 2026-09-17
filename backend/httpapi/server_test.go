@@ -17,6 +17,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/quota"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/upmodels"
 )
 
 const (
@@ -167,6 +168,18 @@ func (s *stubQuota) Query(context.Context, string) (quota.Report, error) {
 
 func (s *stubQuota) Forget(name string) { s.forgot = append(s.forgot, name) }
 
+type stubUpstreamModels struct {
+	report upmodels.Report
+	err    error
+	forgot []string
+}
+
+func (s *stubUpstreamModels) List(context.Context, string) (upmodels.Report, error) {
+	return s.report, s.err
+}
+
+func (s *stubUpstreamModels) Forget(name string) { s.forgot = append(s.forgot, name) }
+
 type stubHealth struct {
 	dbErr      error
 	cacheReady bool
@@ -182,6 +195,7 @@ type fixture struct {
 	accounts *stubAccounts
 	models   *stubModels
 	quota    *stubQuota
+	upstream *stubUpstreamModels
 	health   *stubHealth
 }
 
@@ -202,19 +216,25 @@ func newFixture(t *testing.T) *fixture {
 		},
 	}}
 	q := &stubQuota{report: quota.Report{Account: "kimi-1", Queryable: false}}
+	up := &stubUpstreamModels{report: upmodels.Report{
+		Account:   "kimi-1",
+		Queryable: true,
+		Models:    []upmodels.Entry{{ID: "kimi-k2-turbo"}},
+	}}
 	h := &stubHealth{cacheReady: true}
 
 	return &fixture{
 		server: NewServer(Deps{
-			Accounts:    accounts,
-			Models:      models,
-			Resolver:    resolve.NewResolver(accounts, models),
-			Quota:       q,
-			Health:      h,
-			AdminKey:    adminKey,
-			DeliveryKey: deliveryKey,
+			Accounts:       accounts,
+			Models:         models,
+			Resolver:       resolve.NewResolver(accounts, models),
+			Quota:          q,
+			UpstreamModels: up,
+			Health:         h,
+			AdminKey:       adminKey,
+			DeliveryKey:    deliveryKey,
 		}),
-		accounts: accounts, models: models, quota: q, health: h,
+		accounts: accounts, models: models, quota: q, upstream: up, health: h,
 	}
 }
 
@@ -402,6 +422,9 @@ func TestUpdateAccountTogglesEnabled(t *testing.T) {
 	}
 	if len(f.quota.forgot) == 0 {
 		t.Error("account update should drop its quota cache")
+	}
+	if len(f.upstream.forgot) == 0 {
+		t.Error("account update should drop its upstream model listing cache")
 	}
 }
 
@@ -608,6 +631,56 @@ func TestQuotaUpstreamFailure(t *testing.T) {
 	}
 	if got := codeOf(t, rec); got != apperr.QuotaUnavailable {
 		t.Errorf("code = %q", got)
+	}
+}
+
+func TestUpstreamModelsOnBothPlanes(t *testing.T) {
+	f := newFixture(t)
+	for _, tc := range []struct{ path, key string }{
+		{"/admin/accounts/kimi-1/upstream-models", adminKey},
+		{"/v1/accounts/kimi-1/upstream-models", deliveryKey},
+	} {
+		rec := f.do(t, "GET", tc.path, tc.key, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d: %s", tc.path, rec.Code, rec.Body)
+		}
+		var report upmodels.Report
+		if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Models) != 1 || report.Models[0].ID != "kimi-k2-turbo" {
+			t.Errorf("%s models = %v", tc.path, report.Models)
+		}
+	}
+}
+
+func TestUpstreamModelsRejectsWrongKey(t *testing.T) {
+	f := newFixture(t)
+	if rec := f.do(t, "GET", "/admin/accounts/kimi-1/upstream-models", deliveryKey, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("delivery key on admin plane = %d, want 401", rec.Code)
+	}
+	if rec := f.do(t, "GET", "/v1/accounts/kimi-1/upstream-models", adminKey, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("admin key on delivery plane = %d, want 401", rec.Code)
+	}
+}
+
+func TestUpstreamModelsFailure(t *testing.T) {
+	f := newFixture(t)
+	f.upstream.err = apperr.New(apperr.UpstreamUnavailable, "upstream model listing returned 401")
+	rec := f.do(t, "GET", "/v1/accounts/kimi-1/upstream-models", deliveryKey, "")
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rec.Code)
+	}
+	if got := codeOf(t, rec); got != apperr.UpstreamUnavailable {
+		t.Errorf("code = %q", got)
+	}
+}
+
+func TestUpstreamModelsFailureDoesNotAffectResolve(t *testing.T) {
+	f := newFixture(t)
+	f.upstream.err = apperr.New(apperr.UpstreamUnavailable, "down")
+	if rec := f.do(t, "POST", "/v1/resolve", deliveryKey, `{"model_id":"kimi-1/k2"}`); rec.Code != http.StatusOK {
+		t.Errorf("resolve = %d, upstream listing failure must not affect it", rec.Code)
 	}
 }
 

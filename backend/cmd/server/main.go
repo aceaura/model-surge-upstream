@@ -22,6 +22,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/quota"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/store"
+	"github.com/aceaura/model-surge-upstream/backend/upmodels"
 )
 
 const shutdownGrace = 10 * time.Second
@@ -55,15 +56,17 @@ func run() error {
 	models := model.NewRepo(db.Pool(), c, accountLookup(accounts))
 	resolver := resolve.NewResolver(accounts, models)
 	quotas := quota.New(accounts, cfg.QuotaTTL)
+	upstream := upmodels.New(accounts, cfg.QuotaTTL)
 
 	handler := httpapi.NewServer(httpapi.Deps{
-		Accounts:    accounts,
-		Models:      models,
-		Resolver:    resolver,
-		Quota:       quotas,
-		Health:      health{db: db, cache: c},
-		AdminKey:    cfg.AdminKey,
-		DeliveryKey: cfg.DeliveryKey,
+		Accounts:       accounts,
+		Models:         models,
+		Resolver:       resolver,
+		Quota:          quotas,
+		UpstreamModels: upstream,
+		Health:         health{db: db, cache: c},
+		AdminKey:       cfg.AdminKey,
+		DeliveryKey:    cfg.DeliveryKey,
 	})
 
 	srv := &http.Server{

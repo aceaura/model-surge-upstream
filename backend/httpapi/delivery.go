@@ -47,6 +47,15 @@ func (h handler) quota(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+func (h handler) upstreamModels(w http.ResponseWriter, r *http.Request) {
+	report, err := h.UpstreamModels.List(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (h handler) health(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dbErr := h.Health.PingDB(ctx)

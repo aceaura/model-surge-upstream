@@ -19,18 +19,19 @@ type errorEnvelope struct {
 }
 
 var statusByCode = map[apperr.Code]int{
-	apperr.Unauthorized:      http.StatusUnauthorized,
-	apperr.NotFound:          http.StatusNotFound,
-	apperr.AlreadyExists:     http.StatusConflict,
-	apperr.AccountDisabled:   http.StatusConflict,
-	apperr.ModelDisabled:     http.StatusConflict,
-	apperr.InvalidProvider:   http.StatusBadRequest,
-	apperr.InvalidCredential: http.StatusBadRequest,
-	apperr.InvalidProtocol:   http.StatusBadRequest,
-	apperr.InvalidJSON:       http.StatusBadRequest,
-	apperr.InvalidRequest:    http.StatusBadRequest,
-	apperr.QuotaUnavailable:  http.StatusBadGateway,
-	apperr.StorageError:      http.StatusInternalServerError,
+	apperr.Unauthorized:        http.StatusUnauthorized,
+	apperr.NotFound:            http.StatusNotFound,
+	apperr.AlreadyExists:       http.StatusConflict,
+	apperr.AccountDisabled:     http.StatusConflict,
+	apperr.ModelDisabled:       http.StatusConflict,
+	apperr.InvalidProvider:     http.StatusBadRequest,
+	apperr.InvalidCredential:   http.StatusBadRequest,
+	apperr.InvalidProtocol:     http.StatusBadRequest,
+	apperr.InvalidJSON:         http.StatusBadRequest,
+	apperr.InvalidRequest:      http.StatusBadRequest,
+	apperr.QuotaUnavailable:    http.StatusBadGateway,
+	apperr.UpstreamUnavailable: http.StatusBadGateway,
+	apperr.StorageError:        http.StatusInternalServerError,
 }
 
 func statusOf(code apperr.Code) int {

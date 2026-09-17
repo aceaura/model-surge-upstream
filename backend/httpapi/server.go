@@ -11,6 +11,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/quota"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/upmodels"
 )
 
 type Accounts interface {
@@ -40,6 +41,12 @@ type Quota interface {
 	Forget(name string)
 }
 
+// UpstreamModels 查询上游账号实际可用的模型清单。
+type UpstreamModels interface {
+	List(ctx context.Context, accountName string) (upmodels.Report, error)
+	Forget(name string)
+}
+
 // Health 报告依赖就绪状态。Redis 只是缓存，不影响 ready。
 type Health interface {
 	PingDB(ctx context.Context) error
@@ -47,13 +54,14 @@ type Health interface {
 }
 
 type Deps struct {
-	Accounts    Accounts
-	Models      Models
-	Resolver    Resolver
-	Quota       Quota
-	Health      Health
-	AdminKey    string
-	DeliveryKey string
+	Accounts       Accounts
+	Models         Models
+	Resolver       Resolver
+	Quota          Quota
+	UpstreamModels UpstreamModels
+	Health         Health
+	AdminKey       string
+	DeliveryKey    string
 }
 
 func NewServer(d Deps) http.Handler {
@@ -68,8 +76,10 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/accounts/{name}", h.getAccount)
 	admin.HandleFunc("PUT /admin/accounts/{name}", h.updateAccount)
 	admin.HandleFunc("DELETE /admin/accounts/{name}", h.deleteAccount)
-	// 额度同时挂在管理面：桌面客户端只持管理密钥，不该为查额度再配下发密钥。
+	// 额度与上游模型清单同时挂在管理面：桌面客户端只持管理密钥，
+	// 不该为查这两项再配下发密钥。
 	admin.HandleFunc("GET /admin/accounts/{name}/quota", h.quota)
+	admin.HandleFunc("GET /admin/accounts/{name}/upstream-models", h.upstreamModels)
 	admin.HandleFunc("GET /admin/models", h.listModels)
 	admin.HandleFunc("POST /admin/models", h.createModel)
 	admin.HandleFunc("GET /admin/models/{id...}", h.getModel)
@@ -81,6 +91,7 @@ func NewServer(d Deps) http.Handler {
 	delivery.HandleFunc("GET /v1/models", h.deliveryModels)
 	delivery.HandleFunc("POST /v1/resolve", h.resolve)
 	delivery.HandleFunc("GET /v1/accounts/{name}/quota", h.quota)
+	delivery.HandleFunc("GET /v1/accounts/{name}/upstream-models", h.upstreamModels)
 	mux.Handle("/v1/", requireKey(d.DeliveryKey, delivery))
 
 	return mux

@@ -10,6 +10,7 @@ func init() {
 		Protocols:   []string{ProtocolAnthropic},
 		Auth:        AuthAnthropicKey,
 		Credential:  CredAPIKey,
+		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	register(Spec{
 		ID:          "openai",
@@ -19,6 +20,7 @@ func init() {
 		Protocols:   []string{ProtocolChatCompletions, ProtocolResponses},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
+		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	register(Spec{
 		ID:          "gemini",
@@ -28,6 +30,7 @@ func init() {
 		Protocols:   []string{ProtocolGemini, ProtocolChatCompletions},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
+		Models:      &ModelsAPI{Path: "/v1beta/models", Method: "GET"},
 	})
 	register(Spec{
 		ID:          "kimi",
@@ -37,8 +40,10 @@ func init() {
 		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions},
 		Auth:        AuthAnthropicKey,
 		Credential:  CredAPIKey,
+		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
-	// ark 的 responses 端点实测不可用，故只声明两个协议。
+	// ark 的 responses 端点实测不可用，故只声明两个协议；其模型列举端点
+	// 实测各路径恒回 401，故不声明 Models——查不到比查错了好。
 	register(Spec{
 		ID:          "ark",
 		DisplayName: "Volcengine Ark",
@@ -61,5 +66,6 @@ func init() {
 			Method: "GET",
 			Reset:  ResetPrepaid,
 		},
+		Models: &ModelsAPI{Path: "/models", Method: "GET"},
 	})
 }

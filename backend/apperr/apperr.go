@@ -18,7 +18,9 @@ const (
 	InvalidJSON       Code = "invalid_json"
 	InvalidRequest    Code = "invalid_request"
 	QuotaUnavailable  Code = "quota_unavailable"
-	StorageError      Code = "storage_error"
+	// UpstreamUnavailable 表示调用上游自身接口（如模型列举）失败。
+	UpstreamUnavailable Code = "upstream_unavailable"
+	StorageError        Code = "storage_error"
 )
 
 type Error struct {

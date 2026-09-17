@@ -43,6 +43,13 @@ type QuotaAPI struct {
 	Reset  ResetRule `json:"reset"`
 }
 
+// ModelsAPI 上游模型列举接口声明。provider 未声明时 Spec.Models 为 nil，
+// 表示该上游没有可用的列举端点（无此接口，或实测恒鉴权失败）。
+type ModelsAPI struct {
+	Path   string `json:"path"`
+	Method string `json:"method"`
+}
+
 type Spec struct {
 	ID          string         `json:"id"`
 	DisplayName string         `json:"display_name"`
@@ -52,6 +59,7 @@ type Spec struct {
 	Auth        AuthScheme     `json:"auth"`
 	Credential  CredentialKind `json:"credential"`
 	Quota       *QuotaAPI      `json:"quota,omitempty"`
+	Models      *ModelsAPI     `json:"models,omitempty"`
 }
 
 func (s Spec) Supports(protocol string) bool {

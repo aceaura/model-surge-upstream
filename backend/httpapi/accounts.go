@@ -106,8 +106,9 @@ func (h handler) updateAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	// 凭据或端点可能已变，丢弃该账号的额度缓存。
+	// 凭据或端点可能已变，丢弃该账号的额度与上游模型清单缓存。
 	h.Quota.Forget(name)
+	h.UpstreamModels.Forget(name)
 	writeJSON(w, http.StatusOK, map[string]any{"account": acc.View()})
 }
 
@@ -119,6 +120,7 @@ func (h handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Quota.Forget(name)
+	h.UpstreamModels.Forget(name)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted_models": deleted})
 }
 
