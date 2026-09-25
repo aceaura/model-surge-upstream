@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 
 /// 非颜色常量(不随明暗变化)。
 abstract final class AppConst {
-  static const radiusCard = 12.0;
-  static const radiusCtrl = 8.0;
+  static const radiusCard = 16.0;
+  static const radiusCtrl = 10.0;
   static const fontFamily = 'Microsoft YaHei';
   static const fontMono = 'Cascadia Code';
 }
 
 /// 主题色板(ThemeExtension):浅色/深色两套,组件经 context.tokens 取色。
-/// 色值与峰神管理端一致(现代轻量 SaaS 控制台)。
+/// 浅色向 CC Switch 靠拢:近白底、柔和边框、翡翠绿主色。
 class AppTokens extends ThemeExtension<AppTokens> {
   final Color bg, surface, border, ink, dim, faint;
   final Color primary, primaryInk, primarySoft;
@@ -34,17 +34,17 @@ class AppTokens extends ThemeExtension<AppTokens> {
     required this.violet,
   });
 
-  /// 浅色。
+  /// 浅色(CC Switch 式:近白灰底、白卡、浅边框、翡翠绿)。
   static const light = AppTokens(
-    bg: Color(0xFFF0F2F5),
+    bg: Color(0xFFF5F6F8),
     surface: Color(0xFFFFFFFF),
-    border: Color(0xFFB4BDCC),
-    ink: Color(0xFF161C28),
-    dim: Color(0xFF5B6472),
-    faint: Color(0xFF66717F),
-    primary: Color(0xFF3B5BFD),
-    primaryInk: Color(0xFF2E49D6),
-    primarySoft: Color(0xFFDEE6FF),
+    border: Color(0xFFE4E7ED),
+    ink: Color(0xFF171B24),
+    dim: Color(0xFF57606E),
+    faint: Color(0xFF7A8494),
+    primary: Color(0xFF16A34A),
+    primaryInk: Color(0xFF15803D),
+    primarySoft: Color(0xFFDDF2E4),
     success: Color(0xFF1E9E62),
     successSoft: Color(0xFFE4F6EC),
     warn: Color(0xFFC98A0B),
@@ -61,9 +61,9 @@ class AppTokens extends ThemeExtension<AppTokens> {
     ink: Color(0xFFE9EDF5),
     dim: Color(0xFFB4BDCC),
     faint: Color(0xFF98A2B6),
-    primary: Color(0xFF6B85FF),
-    primaryInk: Color(0xFFC3CFFF),
-    primarySoft: Color(0xFF24305C),
+    primary: Color(0xFF34C77B),
+    primaryInk: Color(0xFF9BE7C2),
+    primarySoft: Color(0xFF173627),
     success: Color(0xFF3FBF7F),
     successSoft: Color(0xFF15362B),
     warn: Color(0xFFE0A83C),
@@ -90,7 +90,7 @@ ThemeData _build(AppTokens t, Brightness brightness) {
       : ThemeData.light(useMaterial3: true);
   final scheme = (isDark ? ColorScheme.dark : ColorScheme.light)(
     primary: t.primary,
-    onPrimary: isDark ? const Color(0xFF101528) : Colors.white,
+    onPrimary: Colors.white,
     primaryContainer: t.primarySoft,
     onPrimaryContainer: t.primaryInk,
     surface: t.bg,
@@ -107,18 +107,48 @@ ThemeData _build(AppTokens t, Brightness brightness) {
     extensions: [t],
     cardTheme: CardThemeData(
       color: t.surface,
-      elevation: 0.6,
-      shadowColor: isDark ? Colors.transparent : const Color(0x0F161C28),
+      elevation: 0.4,
+      shadowColor: isDark ? Colors.transparent : const Color(0x0A171B24),
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppConst.radiusCard),
         side: BorderSide(color: t.border),
       ),
     ),
+    appBarTheme: AppBarTheme(
+      backgroundColor: t.surface,
+      foregroundColor: t.ink,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      centerTitle: false,
+      titleTextStyle: TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w700,
+        color: t.ink,
+        fontFamily: AppConst.fontFamily,
+      ),
+    ),
+    chipTheme: base.chipTheme.copyWith(
+      backgroundColor: t.bg,
+      side: BorderSide(color: t.border),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
+      labelStyle: TextStyle(
+        fontSize: 11.5,
+        color: t.dim,
+        fontFamily: AppConst.fontFamily,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+    ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: t.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppConst.radiusCard),
+      ),
+    ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         backgroundColor: t.primary,
-        foregroundColor: isDark ? const Color(0xFF101528) : Colors.white,
+        foregroundColor: Colors.white,
         // 显式钉字体族:按钮 textStyle 若缺 fontFamily,合并链上会丢掉
         // textTheme 的族设置回退 Roboto(中文 tofu)
         textStyle: const TextStyle(

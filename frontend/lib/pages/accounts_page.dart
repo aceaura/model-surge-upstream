@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/provider_avatar.dart';
 import 'account_form.dart';
 import 'models_page.dart';
 import 'quota_dialog.dart';
@@ -33,6 +34,18 @@ class _AccountsPageState extends State<AccountsPage> {
   }
 
   void _reload() => setState(() => _future = _load());
+
+  /// 卡片尾部的小号操作按钮:18 图标 + 弱色,hover 才有底色反馈。
+  Widget _action(
+      IconData icon, String tooltip, VoidCallback onPressed, AppTokens t) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 18, color: t.faint),
+      splashRadius: 18,
+      visualDensity: VisualDensity.compact,
+      onPressed: onPressed,
+    );
+  }
 
   Future<void> _create(List<ProviderSpec> providers) async {
     final saved = await showDialog<bool>(
@@ -184,27 +197,60 @@ class _AccountsPageState extends State<AccountsPage> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       itemCount: accounts.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, i) {
                         final a = accounts[i];
                         return Card(
-                          child: ListTile(
-                            title: Row(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 14),
+                            child: Row(
                               children: [
-                                Text(a.name),
+                                ProviderAvatar(providerId: a.providerId),
+                                const SizedBox(width: 13),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              a.name,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.w600,
+                                                color: t.ink,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Chip(
+                                            label: Text(a.providerId),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        [
+                                          '密钥 ${a.maskedApiKey}',
+                                          if (a.baseUrl.isNotEmpty)
+                                            '地址 ${a.baseUrl}',
+                                          if (a.headers.isNotEmpty)
+                                            '自定义头 ${a.headers.length} 个',
+                                        ].join('   '),
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontSize: 12, color: t.faint),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                                 const SizedBox(width: 8),
-                                Chip(label: Text(a.providerId)),
-                              ],
-                            ),
-                            subtitle: Text([
-                              '密钥 ${a.maskedApiKey}',
-                              if (a.baseUrl.isNotEmpty) '地址 ${a.baseUrl}',
-                              if (a.headers.isNotEmpty)
-                                '自定义头 ${a.headers.length} 个',
-                            ].join('   ')),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
                                 if (_toggling.contains(a.name))
                                   const SizedBox(
                                     width: 24,
@@ -217,26 +263,14 @@ class _AccountsPageState extends State<AccountsPage> {
                                     value: a.enabled,
                                     onChanged: (_) => _toggle(a),
                                   ),
-                                IconButton(
-                                  tooltip: '模型',
-                                  icon: const Icon(Icons.list_alt),
-                                  onPressed: () => _openModels(a, providers),
-                                ),
-                                IconButton(
-                                  tooltip: '额度',
-                                  icon: const Icon(Icons.savings_outlined),
-                                  onPressed: () => _showQuota(a),
-                                ),
-                                IconButton(
-                                  tooltip: '编辑',
-                                  icon: const Icon(Icons.edit_outlined),
-                                  onPressed: () => _edit(a, providers),
-                                ),
-                                IconButton(
-                                  tooltip: '删除',
-                                  icon: const Icon(Icons.delete_outline),
-                                  onPressed: () => _delete(a),
-                                ),
+                                _action(Icons.list_alt, '模型',
+                                    () => _openModels(a, providers), t),
+                                _action(Icons.savings_outlined, '额度',
+                                    () => _showQuota(a), t),
+                                _action(Icons.edit_outlined, '编辑',
+                                    () => _edit(a, providers), t),
+                                _action(Icons.delete_outline, '删除',
+                                    () => _delete(a), t),
                               ],
                             ),
                           ),

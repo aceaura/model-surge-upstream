@@ -117,35 +117,46 @@ class _SettingsPageState extends State<SettingsPage> {
                   padding: EdgeInsets.only(bottom: 16),
                   child: Text('首次使用请先填写配置中心地址与管理密钥。'),
                 ),
-              TextField(
-                controller: _baseUrl,
-                decoration: const InputDecoration(
-                  labelText: '服务地址',
-                  hintText: 'http://127.0.0.1:8080',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _adminKey,
-                obscureText: !_revealKey,
-                decoration: InputDecoration(
-                  labelText: '管理密钥',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    tooltip: _revealKey ? '隐藏' : '显示',
-                    icon: Icon(
-                        _revealKey ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () =>
-                        setState(() => _revealKey = !_revealKey),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _baseUrl,
+                        decoration: const InputDecoration(
+                          labelText: '服务地址',
+                          hintText: 'http://127.0.0.1:8080',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _adminKey,
+                        obscureText: !_revealKey,
+                        decoration: InputDecoration(
+                          labelText: '管理密钥',
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            tooltip: _revealKey ? '隐藏' : '显示',
+                            icon: Icon(_revealKey
+                                ? Icons.visibility_off
+                                : Icons.visibility),
+                            onPressed: () =>
+                                setState(() => _revealKey = !_revealKey),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      BusyButton(
+                        busy: _busy,
+                        onPressed: _save,
+                        child: const Text('测试连接并保存'),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 24),
-              BusyButton(
-                busy: _busy,
-                onPressed: _save,
-                child: const Text('测试连接并保存'),
               ),
               if (_probeResult != null)
                 Padding(

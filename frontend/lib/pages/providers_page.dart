@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/provider_avatar.dart';
 
 /// provider 是编译期常量，界面全部只读。
 class ProvidersPage extends StatefulWidget {
@@ -74,7 +75,7 @@ class _ProvidersPageState extends State<ProvidersPage> {
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                 itemCount: providers.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                separatorBuilder: (_, _) => const SizedBox(height: 12),
                 itemBuilder: (context, i) => _ProviderCard(spec: providers[i]),
               ),
             ),
@@ -92,18 +93,30 @@ class _ProviderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Text(spec.displayName,
-                    style: Theme.of(context).textTheme.titleMedium),
+                ProviderAvatar(providerId: spec.id, size: 36),
+                const SizedBox(width: 12),
+                Text(
+                  spec.displayName,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: t.ink,
+                  ),
+                ),
                 const SizedBox(width: 8),
-                Chip(label: Text(spec.id)),
+                Chip(
+                  label: Text(spec.id),
+                  visualDensity: VisualDensity.compact,
+                ),
               ],
             ),
             const SizedBox(height: 12),

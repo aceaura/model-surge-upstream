@@ -170,7 +170,7 @@ class _AdminShellState extends State<AdminShell> {
         color: t.surface,
         border: Border(right: BorderSide(color: t.border)),
       ),
-      padding: const EdgeInsets.fromLTRB(12, 18, 12, 14),
+      padding: const EdgeInsets.fromLTRB(14, 20, 14, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -241,7 +241,7 @@ class _AdminShellState extends State<AdminShell> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: t.bg,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: t.border),
       ),
       child: Column(
@@ -287,15 +287,13 @@ class _AdminShellState extends State<AdminShell> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         onTap: () => setState(() => _page = item.id),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             color: on ? t.primarySoft : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-            border:
-                on ? Border(left: BorderSide(color: t.primary, width: 3)) : null,
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             children: [
