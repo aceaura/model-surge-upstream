@@ -6,7 +6,6 @@ import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/provider_avatar.dart';
 import 'account_form.dart';
-import 'models_page.dart';
 import 'quota_dialog.dart';
 
 class AccountsPage extends StatefulWidget {
@@ -14,10 +13,15 @@ class AccountsPage extends StatefulWidget {
     super.key,
     required this.client,
     required this.onOpenSettings,
+    required this.onOpenModels,
   });
 
   final ApiClient client;
   final VoidCallback onOpenSettings;
+
+  /// 点「模型」时通知主壳切换到内嵌模型页(不再推路由)。
+  final void Function(Account account, List<ProviderSpec> providers)
+      onOpenModels;
 
   @override
   State<AccountsPage> createState() => _AccountsPageState();
@@ -123,16 +127,8 @@ class _AccountsPageState extends State<AccountsPage> {
     }
   }
 
-  void _openModels(Account account, List<ProviderSpec> providers) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ModelsPage(
-        client: widget.client,
-        account: account,
-        providers: providers,
-        onOpenSettings: widget.onOpenSettings,
-      ),
-    ));
-  }
+  void _openModels(Account account, List<ProviderSpec> providers) =>
+      widget.onOpenModels(account, providers);
 
   Future<void> _showQuota(Account account) => showDialog<void>(
         context: context,

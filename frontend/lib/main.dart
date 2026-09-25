@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'api_client.dart';
+import 'models.dart';
 import 'pages/accounts_page.dart';
+import 'pages/models_page.dart';
 import 'pages/providers_page.dart';
 import 'pages/settings_page.dart';
 import 'settings_store.dart';
@@ -62,6 +64,9 @@ class _AdminShellState extends State<AdminShell> {
   ApiClient? _client;
   String _page = 'accounts';
 
+  /// 非空时右侧显示该账号的内嵌模型页(账号页的子页,侧栏保持可见)。
+  (Account, List<ProviderSpec>)? _modelsCtx;
+
   @override
   void initState() {
     super.initState();
@@ -87,11 +92,20 @@ class _AdminShellState extends State<AdminShell> {
       _client?.close();
       _settings = s;
       _client = _clientFor(s);
+      _modelsCtx = null; // 连接已换,子页里的账号快照作废
     });
   }
 
   /// 错误面板里的「打开设置」:切到设置导航页,不再推路由。
-  void _openSettings() => setState(() => _page = 'settings');
+  void _openSettings() => setState(() {
+        _page = 'settings';
+        _modelsCtx = null;
+      });
+
+  void _onNav(String id) => setState(() {
+        _page = id;
+        _modelsCtx = null;
+      });
 
   @override
   void dispose() {
@@ -119,7 +133,12 @@ class _AdminShellState extends State<AdminShell> {
         'accounts',
         Icons.account_circle_outlined,
         '账号',
-        () => AccountsPage(client: client, onOpenSettings: _openSettings),
+        () => AccountsPage(
+          client: client,
+          onOpenSettings: _openSettings,
+          onOpenModels: (account, providers) =>
+              setState(() => _modelsCtx = (account, providers)),
+        ),
       ),
       _NavItem(
         'providers',
@@ -139,6 +158,7 @@ class _AdminShellState extends State<AdminShell> {
       _NavGroup('系统', items.sublist(2)),
     ];
     final cur = items.firstWhere((i) => i.id == _page, orElse: () => items[0]);
+    final modelsCtx = _modelsCtx;
 
     return Scaffold(
       body: Row(
@@ -149,7 +169,15 @@ class _AdminShellState extends State<AdminShell> {
             child: SafeArea(
               child: KeyedSubtree(
                 key: ObjectKey(client),
-                child: cur.build(),
+                child: modelsCtx != null
+                    ? ModelsPage(
+                        client: client,
+                        account: modelsCtx.$1,
+                        providers: modelsCtx.$2,
+                        onOpenSettings: _openSettings,
+                        onBack: () => setState(() => _modelsCtx = null),
+                      )
+                    : cur.build(),
               ),
             ),
           ),
@@ -288,7 +316,7 @@ class _AdminShellState extends State<AdminShell> {
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
-        onTap: () => setState(() => _page = item.id),
+        onTap: () => _onNav(item.id),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
