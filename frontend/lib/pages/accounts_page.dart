@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../theme.dart';
 import '../ui/feedback.dart';
 import 'account_form.dart';
 import 'models_page.dart';
@@ -141,35 +142,47 @@ class _AccountsPageState extends State<AccountsPage> {
           );
         }
         final (accounts, providers) = snapshot.data!;
+        final t = context.tokens;
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
               child: Row(
                 children: [
-                  Text('账号 ${accounts.length} 个',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: '刷新',
-                    icon: const Icon(Icons.refresh),
-                    onPressed: _reload,
+                  Text(
+                    '账号',
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w700,
+                      color: t.ink,
+                    ),
                   ),
                   const SizedBox(width: 8),
+                  Text('${accounts.length} 个',
+                      style: TextStyle(fontSize: 12.5, color: t.faint)),
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    onPressed: _reload,
+                    icon: const Icon(Icons.refresh, size: 15),
+                    label: const Text('刷新'),
+                  ),
+                  const SizedBox(width: 10),
                   FilledButton.icon(
                     onPressed: () => _create(providers),
-                    icon: const Icon(Icons.add),
+                    icon: const Icon(Icons.add, size: 16),
                     label: const Text('新建账号'),
                   ),
                 ],
               ),
             ),
-            const Divider(height: 1),
             Expanded(
               child: accounts.isEmpty
-                  ? const Center(child: Text('还没有账号，先新建一个。'))
+                  ? Center(
+                      child: Text('还没有账号，先新建一个。',
+                          style: TextStyle(color: t.faint)))
                   : ListView.separated(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       itemCount: accounts.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 8),
                       itemBuilder: (context, i) {

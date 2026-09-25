@@ -2,21 +2,25 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../settings_store.dart';
+import '../theme.dart';
 import '../ui/feedback.dart';
 
 /// 服务地址与管理密钥的设置页。保存前做一次连通性探测，
 /// 让运维者在这里就发现地址或密钥错误，而不是回到列表页才看到空白。
+/// embedded=true 时作为主壳右侧内容渲染(不带自有 Scaffold/AppBar)。
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
     required this.initial,
     required this.onSaved,
     this.dismissible = true,
+    this.embedded = false,
   });
 
   final Settings initial;
   final Future<void> Function(Settings) onSaved;
   final bool dismissible;
+  final bool embedded;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -75,72 +79,89 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final onboarding = !widget.initial.complete;
+    final body = _body(context, onboarding);
+    if (widget.embedded) return body;
     return Scaffold(
       appBar: AppBar(
         title: const Text('连接设置'),
         automaticallyImplyLeading: widget.dismissible,
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (onboarding)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 16),
-                    child: Text('首次使用请先填写配置中心地址与管理密钥。'),
-                  ),
-                TextField(
-                  controller: _baseUrl,
-                  decoration: const InputDecoration(
-                    labelText: '服务地址',
-                    hintText: 'http://127.0.0.1:8080',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _adminKey,
-                  obscureText: !_revealKey,
-                  decoration: InputDecoration(
-                    labelText: '管理密钥',
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      tooltip: _revealKey ? '隐藏' : '显示',
-                      icon: Icon(
-                          _revealKey ? Icons.visibility_off : Icons.visibility),
-                      onPressed: () =>
-                          setState(() => _revealKey = !_revealKey),
+      body: body,
+    );
+  }
+
+  Widget _body(BuildContext context, bool onboarding) {
+    final t = context.tokens;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.embedded)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Text(
+                    '连接设置',
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w700,
+                      color: t.ink,
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
-                BusyButton(
-                  busy: _busy,
-                  onPressed: _save,
-                  child: const Text('测试连接并保存'),
+              if (onboarding)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 16),
+                  child: Text('首次使用请先填写配置中心地址与管理密钥。'),
                 ),
-                if (_probeResult != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16),
-                    child: Text(_probeResult!,
-                        style: TextStyle(
-                            color: Theme.of(context).colorScheme.primary)),
+              TextField(
+                controller: _baseUrl,
+                decoration: const InputDecoration(
+                  labelText: '服务地址',
+                  hintText: 'http://127.0.0.1:8080',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _adminKey,
+                obscureText: !_revealKey,
+                decoration: InputDecoration(
+                  labelText: '管理密钥',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: _revealKey ? '隐藏' : '显示',
+                    icon: Icon(
+                        _revealKey ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () =>
+                        setState(() => _revealKey = !_revealKey),
                   ),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16),
-                    child: SelectableText(
-                      describeError(_error!),
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error),
-                    ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              BusyButton(
+                busy: _busy,
+                onPressed: _save,
+                child: const Text('测试连接并保存'),
+              ),
+              if (_probeResult != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child:
+                      Text(_probeResult!, style: TextStyle(color: t.success)),
+                ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: SelectableText(
+                    describeError(_error!),
+                    style: TextStyle(color: t.danger),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
         ),
       ),
