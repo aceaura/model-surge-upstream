@@ -11,6 +11,8 @@ import '../ui/feedback.dart';
 /// 代理转发面配置：独立端口、独立密钥，把命名模型按各协议原生形态
 /// 暴露给客户端（不做协议转化）。改动点「应用配置」后服务端立即重绑监听。
 /// 页面本体不带页头——在设置枢纽页里作为「代理服务」分页签渲染。
+/// 版式对齐 CC Switch 设置页：分区纵向铺排（粗标题+灰说明+控件），
+/// 开关为左圆形图标、右 Switch 的通栏行，行间细分隔线，不用卡片。
 class ProxyPage extends StatefulWidget {
   const ProxyPage({super.key, required this.client, this.onOpenSettings});
 
@@ -32,14 +34,14 @@ class _ProxyPageState extends State<ProxyPage> {
   Object? _error;
   String? _appliedMsg;
 
-  /// 接入地址卡里展示的主机：关局域网恒为 127.0.0.1；开局域网时为
+  /// 接入地址区里展示的主机：关局域网恒为 127.0.0.1；开局域网时为
   /// 服务端对局域网可见的地址（推导规则见 _resolveDisplayHost）。
   String _displayHost = '127.0.0.1';
 
   @override
   void initState() {
     super.initState();
-    // 端口输入联动接入地址卡的展示。
+    // 端口输入联动接入地址区的展示。
     _port.addListener(() => setState(() {}));
     _load();
   }
@@ -78,16 +80,16 @@ class _ProxyPageState extends State<ProxyPage> {
   /// 生成随机密钥：msu-proxy- 前缀 + 24 位十六进制，客户端可直接拷贝。
   void _generateKey() {
     final rand = Random.secure();
-    final hex =
-        List.generate(12, (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0'))
-            .join();
+    final hex = List.generate(
+            12, (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0'))
+        .join();
     setState(() {
       _apiKey.text = 'msu-proxy-$hex';
       _appliedMsg = null;
     });
   }
 
-  /// 推导接入地址卡的主机。关局域网：恒 127.0.0.1。开局域网：
+  /// 推导接入地址区的主机。关局域网：恒 127.0.0.1。开局域网：
   /// 管理端经局域网地址/域名连的服务端，直接用它（别的设备也这么到）；
   /// 管理端走回环说明服务端就在本机，取本机第一个非回环 IPv4。
   Future<void> _resolveDisplayHost() async {
@@ -122,7 +124,7 @@ class _ProxyPageState extends State<ProxyPage> {
         setState(() => _displayHost = best!);
       }
     } catch (_) {
-      // 取不到就停在 127.0.0.1，地址卡降级为占位展示。
+      // 取不到就停在 127.0.0.1，地址区降级为占位展示。
     }
   }
 
@@ -188,6 +190,9 @@ class _ProxyPageState extends State<ProxyPage> {
   @override
   Widget build(BuildContext context) => _body(context);
 
+  String get _portText =>
+      _port.text.trim().isEmpty ? '12344' : _port.text.trim();
+
   Widget _body(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_error != null && _apiKey.text.isEmpty && _port.text.isEmpty) {
@@ -198,146 +203,32 @@ class _ProxyPageState extends State<ProxyPage> {
       );
     }
     final t = context.tokens;
-    // 三档响应式：窄屏单栏铺满；宽屏双栏限宽 1080；全屏(≥1500)放宽到 1360
-    // 并让整块在可视高度内垂直居中——顶对齐会把下半屏整片留白，像没排完。
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 980;
-        final ultra = constraints.maxWidth >= 1500;
-        final gap = ultra ? 20.0 : 14.0;
-        final applyBlock = Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            BusyButton(
-              busy: _busy,
-              onPressed: _apply,
-              child: const Text('应用配置'),
-            ),
-            if (_appliedMsg != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 14),
-                child: Text(_appliedMsg!, style: TextStyle(color: t.success)),
-              ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 14),
-                child: SelectableText(
-                  describeError(_error!),
-                  style: TextStyle(color: t.danger),
-                ),
-              ),
-          ],
-        );
-        final configCards = Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _keyCard(context),
-            const SizedBox(height: 14),
-            _portCard(context),
-            const SizedBox(height: 14),
-            _lanCard(context),
-          ],
-        );
-        return Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: ultra ? 1360 : 1080),
-            child: SingleChildScrollView(
-              padding: EdgeInsets.symmetric(
-                  horizontal: ultra ? 40 : 24, vertical: 28),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                    minHeight: constraints.maxHeight < 56
-                        ? 0.0
-                        : constraints.maxHeight - 56),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    wide
-                        ? Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(flex: 3, child: configCards),
-                              SizedBox(width: gap),
-                              Expanded(
-                                flex: 2,
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    _endpointCard(context),
-                                    const SizedBox(height: 20),
-                                    applyBlock,
-                                  ],
-                                ),
-                              ),
-                            ],
-                          )
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              configCards,
-                              const SizedBox(height: 14),
-                              _endpointCard(context),
-                              const SizedBox(height: 20),
-                              applyBlock,
-                            ],
-                          ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _keyCard(BuildContext context) {
-    final t = context.tokens;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Text(
-                  '代理 API 密钥',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: t.ink,
-                  ),
-                ),
-                const Spacer(),
-                InkWell(
-                  borderRadius: BorderRadius.circular(6),
-                  onTap: () => setState(() => _revealKey = !_revealKey),
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    child: Text(
-                      _revealKey ? '隐藏密码' : '显示密码',
-                      style: TextStyle(fontSize: 12, color: t.faint),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _section(
+            context,
+            '代理 API 密钥',
+            '客户端（如 Cursor 或 VS Code）必须在 Authorization 头中包含此密钥，留空则关闭代理服务',
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _apiKey,
                     obscureText: !_revealKey,
-                    decoration: const InputDecoration(
-                      hintText: '留空则关闭代理服务',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      border: const OutlineInputBorder(),
                       isDense: true,
+                      suffixIcon: IconButton(
+                        tooltip: _revealKey ? '隐藏' : '显示',
+                        icon: Icon(_revealKey
+                            ? Icons.visibility_off
+                            : Icons.visibility),
+                        onPressed: () =>
+                            setState(() => _revealKey = !_revealKey),
+                      ),
                     ),
                   ),
                 ),
@@ -349,138 +240,170 @@ class _ProxyPageState extends State<ProxyPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              '客户端（如 Cursor 或 VS Code）必须在 Authorization 头中包含此密钥',
-              style: TextStyle(fontSize: 12, color: t.faint),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _portCard(BuildContext context) {
-    final t = context.tokens;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '服务器端口',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: t.ink,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _port,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '代理服务独立监听的端口，与管理面端口互不影响',
-              style: TextStyle(fontSize: 12, color: t.faint),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _lanCard(BuildContext context) {
-    final t = context.tokens;
-    return Card(
-      child: SwitchListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 6),
-        title: Text(
-          '开放局域网访问',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: t.ink,
           ),
-        ),
-        subtitle: Text(
-          _lanOpen ? '监听 0.0.0.0，局域网内其他设备可访问' : '仅监听 127.0.0.1，仅本机可访问',
-          style: TextStyle(fontSize: 12, color: t.faint),
-        ),
-        value: _lanOpen,
-        onChanged: (v) {
-          setState(() {
-            _lanOpen = v;
-            _appliedMsg = null;
-          });
-          _resolveDisplayHost();
-        },
+          const SizedBox(height: 26),
+          _section(
+            context,
+            '服务器端口',
+            '代理服务独立监听的端口，与管理面端口互不影响',
+            SizedBox(
+              width: 220,
+              child: TextField(
+                controller: _port,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                    border: OutlineInputBorder(), isDense: true),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          _lanRow(context),
+          const SizedBox(height: 26),
+          _section(
+            context,
+            '客户端接入地址',
+            _lanOpen ? '局域网设备使用以下地址访问' : '仅本机可访问',
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (label, path) in [
+                  ('Anthropic 协议', '/anthropic'),
+                  ('OpenAI 协议', '/openai'),
+                  ('Gemini 协议', '/gemini'),
+                ])
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 110,
+                          child: Text(label,
+                              style:
+                                  TextStyle(fontSize: 12.5, color: t.dim)),
+                        ),
+                        Expanded(
+                          child: SelectableText(
+                            'http://$_displayHost:$_portText$path',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontFamily: 'monospace',
+                              color: t.ink,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 26),
+          Divider(height: 1, color: t.border),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: _appliedMsg != null
+                    ? Text(_appliedMsg!,
+                        style: TextStyle(fontSize: 12.5, color: t.success))
+                    : _error != null
+                        ? SelectableText(
+                            describeError(_error!),
+                            style:
+                                TextStyle(fontSize: 12.5, color: t.danger),
+                          )
+                        : const SizedBox.shrink(),
+              ),
+              const SizedBox(width: 12),
+              BusyButton(
+                busy: _busy,
+                onPressed: _apply,
+                child: const Text('应用配置'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  /// 三协议接入地址提示。主机随局域网开关切换（127.0.0.1 ↔ 局域网地址），
-  /// 端口随输入联动，便于填完后直接拷给客户端。
-  Widget _endpointCard(BuildContext context) {
+  /// 分区头：粗标题 + 灰说明，控件跟在下方。对齐 CC Switch 设置页分区。
+  Widget _section(
+      BuildContext context, String title, String desc, Widget control) {
     final t = context.tokens;
-    final port = _port.text.trim().isEmpty ? '12344' : _port.text.trim();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '客户端接入地址',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: t.ink,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style:
+              TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.ink),
+        ),
+        const SizedBox(height: 4),
+        Text(desc, style: TextStyle(fontSize: 12, color: t.faint)),
+        const SizedBox(height: 12),
+        control,
+      ],
+    );
+  }
+
+  /// 开关通栏行：左圆形图标 + 标题/说明 + 右 Switch，上下细分隔线。
+  Widget _lanRow(BuildContext context) {
+    final t = context.tokens;
+    return Column(
+      children: [
+        Divider(height: 1, color: t.border),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: t.primarySoft,
+                  borderRadius: BorderRadius.circular(17),
+                ),
+                child: Icon(Icons.lan_outlined, size: 17, color: t.primaryInk),
               ),
-            ),
-            const SizedBox(height: 12),
-            for (final (label, path) in [
-              ('Anthropic 协议', '/anthropic'),
-              ('OpenAI 协议', '/openai'),
-              ('Gemini 协议', '/gemini'),
-            ])
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
-                child: Row(
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(
-                      width: 108,
-                      child: Text(label,
-                          style: TextStyle(fontSize: 12.5, color: t.dim)),
+                    Text(
+                      '开放局域网访问',
+                      style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: t.ink),
                     ),
-                    Expanded(
-                      child: SelectableText(
-                        'http://$_displayHost:$port$path',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontFamily: 'monospace',
-                          color: t.ink,
-                        ),
-                      ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _lanOpen
+                          ? '监听 0.0.0.0，局域网内其他设备可访问'
+                          : '仅监听 127.0.0.1，仅本机可访问',
+                      style: TextStyle(fontSize: 12, color: t.faint),
                     ),
                   ],
                 ),
               ),
-            const SizedBox(height: 8),
-            Text(
-              _lanOpen ? '局域网设备使用此地址访问' : '仅本机可访问',
-              style: TextStyle(fontSize: 12, color: t.faint),
-            ),
-          ],
+              Switch(
+                value: _lanOpen,
+                onChanged: (v) {
+                  setState(() {
+                    _lanOpen = v;
+                    _appliedMsg = null;
+                  });
+                  _resolveDisplayHost();
+                },
+              ),
+            ],
+          ),
         ),
-      ),
+        Divider(height: 1, color: t.border),
+      ],
     );
   }
 }
