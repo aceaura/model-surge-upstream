@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import 'feedback.dart';
+import 'page_entrance.dart';
 
 /// CC Switch 式整页表单骨架:顶部返回钮+粗标题,中部一整幅白卡
 /// (居中身份头像 + 全宽字段分区),底部右对齐动作条(取消/提交)。
@@ -39,7 +40,9 @@ class FormPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Scaffold(
+    // 进场淡入与主壳切页一致(CC Switch 式 0.5s):内联替换列表挂载时播一次。
+    return PageEntrance(
+      child: Scaffold(
       // 透明底:透出主壳内容区底色(亮模式纯白、暗模式 tokens.bg),
       // 与上一级列表页保持一致,不再自刷一层灰。
       backgroundColor: Colors.transparent,
@@ -74,7 +77,19 @@ class FormPage extends StatelessWidget {
                     borderRadius: BorderRadius.circular(AppConst.radiusCard),
                   ),
                   padding: const EdgeInsets.fromLTRB(28, 26, 28, 26),
-                  child: child,
+                  // 卡顶居中身份头像(CC Switch 式):彩色提供商图标给整幅
+                  // 白卡一个色彩锚点,与列表行的头像视觉延续
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (avatar != null) ...[
+                        Center(child: avatar!),
+                        const SizedBox(height: 20),
+                      ],
+                      child,
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -98,6 +113,7 @@ class FormPage extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }
