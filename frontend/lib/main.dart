@@ -13,6 +13,7 @@ import 'pages/settings_page.dart';
 import 'pages/usage_page.dart';
 import 'settings_store.dart';
 import 'theme.dart';
+import 'ui/page_entrance.dart';
 
 /// 应用版本号(侧栏展示;发版时与 pubspec version 同步)。
 const kAppVersion = '1.0.0';
@@ -210,12 +211,16 @@ class _AdminShellState extends State<AdminShell> {
               child: SafeArea(
                 child: KeyedSubtree(
                   key: ObjectKey(client),
-                  // IndexedStack 常驻各导航页:切换页签时状态
-                  // (已加载数据、滚动位置、搜索词)不丢,避免重新加载的抖动。
+                  // 切页进场:CC Switch 式 0.5s 淡入,动画只包透明度,
+                  // IndexedStack 常驻各导航页的状态(已加载数据、滚动位置、
+                  // 搜索词)不丢,避免重新加载的抖动。
                   // 账号页点「模型」即切到模型页并下发搜索词,不再是覆盖子页。
-                  child: IndexedStack(
-                    index: items.indexOf(cur),
-                    children: [for (final i in items) i.build()],
+                  child: PageEntrance(
+                    trigger: _page,
+                    child: IndexedStack(
+                      index: items.indexOf(cur),
+                      children: [for (final i in items) i.build()],
+                    ),
                   ),
                 ),
               ),
