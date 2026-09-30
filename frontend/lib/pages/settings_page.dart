@@ -38,6 +38,16 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _probeResult;
 
   @override
+  void initState() {
+    super.initState();
+    // 按钮状态依赖表单内容(已连接 ⇔ 草稿等于已保存配置),监听输入刷新
+    _baseUrl.addListener(_refresh);
+    _adminKey.addListener(_refresh);
+  }
+
+  void _refresh() => setState(() {});
+
+  @override
   void dispose() {
     _baseUrl.dispose();
     _adminKey.dispose();
@@ -48,6 +58,13 @@ class _SettingsPageState extends State<SettingsPage> {
         baseUrl: _baseUrl.text.trim(),
         adminKey: _adminKey.text.trim(),
       );
+
+  /// 草稿与已保存的配置一致即视为已连接:保存前已做过连通性探测,
+  /// 且整个应用正基于这份配置运行。改掉任一字段即回到「连接」。
+  bool get _connected =>
+      widget.initial.complete &&
+      _draft.baseUrl == widget.initial.baseUrl &&
+      _draft.adminKey == widget.initial.adminKey;
 
   Future<void> _save() async {
     final draft = _draft;
@@ -149,11 +166,18 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       ),
                       const SizedBox(height: 22),
-                      BusyButton(
-                        busy: _busy,
-                        onPressed: _save,
-                        child: const Text('测试连接并保存'),
-                      ),
+                      if (_connected)
+                        FilledButton.icon(
+                          onPressed: null,
+                          icon: const Icon(Icons.check_circle_outline, size: 16),
+                          label: const Text('已连接'),
+                        )
+                      else
+                        BusyButton(
+                          busy: _busy,
+                          onPressed: _save,
+                          child: const Text('连接'),
+                        ),
                     ],
                   ),
                 ),
