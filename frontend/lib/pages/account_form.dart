@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../ui/feedback.dart';
 import '../ui/header_editor.dart';
+import '../ui/styled_dropdown.dart';
 
 /// 账号创建与编辑表单。editing 非空时为编辑：密钥留空表示保留原凭据。
 class AccountForm extends StatefulWidget {
@@ -96,19 +97,19 @@ class _AccountFormState extends State<AccountForm> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: _providerId,
+                StyledDropdownFormField(
+                  value: _providerId,
                   decoration: const InputDecoration(
                     labelText: '提供商',
                     border: OutlineInputBorder(),
                   ),
-                  items: [
-                    for (final p in widget.providers)
-                      DropdownMenuItem(
-                        value: p.id,
-                        child: Text('${p.displayName} (${p.id})'),
-                      ),
-                  ],
+                  options: [for (final p in widget.providers) p.id],
+                  labelOf: (id) {
+                    final p = widget.providers
+                        .where((p) => p.id == id)
+                        .firstOrNull;
+                    return p == null ? id : '${p.displayName} ($id)';
+                  },
                   onChanged: (v) => setState(() => _providerId = v),
                   validator: (v) => v == null ? '请选择提供商' : null,
                 ),

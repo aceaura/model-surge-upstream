@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../ui/feedback.dart';
 import '../ui/json_field.dart';
+import '../ui/styled_dropdown.dart';
 
 /// 模型创建与编辑表单。协议候选来自所选账号对应 provider 的支持集，
 /// 随账号切换联动，避免提交注定被服务端拒绝的组合。
@@ -143,19 +144,19 @@ class _ModelFormState extends State<ModelForm> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: _account,
+                StyledDropdownFormField(
+                  value: _account,
                   decoration: const InputDecoration(
                     labelText: '账号',
                     border: OutlineInputBorder(),
                   ),
-                  items: [
-                    for (final a in widget.accounts)
-                      DropdownMenuItem(
-                        value: a.name,
-                        child: Text('${a.name} (${a.providerId})'),
-                      ),
-                  ],
+                  options: [for (final a in widget.accounts) a.name],
+                  labelOf: (name) {
+                    final a = widget.accounts
+                        .where((a) => a.name == name)
+                        .firstOrNull;
+                    return a == null ? name : '$name (${a.providerId})';
+                  },
                   onChanged: _onAccountChanged,
                 ),
                 const SizedBox(height: 16),
@@ -182,17 +183,14 @@ class _ModelFormState extends State<ModelForm> {
                       (v == null || v.trim().isEmpty) ? '上游模型名不能为空' : null,
                 ),
                 const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
+                StyledDropdownFormField(
                   key: ValueKey('protocol-$_account'),
-                  initialValue: _protocol,
+                  value: _protocol,
                   decoration: const InputDecoration(
                     labelText: '协议',
                     border: OutlineInputBorder(),
                   ),
-                  items: [
-                    for (final p in _protocols)
-                      DropdownMenuItem(value: p, child: Text(p)),
-                  ],
+                  options: _protocols,
                   onChanged: (v) => setState(() => _protocol = v),
                   validator: (v) => v == null ? '请选择协议' : null,
                 ),

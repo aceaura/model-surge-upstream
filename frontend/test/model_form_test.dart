@@ -5,6 +5,8 @@ import 'package:http/testing.dart';
 import 'package:msu_admin/api_client.dart';
 import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/model_form.dart';
+import 'package:msu_admin/theme.dart';
+import 'package:msu_admin/ui/styled_dropdown.dart';
 
 final providers = [
   ProviderSpec.fromJson(const {
@@ -54,6 +56,7 @@ ApiClient stubClient() => ApiClient(
 
 Future<void> pumpForm(WidgetTester tester, {UpstreamModel? editing}) async {
   await tester.pumpWidget(MaterialApp(
+    theme: buildAppTheme(),
     home: Scaffold(
       body: ModelForm(
         client: stubClient(),
@@ -67,10 +70,10 @@ Future<void> pumpForm(WidgetTester tester, {UpstreamModel? editing}) async {
   await tester.pumpAndSettle();
 }
 
-/// 找到指定 label 的下拉控件。
+/// 找到指定 label 的下拉控件(自绘 StyledDropdown)。
 Finder dropdownFor(String label) => find.ancestor(
       of: find.text(label),
-      matching: find.byType(DropdownButtonFormField<String>),
+      matching: find.byType(StyledDropdown),
     );
 
 void main() {
