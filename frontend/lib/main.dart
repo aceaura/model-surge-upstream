@@ -206,18 +206,14 @@ class _AdminShellState extends State<AdminShell> {
             padding: const EdgeInsets.fromLTRB(10, 2, 10, 16),
             child: Row(
               children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [t.primary, t.primaryInk],
-                    ),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 36,
+                    height: 36,
+                    fit: BoxFit.cover,
                   ),
-                  child: const Icon(Icons.bolt, size: 20, color: Colors.white),
                 ),
                 const SizedBox(width: 11),
                 Expanded(
