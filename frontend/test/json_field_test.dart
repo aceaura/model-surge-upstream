@@ -61,4 +61,51 @@ void main() {
     expect(validity.last, isTrue);
     expect(find.textContaining('JSON 格式错误'), findsNothing);
   });
+
+  testWidgets('format button pretty-prints valid json', (tester) async {
+    final controller =
+        TextEditingController(text: '{"a":1,"b":{"c":2}}');
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: JsonField(
+          label: '默认参数',
+          helper: 'helper',
+          controller: controller,
+          onValidityChanged: (_) {},
+        ),
+      ),
+    ));
+
+    await tester.tap(find.byIcon(Icons.auto_fix_high));
+    await tester.pump();
+
+    expect(controller.text, prettyJson(const {
+      'a': 1,
+      'b': {'c': 2},
+    }));
+    // 光标移到末尾,避免格式化后插入点丢失
+    expect(controller.selection.baseOffset, controller.text.length);
+  });
+
+  testWidgets('format button is disabled while json is invalid',
+      (tester) async {
+    final controller = TextEditingController(text: '{bad');
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: JsonField(
+          label: '默认参数',
+          helper: 'helper',
+          controller: controller,
+          onValidityChanged: (_) {},
+        ),
+      ),
+    ));
+
+    final button =
+        tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.auto_fix_high));
+    expect(button.onPressed, isNull);
+    expect(controller.text, '{bad');
+  });
 }
