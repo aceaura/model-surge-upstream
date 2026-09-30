@@ -77,18 +77,27 @@ class _ProxyPageState extends State<ProxyPage> {
     }
   }
 
-  /// 生成随机密钥：sk- 前缀 + 48 位十六进制，与常规 sk-xxx 形态的
-  /// API 密钥一致，客户端可直接拷贝。
+  /// 生成随机密钥：参照百炼 Coding Plan 密钥形态——sk-sp- 前缀 +
+  /// 点分隔四段 base64url（1/5/4/95 字符），与运维交给客户端的
+  /// 常规密钥同形，客户端可直接拷贝。
   void _generateKey() {
-    final rand = Random.secure();
-    final hex = List.generate(
-      24,
-      (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0'),
-    ).join();
     setState(() {
-      _apiKey.text = 'sk-$hex';
+      _apiKey.text = 'sk-sp-${_randToken(1)}.${_randToken(5)}.'
+          '${_randToken(4)}.${_randToken(95)}';
       _appliedMsg = null;
     });
+  }
+
+  /// base64url 字母表（无填充）：参照密钥各段的字符集。
+  static const _tokenAlphabet =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+  String _randToken(int n) {
+    final rand = Random.secure();
+    return List.generate(
+      n,
+      (_) => _tokenAlphabet[rand.nextInt(_tokenAlphabet.length)],
+    ).join();
   }
 
   /// 推导接入地址区的主机。关局域网：恒 127.0.0.1。开局域网：
