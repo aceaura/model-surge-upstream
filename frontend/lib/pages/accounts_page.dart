@@ -5,6 +5,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
+import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
 import '../ui/quota_inline.dart';
@@ -165,35 +166,22 @@ class _AccountsPageState extends State<AccountsPage> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
-              child: Row(
-                children: [
-                  Text(
-                    '账号',
-                    style: TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      color: t.ink,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text('${accounts.length} 个',
-                      style: TextStyle(fontSize: 12.5, color: t.faint)),
-                  const Spacer(),
-                  OutlinedButton.icon(
-                    onPressed: _reload,
-                    icon: const Icon(Icons.refresh, size: 15),
-                    label: const Text('刷新'),
-                  ),
-                  const SizedBox(width: 10),
-                  FilledButton.icon(
-                    onPressed: () => _create(providers),
-                    icon: const Icon(Icons.add, size: 16),
-                    label: const Text('新建账号'),
-                  ),
-                ],
-              ),
+            PageHeader(
+              title: '账号',
+              count: accounts.length,
+              trailing: [
+                OutlinedButton.icon(
+                  onPressed: _reload,
+                  icon: const Icon(Icons.refresh, size: 15),
+                  label: const Text('刷新'),
+                ),
+                const SizedBox(width: 10),
+                FilledButton.icon(
+                  onPressed: () => _create(providers),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('新建账号'),
+                ),
+              ],
             ),
             Expanded(
               child: accounts.isEmpty

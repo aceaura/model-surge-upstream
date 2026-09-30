@@ -5,6 +5,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
+import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
 
@@ -45,33 +46,19 @@ class _ProvidersPageState extends State<ProvidersPage> {
           );
         }
         final providers = snapshot.data ?? const <ProviderSpec>[];
-        final t = context.tokens;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
-              child: Row(
-                children: [
-                  Text(
-                    '提供商',
-                    style: TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      color: t.ink,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text('${providers.length} 个',
-                      style: TextStyle(fontSize: 12.5, color: t.faint)),
-                  const Spacer(),
-                  OutlinedButton.icon(
-                    onPressed: _reload,
-                    icon: const Icon(Icons.refresh, size: 15),
-                    label: const Text('刷新'),
-                  ),
-                ],
-              ),
+            PageHeader(
+              title: '提供商',
+              count: providers.length,
+              trailing: [
+                OutlinedButton.icon(
+                  onPressed: _reload,
+                  icon: const Icon(Icons.refresh, size: 15),
+                  label: const Text('刷新'),
+                ),
+              ],
             ),
             Expanded(
               // 方块拼接:按可用宽度决定每排个数(非全屏约 2 个,

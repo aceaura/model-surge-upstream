@@ -5,6 +5,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
+import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
 import 'model_form.dart';
@@ -164,39 +165,23 @@ class _ModelsPageState extends State<ModelsPage> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 14),
-              child: Row(
-                children: [
-                  _backButton(t),
-                  const SizedBox(width: 12),
-                  Text(
-                    '${widget.account.name} 的模型',
-                    style: TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      color: t.ink,
-                    ),
-                  ),
-                  if (loaded) ...[
-                    const SizedBox(width: 8),
-                    Text('${models.length} 个',
-                        style: TextStyle(fontSize: 12.5, color: t.faint)),
-                  ],
-                  const Spacer(),
-                  OutlinedButton.icon(
-                    onPressed: _reload,
-                    icon: const Icon(Icons.refresh, size: 15),
-                    label: const Text('刷新'),
-                  ),
-                  const SizedBox(width: 10),
-                  FilledButton.icon(
-                    onPressed: loaded ? () => _create(accounts) : null,
-                    icon: const Icon(Icons.add, size: 16),
-                    label: const Text('新建模型'),
-                  ),
-                ],
-              ),
+            PageHeader(
+              title: '${widget.account.name} 的模型',
+              count: loaded ? models.length : null,
+              leading: _backButton(t),
+              trailing: [
+                OutlinedButton.icon(
+                  onPressed: _reload,
+                  icon: const Icon(Icons.refresh, size: 15),
+                  label: const Text('刷新'),
+                ),
+                const SizedBox(width: 10),
+                FilledButton.icon(
+                  onPressed: loaded ? () => _create(accounts) : null,
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('新建模型'),
+                ),
+              ],
             ),
             Expanded(child: content),
           ],
