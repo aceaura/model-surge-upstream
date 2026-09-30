@@ -66,17 +66,9 @@ class _ProvidersPageState extends State<ProvidersPage> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            PageHeader(
-              title: '提供商',
-              count: providers.length,
-              trailing: [
-                OutlinedButton.icon(
-                  onPressed: _reload,
-                  icon: const Icon(Icons.refresh, size: 15),
-                  label: const Text('刷新'),
-                ),
-              ],
-            ),
+            // 页头不放刷新:provider 是编译期常量,刷新无意义
+            // (重试入口保留在加载失败时的错误面板上)
+            PageHeader(title: '提供商', count: providers.length, trailing: const []),
             SummaryBand(
               summary: '内置 ${providers.length} 家提供商',
               stats: [
