@@ -70,8 +70,8 @@ void main() {
     expect(urlField.controller!.text, 'https://ds.example.com');
     expect(find.textContaining('原密钥不可见（sk-d***efgh），需重新填入'),
         findsOneWidget);
-    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
-        isFalse);
+    expect(find.byType(SwitchListTile), findsNothing,
+        reason: '启停由列表行开关控制,表单不再展示');
     expect(find.text('创建'), findsOneWidget,
         reason: 'copy is a create, not an edit');
   });

@@ -44,7 +44,9 @@ class _AccountFormState extends State<AccountForm> {
   late Map<String, String> _headers = {
     ...?widget.editing?.headers ?? widget.copyFrom?.headers
   };
-  late bool _enabled =
+  // 启停由列表行的开关控制,表单不再展示;编辑/拷贝时沿用原值提交,
+  // 新建默认启用
+  late final bool _enabled =
       widget.editing?.enabled ?? widget.copyFrom?.enabled ?? true;
 
   bool _busy = false;
@@ -187,11 +189,6 @@ class _AccountFormState extends State<AccountForm> {
                 HeaderEditor(
                   initial: _headers,
                   onChanged: (h) => _headers = h,
-                ),
-                SwitchListTile(
-                  title: const Text('启用'),
-                  value: _enabled,
-                  onChanged: (v) => setState(() => _enabled = v),
                 ),
               ],
             ),
