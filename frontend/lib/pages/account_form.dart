@@ -35,12 +35,14 @@ class _AccountFormState extends State<AccountForm> {
       text: widget.editing?.name ??
           (widget.copyFrom != null ? '${widget.copyFrom!.name}-copy' : ''));
   late final TextEditingController _apiKey = TextEditingController();
-  late final TextEditingController _baseUrl = TextEditingController(
-      text: widget.editing?.baseUrl ?? widget.copyFrom?.baseUrl ?? '');
 
   late String? _providerId = widget.editing?.providerId ??
       widget.copyFrom?.providerId ??
       (widget.providers.isNotEmpty ? widget.providers.first.id : null);
+
+  // 请求地址可编辑:默认取提供商默认地址,已存覆盖值时取覆盖值
+  late final TextEditingController _baseUrl =
+      TextEditingController(text: _initialBaseUrl());
   late Map<String, String> _headers = {
     ...?widget.editing?.headers ?? widget.copyFrom?.headers
   };
@@ -64,16 +66,46 @@ class _AccountFormState extends State<AccountForm> {
   ProviderSpec? get _spec =>
       widget.providers.where((p) => p.id == _providerId).firstOrNull;
 
+  String _defaultBaseUrlFor(String? providerId) =>
+      widget.providers.where((p) => p.id == providerId).firstOrNull?.baseUrl ??
+      '';
+
+  String _initialBaseUrl() {
+    final source = widget.editing ?? widget.copyFrom;
+    if (source != null) {
+      return source.baseUrl.isNotEmpty
+          ? source.baseUrl
+          : _defaultBaseUrlFor(source.providerId);
+    }
+    return _defaultBaseUrlFor(
+        widget.providers.isNotEmpty ? widget.providers.first.id : null);
+  }
+
+  /// 换提供商时:地址仍是旧提供商默认值(用户没改过)就跟着换成新默认值,
+  /// 用户改过则保留其输入。
+  void _onProviderChanged(String? v) {
+    setState(() {
+      final oldDefault = _defaultBaseUrlFor(_providerId);
+      if (oldDefault.isNotEmpty && _baseUrl.text.trim() == oldDefault) {
+        _baseUrl.text = _defaultBaseUrlFor(v);
+      }
+      _providerId = v;
+    });
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _busy = true);
     try {
+      // 与提供商默认一致即视为不覆盖,保持"跟随提供商"语义
+      final url = _baseUrl.text.trim();
+      final baseUrl = url == (_spec?.baseUrl ?? '') ? '' : url;
       if (_isEdit) {
         await widget.client.updateAccount(
           name: widget.editing!.name,
           providerId: _providerId,
           apiKey: _apiKey.text.trim(),
-          baseUrl: _baseUrl.text.trim(),
+          baseUrl: baseUrl,
           headers: _headers,
           enabled: _enabled,
         );
@@ -82,7 +114,7 @@ class _AccountFormState extends State<AccountForm> {
           name: _name.text.trim(),
           providerId: _providerId!,
           apiKey: _apiKey.text.trim(),
-          baseUrl: _baseUrl.text.trim(),
+          baseUrl: baseUrl,
           headers: _headers,
           enabled: _enabled,
         );
@@ -99,7 +131,6 @@ class _AccountFormState extends State<AccountForm> {
 
   @override
   Widget build(BuildContext context) {
-    final spec = _spec;
     return AlertDialog(
       title: Text(_isEdit
           ? '编辑账号 ${widget.editing!.name}'
@@ -127,15 +158,26 @@ class _AccountFormState extends State<AccountForm> {
                         .firstOrNull;
                     return p == null ? id : '${p.displayName} ($id)';
                   },
-                  onChanged: (v) => setState(() => _providerId = v),
+                  onChanged: _onProviderChanged,
                   validator: (v) => v == null ? '请选择提供商' : null,
                 ),
-                if (spec != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text('默认请求地址 ${spec.baseUrl}',
-                        style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _baseUrl,
+                  decoration: const InputDecoration(
+                    labelText: '请求地址',
+                    helperText: '默认跟随提供商；修改后仅本账号生效',
+                    border: OutlineInputBorder(),
                   ),
+                  validator: (v) {
+                    final t = v?.trim() ?? '';
+                    if (t.isEmpty) return '请求地址不能为空';
+                    if (!t.startsWith('http://') && !t.startsWith('https://')) {
+                      return '需以 http:// 或 https:// 开头';
+                    }
+                    return null;
+                  },
+                ),
                 // 编辑模式下账号名不可改,直接不渲染该字段(标题已含账号名)
                 if (!_isEdit) ...[
                   const SizedBox(height: 16),
@@ -166,23 +208,6 @@ class _AccountFormState extends State<AccountForm> {
                   validator: (v) {
                     if (_isEdit) return null;
                     return (v == null || v.trim().isEmpty) ? '密钥不能为空' : null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _baseUrl,
-                  decoration: const InputDecoration(
-                    labelText: '请求地址覆盖（可选）',
-                    hintText: '留空使用提供商默认地址',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) {
-                    final t = v?.trim() ?? '';
-                    if (t.isEmpty) return null;
-                    if (!t.startsWith('http://') && !t.startsWith('https://')) {
-                      return '需以 http:// 或 https:// 开头';
-                    }
-                    return null;
                   },
                 ),
                 const SizedBox(height: 16),
