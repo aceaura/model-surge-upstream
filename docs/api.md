@@ -1067,7 +1067,7 @@ PUT /admin/proxy-settings
 **请求体结构**：
 
 ```json
-{ "api_key": "msu-proxy-…", "port": 12344, "lan_open": false }
+{ "api_key": "sk-…", "port": 12344, "lan_open": false }
 ```
 
 **响应** `200`：

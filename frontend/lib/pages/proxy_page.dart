@@ -77,15 +77,16 @@ class _ProxyPageState extends State<ProxyPage> {
     }
   }
 
-  /// 生成随机密钥：msu-proxy- 前缀 + 24 位十六进制，客户端可直接拷贝。
+  /// 生成随机密钥：sk- 前缀 + 48 位十六进制，与常规 sk-xxx 形态的
+  /// API 密钥一致，客户端可直接拷贝。
   void _generateKey() {
     final rand = Random.secure();
     final hex = List.generate(
-      12,
+      24,
       (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0'),
     ).join();
     setState(() {
-      _apiKey.text = 'msu-proxy-$hex';
+      _apiKey.text = 'sk-$hex';
       _appliedMsg = null;
     });
   }
