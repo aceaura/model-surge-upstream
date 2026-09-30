@@ -166,11 +166,10 @@ class _AdminShellState extends State<AdminShell> {
           _sidebar(context.tokens, groups, cur.id, settings),
           // client 更换(保存设置)后强制重建页面,避免列表页持有旧连接。
           Expanded(
-            // 内容区底色:亮模式用近白带一丝青调的纯色(比灰底干净),
-            // 暗模式跟随 tokens
+            // 内容区底色:亮模式纯白(CC Switch 式干净底色),暗模式跟随 tokens
             child: Container(
               color: Theme.of(context).brightness == Brightness.light
-                  ? const Color(0xFFF8FAF9)
+                  ? Colors.white
                   : context.tokens.bg,
               child: SafeArea(
                 child: KeyedSubtree(

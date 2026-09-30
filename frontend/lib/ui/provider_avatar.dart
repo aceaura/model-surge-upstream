@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// 供应商头像:圆角方块 + id 首字母,配色按 id 哈希从柔和色板取,
+/// 供应商头像:圆形 + id 首字母,配色按 id 哈希从柔和色板取,
 /// 同一 provider 在任何页面颜色一致(CC Switch 式供应商图标位)。
 class ProviderAvatar extends StatelessWidget {
   const ProviderAvatar({super.key, required this.providerId, this.size = 40});
@@ -43,7 +43,7 @@ class ProviderAvatar extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(size * 0.28),
+        shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
       child: Text(
