@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
@@ -22,12 +24,29 @@ class UsagePage extends StatefulWidget {
 
 enum _Range { today, d7, d30, all }
 
-const _rangeLabels = {_Range.today: '当天', _Range.d7: '近 7 天', _Range.d30: '近 30 天', _Range.all: '全部'};
+const _rangeLabels = {
+  _Range.today: '当天',
+  _Range.d7: '近 7 天',
+  _Range.d30: '近 30 天',
+  _Range.all: '全部',
+};
+
+/// 自动刷新间隔（秒），0 为关；与 CC Switch 的 0/5/10/30/60s 同档。
+const _refreshOptions = [0, 5, 10, 30, 60];
 
 class _UsagePageState extends State<UsagePage> {
   _Range _range = _Range.today;
   String _granularity = 'auto'; // auto | hour | day
   int _tab = 0; // 0 请求日志 1 账号统计 2 模型统计
+
+  /// 页头过滤器：来源（转发/对话）与模型，空串表示「全部」。
+  String _source = '';
+  String _model = '';
+  List<String> _modelOptions = const [];
+
+  /// 自动刷新间隔秒数；改档即重建定时器。
+  int _refreshSec = 30;
+  Timer? _timer;
 
   bool _busy = false;
   Object? _error;
@@ -44,7 +63,39 @@ class _UsagePageState extends State<UsagePage> {
   @override
   void initState() {
     super.initState();
+    _loadModelOptions();
     _load();
+    _restartTimer();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  /// 模型下拉的选项：配置里的命名模型清单。失败不阻断页面。
+  Future<void> _loadModelOptions() async {
+    try {
+      final models = await widget.client.listModels();
+      if (!mounted) return;
+      setState(() => _modelOptions = [for (final m in models) m.id]);
+    } catch (_) {
+      // 过滤器选项拉不到时保持只有「全部模型」，不打断主数据加载。
+    }
+  }
+
+  void _restartTimer() {
+    _timer?.cancel();
+    _timer = null;
+    if (_refreshSec <= 0) return;
+    _timer = Timer.periodic(Duration(seconds: _refreshSec), (_) => _load());
+  }
+
+  void _setRefresh(int sec) {
+    if (sec == _refreshSec) return;
+    setState(() => _refreshSec = sec);
+    _restartTimer();
   }
 
   /// 当前区间的时间边界。all 返回 (null, null) 表示不限。
@@ -71,10 +122,15 @@ class _UsagePageState extends State<UsagePage> {
     try {
       if (!appendLogs) {
         final results = await Future.wait<Object>([
-          widget.client.usageSummary(start: start, end: end),
+          widget.client.usageSummary(
+              start: start, end: end, model: _modelOr(null), source: _sourceOr(null)),
           widget.client.usageTrend(
-              start: start, end: end, granularity: _granularity == 'auto' ? null : _granularity),
-          _tabData(start, end, 0),
+              start: start,
+              end: end,
+              model: _modelOr(null),
+              source: _sourceOr(null),
+              granularity: _granularity == 'auto' ? null : _granularity),
+          _tabData(start, end, _tab),
         ]);
         if (!mounted) return;
         final trend = results[1] as (String, List<UsageBucket>);
@@ -97,16 +153,25 @@ class _UsagePageState extends State<UsagePage> {
     }
   }
 
-  /// 当前页签的数据拉取：0 日志 / 1 账号 / 2 模型。
+  String? _modelOr(String? fallback) => _model.isEmpty ? fallback : _model;
+  String? _sourceOr(String? fallback) => _source.isEmpty ? fallback : _source;
+
+  /// 当前页签的数据拉取：0 日志 / 1 账号 / 2 模型。过滤器按各端点支持的维度下发。
   Future<Object> _tabData(DateTime? start, DateTime? end, int tab, {int offset = 0}) {
     switch (tab) {
       case 1:
-        return widget.client.usageAccounts(start: start, end: end);
+        return widget.client.usageAccounts(
+            start: start, end: end, model: _modelOr(null), source: _sourceOr(null));
       case 2:
-        return widget.client.usageModels(start: start, end: end);
+        return widget.client.usageModels(start: start, end: end, source: _sourceOr(null));
       default:
         return widget.client.usageLogs(
-            start: start, end: end, limit: _pageSize, offset: offset);
+            start: start,
+            end: end,
+            model: _modelOr(null),
+            source: _sourceOr(null),
+            limit: _pageSize,
+            offset: offset);
     }
   }
 
@@ -150,11 +215,66 @@ class _UsagePageState extends State<UsagePage> {
       children: [
         PageHeader(
           title: '用量',
+          // 页头右侧过滤器,仿 CC Switch 使用统计:来源/模型/自动刷新/区间。
           trailing: [
-            BusyButton(
-              busy: _busy,
-              onPressed: _load,
-              child: const Text('刷新'),
+            _filterSelect(
+              t,
+              label: _source.isEmpty ? '全部来源' : (_source == 'chat' ? '对话' : '转发'),
+              items: const [
+                ('', '全部来源'),
+                ('proxy', '转发'),
+                ('chat', '对话'),
+              ],
+              value: _source,
+              onSelected: (v) {
+                if (v == _source) return;
+                setState(() => _source = v);
+                _load();
+              },
+            ),
+            const SizedBox(width: 8),
+            _filterSelect(
+              t,
+              label: _model.isEmpty ? '全部模型' : _model,
+              width: 132,
+              items: [
+                const ('', '全部模型'),
+                for (final m in _modelOptions) (m, m),
+              ],
+              value: _model,
+              onSelected: (v) {
+                if (v == _model) return;
+                setState(() => _model = v);
+                _load();
+              },
+            ),
+            const SizedBox(width: 8),
+            _filterSelect(
+              t,
+              icon: Icons.refresh,
+              label: _refreshSec <= 0 ? '关闭' : '${_refreshSec}s',
+              items: [
+                for (final s in _refreshOptions)
+                  (s.toString(), s <= 0 ? '关闭' : '${s}s'),
+              ],
+              value: '$_refreshSec',
+              onSelected: (v) => _setRefresh(int.parse(v)),
+            ),
+            const SizedBox(width: 8),
+            _filterSelect(
+              t,
+              icon: Icons.calendar_month_outlined,
+              label: _rangeLabels[_range]!,
+              items: [
+                for (final r in _Range.values) (r.name, _rangeLabels[r]!),
+              ],
+              value: _range.name,
+              onSelected: (v) {
+                final r = _Range.values.firstWhere((e) => e.name == v);
+                if (r == _range) return;
+                setState(() => _range = r);
+                _load();
+              },
             ),
           ],
         ),
@@ -164,8 +284,6 @@ class _UsagePageState extends State<UsagePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _filterBar(t),
-                const SizedBox(height: 16),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 16),
@@ -191,34 +309,73 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  /// 区间与粒度筛选：区间决定所有卡片与表格，粒度只影响趋势分桶。
-  Widget _filterBar(AppTokens t) {
-    return Row(
-      children: [
-        for (final r in _Range.values)
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: _chip(t, _rangeLabels[r]!, _range == r, () {
-              setState(() => _range = r);
-              _load();
-            }),
-          ),
-        const SizedBox(width: 12),
-        Container(width: 1, height: 18, color: t.border),
-        const SizedBox(width: 12),
-        for (final g in const [
-          ['auto', '自动'],
-          ['hour', '按小时'],
-          ['day', '按天'],
-        ])
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: _chip(t, g[1], _granularity == g[0], () {
-              setState(() => _granularity = g[0]);
-              _load();
-            }),
+  /// 页头下拉过滤器：圆角描边触发器 + 弹出菜单，形态对齐 CC Switch 的 Select。
+  Widget _filterSelect(
+    AppTokens t, {
+    required String label,
+    required List<(String, String)> items,
+    required String value,
+    required ValueChanged<String> onSelected,
+    IconData? icon,
+    double width = 104,
+  }) {
+    return PopupMenuButton<String>(
+      tooltip: '',
+      padding: EdgeInsets.zero,
+      color: t.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      elevation: 3,
+      offset: const Offset(0, 4),
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final (v, text) in items)
+          PopupMenuItem<String>(
+            value: v,
+            height: 34,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    text,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: v == value ? FontWeight.w600 : FontWeight.w400,
+                      color: v == value ? t.primaryInk : t.ink,
+                    ),
+                  ),
+                ),
+                if (v == value) Icon(Icons.check, size: 14, color: t.primary),
+              ],
+            ),
           ),
       ],
+      child: Container(
+        width: width,
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: t.surface,
+          border: Border.all(color: t.border),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 14, color: t.dim),
+              const SizedBox(width: 6),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, color: t.ink),
+              ),
+            ),
+            Icon(Icons.expand_more, size: 16, color: t.faint),
+          ],
+        ),
+      ),
     );
   }
 
@@ -418,8 +575,19 @@ class _UsagePageState extends State<UsagePage> {
               Text('使用趋势',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.ink)),
               const Spacer(),
-              Text(_trendGran == 'day' ? '按天' : '按小时',
-                  style: TextStyle(fontSize: 12, color: t.faint)),
+              // 粒度只影响趋势分桶，放在趋势卡头部而非页头过滤器。
+              for (final g in const [
+                ['auto', '自动'],
+                ['hour', '按小时'],
+                ['day', '按天'],
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: _chip(t, g[1], _granularity == g[0], () {
+                    setState(() => _granularity = g[0]);
+                    _load();
+                  }),
+                ),
             ],
           ),
           const SizedBox(height: 18),
