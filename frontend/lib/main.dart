@@ -166,18 +166,35 @@ class _AdminShellState extends State<AdminShell> {
           _sidebar(context.tokens, groups, cur.id, settings),
           // client 更换(保存设置)后强制重建页面,避免列表页持有旧连接。
           Expanded(
-            child: SafeArea(
-              child: KeyedSubtree(
-                key: ObjectKey(client),
-                child: modelsCtx != null
-                    ? ModelsPage(
-                        client: client,
-                        account: modelsCtx.$1,
-                        providers: modelsCtx.$2,
-                        onOpenSettings: _openSettings,
-                        onBack: () => setState(() => _modelsCtx = null),
-                      )
-                    : cur.build(),
+            // 内容区铺微弱竖向渐变(亮模式):顶部近白、底部极浅青灰,
+            // 比平铺灰底更有质感;暗模式保持纯色
+            child: Container(
+              decoration: BoxDecoration(
+                gradient:
+                    Theme.of(context).brightness == Brightness.light
+                        ? const LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0xFFFFFFFF), Color(0xFFEFF4F1)],
+                          )
+                        : null,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? context.tokens.bg
+                    : null,
+              ),
+              child: SafeArea(
+                child: KeyedSubtree(
+                  key: ObjectKey(client),
+                  child: modelsCtx != null
+                      ? ModelsPage(
+                          client: client,
+                          account: modelsCtx.$1,
+                          providers: modelsCtx.$2,
+                          onOpenSettings: _openSettings,
+                          onBack: () => setState(() => _modelsCtx = null),
+                        )
+                      : cur.build(),
+                ),
               ),
             ),
           ),
