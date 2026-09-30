@@ -206,11 +206,13 @@ class _ProxyPageState extends State<ProxyPage> {
       );
     }
     final t = context.tokens;
-    // 宽屏双栏(左配置右地址与提交),窄屏单栏堆叠;整体居中限宽,
-    // 避免全屏时一条窄列漂在中间。
+    // 三档响应式：窄屏单栏铺满；宽屏双栏限宽 1080；全屏(≥1500)放宽到 1360
+    // 并让整块在可视高度内垂直居中——顶对齐会把下半屏整片留白，像没排完。
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 980;
+        final ultra = constraints.maxWidth >= 1500;
+        final gap = ultra ? 20.0 : 14.0;
         final applyBlock = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -247,38 +249,52 @@ class _ProxyPageState extends State<ProxyPage> {
         return Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1080),
+            constraints: BoxConstraints(maxWidth: ultra ? 1360 : 1080),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: wide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 3, child: configCards),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          flex: 2,
-                          child: Column(
+              padding: EdgeInsets.symmetric(
+                  horizontal: ultra ? 40 : 24, vertical: 28),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight < 56
+                        ? 0.0
+                        : constraints.maxHeight - 56),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    wide
+                        ? Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(flex: 3, child: configCards),
+                              SizedBox(width: gap),
+                              Expanded(
+                                flex: 2,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _endpointCard(context),
+                                    const SizedBox(height: 20),
+                                    applyBlock,
+                                  ],
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              configCards,
+                              const SizedBox(height: 14),
                               _endpointCard(context),
                               const SizedBox(height: 20),
                               applyBlock,
                             ],
                           ),
-                        ),
-                      ],
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        configCards,
-                        const SizedBox(height: 14),
-                        _endpointCard(context),
-                        const SizedBox(height: 20),
-                        applyBlock,
-                      ],
-                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         );
