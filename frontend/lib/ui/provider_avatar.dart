@@ -26,17 +26,23 @@ class ProviderAvatar extends StatelessWidget {
     (Color(0xFF14322F), Color(0xFF7ED6CC)),
   ];
 
-  @override
-  Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+  /// 按 key 哈希取 (底色, 字色),供头像与摘要带计数 chips 共用,
+  /// 同一 key 在任何页面/任何控件颜色一致。
+  static (Color, Color) colorsFor(String key, {required bool dark}) {
     final palette = dark ? _dark : _light;
     var hash = 0;
-    for (final unit in providerId.codeUnits) {
+    for (final unit in key.codeUnits) {
       hash = (hash * 33 + unit) & 0x7fffffff;
     }
     // 终搅一遍再取槽位,避免 anthropic/openai 这类近邻 id 撞同色。
     hash = (hash * 2654435761) & 0x7fffffff;
-    final (bg, fg) = palette[hash % palette.length];
+    return palette[hash % palette.length];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final (bg, fg) = colorsFor(providerId, dark: dark);
     final letter = providerId.isEmpty ? '?' : providerId[0].toUpperCase();
     return Container(
       width: size,

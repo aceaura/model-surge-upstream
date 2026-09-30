@@ -8,6 +8,7 @@ import '../ui/hover_card.dart';
 import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
+import '../ui/summary_band.dart';
 import 'model_form.dart';
 
 /// 某账号下的模型列表。内嵌在主壳右侧内容区(不再推路由,侧栏保持可见),
@@ -35,6 +36,7 @@ class ModelsPage extends StatefulWidget {
 class _ModelsPageState extends State<ModelsPage> {
   late Future<(List<UpstreamModel>, List<Account>)> _future = _load();
   final _toggling = <String>{};
+  String _query = '';
 
   Future<(List<UpstreamModel>, List<Account>)> _load() async {
     final models = await widget.client.listModels(account: widget.account.name);
@@ -139,6 +141,20 @@ class _ModelsPageState extends State<ModelsPage> {
         final models = loaded ? snapshot.data!.$1 : const <UpstreamModel>[];
         final accounts = loaded ? snapshot.data!.$2 : const <Account>[];
 
+        // 摘要带:按协议计数 + 搜索过滤(标识/上游模型名)。
+        final counts = <String, int>{};
+        for (final m in models) {
+          counts[m.protocol] = (counts[m.protocol] ?? 0) + 1;
+        }
+        final q = _query.toLowerCase();
+        final visible = q.isEmpty
+            ? models
+            : models
+                .where((m) =>
+                    m.id.toLowerCase().contains(q) ||
+                    m.nativeModel.toLowerCase().contains(q))
+                .toList();
+
         final Widget content;
         if (snapshot.connectionState != ConnectionState.done) {
           content = const Center(child: CircularProgressIndicator());
@@ -148,17 +164,19 @@ class _ModelsPageState extends State<ModelsPage> {
             onRetry: _reload,
             onOpenSettings: widget.onOpenSettings,
           );
-        } else if (models.isEmpty) {
+        } else if (visible.isEmpty) {
           content = Center(
-            child:
-                Text('该账号下还没有模型。', style: TextStyle(color: t.faint)),
+            child: Text(
+              models.isEmpty ? '该账号下还没有模型。' : '没有匹配的模型。',
+              style: TextStyle(color: t.faint),
+            ),
           );
         } else {
           content = ListView.separated(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-            itemCount: models.length,
+            itemCount: visible.length,
             separatorBuilder: (_, _) => const SizedBox(height: 12),
-            itemBuilder: (context, i) => _modelCard(models[i], accounts, t),
+            itemBuilder: (context, i) => _modelCard(visible[i], accounts, t),
           );
         }
 
@@ -183,6 +201,16 @@ class _ModelsPageState extends State<ModelsPage> {
                 ),
               ],
             ),
+            if (loaded)
+              SummaryBand(
+                summary: '已配置 ${models.length} 个模型',
+                stats: [
+                  for (final e in counts.entries)
+                    BandStat(label: e.key, count: e.value, colorKey: e.key),
+                ],
+                searchHint: '搜索模型标识或上游模型名',
+                onSearch: (v) => setState(() => _query = v),
+              ),
             Expanded(child: content),
           ],
         );

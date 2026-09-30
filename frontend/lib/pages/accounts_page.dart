@@ -9,6 +9,7 @@ import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
 import '../ui/quota_inline.dart';
+import '../ui/summary_band.dart';
 import 'account_form.dart';
 
 class AccountsPage extends StatefulWidget {
@@ -33,6 +34,7 @@ class AccountsPage extends StatefulWidget {
 class _AccountsPageState extends State<AccountsPage> {
   late Future<(List<Account>, List<ProviderSpec>)> _future = _load();
   final _toggling = <String>{};
+  String _query = '';
 
   Future<(List<Account>, List<ProviderSpec>)> _load() async {
     final accounts = await widget.client.listAccounts();
@@ -163,6 +165,20 @@ class _AccountsPageState extends State<AccountsPage> {
         }
         final (accounts, providers) = snapshot.data!;
         final t = context.tokens;
+        // 摘要带:按提供商统计账号数;搜索按名称/提供商/地址过滤
+        final counts = <String, int>{};
+        for (final a in accounts) {
+          counts[a.providerId] = (counts[a.providerId] ?? 0) + 1;
+        }
+        final q = _query.toLowerCase();
+        final visible = q.isEmpty
+            ? accounts
+            : accounts
+                .where((a) =>
+                    a.name.toLowerCase().contains(q) ||
+                    a.providerId.toLowerCase().contains(q) ||
+                    a.baseUrl.toLowerCase().contains(q))
+                .toList();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -183,17 +199,27 @@ class _AccountsPageState extends State<AccountsPage> {
                 ),
               ],
             ),
+            SummaryBand(
+              summary: '已配置 ${accounts.length} 个账号',
+              stats: [
+                for (final e in counts.entries)
+                  BandStat(label: e.key, count: e.value, colorKey: e.key),
+              ],
+              searchHint: '搜索账号名、提供商或请求地址',
+              onSearch: (v) => setState(() => _query = v),
+            ),
             Expanded(
-              child: accounts.isEmpty
+              child: visible.isEmpty
                   ? Center(
-                      child: Text('还没有账号，先新建一个。',
+                      child: Text(
+                          accounts.isEmpty ? '还没有账号，先新建一个。' : '没有匹配的账号。',
                           style: TextStyle(color: t.faint)))
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                      itemCount: accounts.length,
+                      itemCount: visible.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, i) {
-                        final a = accounts[i];
+                        final a = visible[i];
                         final spec = providers
                             .where((p) => p.id == a.providerId)
                             .firstOrNull;

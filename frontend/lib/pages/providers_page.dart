@@ -8,6 +8,7 @@ import '../ui/hover_card.dart';
 import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
+import '../ui/summary_band.dart';
 
 /// provider 是编译期常量，界面全部只读。
 class ProvidersPage extends StatefulWidget {
@@ -26,6 +27,7 @@ class ProvidersPage extends StatefulWidget {
 
 class _ProvidersPageState extends State<ProvidersPage> {
   late Future<List<ProviderSpec>> _future = widget.client.listProviders();
+  String _query = '';
 
   void _reload() =>
       setState(() => _future = widget.client.listProviders());
@@ -46,6 +48,21 @@ class _ProvidersPageState extends State<ProvidersPage> {
           );
         }
         final providers = snapshot.data ?? const <ProviderSpec>[];
+        // 摘要带:按协议统计覆盖的提供商数;搜索按 id/显示名过滤
+        final protoCounts = <String, int>{};
+        for (final p in providers) {
+          for (final proto in p.protocols) {
+            protoCounts[proto] = (protoCounts[proto] ?? 0) + 1;
+          }
+        }
+        final q = _query.toLowerCase();
+        final visible = q.isEmpty
+            ? providers
+            : providers
+                .where((p) =>
+                    p.id.toLowerCase().contains(q) ||
+                    p.displayName.toLowerCase().contains(q))
+                .toList();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -60,43 +77,62 @@ class _ProvidersPageState extends State<ProvidersPage> {
                 ),
               ],
             ),
+            SummaryBand(
+              summary: '内置 ${providers.length} 家提供商',
+              stats: [
+                for (final e in protoCounts.entries)
+                  BandStat(label: e.key, count: e.value, colorKey: e.key),
+              ],
+              searchHint: '搜索提供商名称或 id',
+              onSearch: (v) => setState(() => _query = v),
+            ),
             Expanded(
               // 方块拼接:按可用宽度决定每排个数(非全屏约 2 个,
               // 全屏更多),同排用 IntrinsicHeight 拉齐高度
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final cols = constraints.maxWidth ~/ 430;
-                  final perRow = cols < 1 ? 1 : cols;
-                  return SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                    child: Column(
-                      children: [
-                        for (var i = 0; i < providers.length; i += perRow)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: IntrinsicHeight(
-                              child: Row(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.stretch,
-                                children: [
-                                  for (var j = i; j < i + perRow; j++) ...[
-                                    if (j > i) const SizedBox(width: 12),
-                                    Expanded(
-                                      child: j < providers.length
-                                          ? _ProviderCard(
-                                              spec: providers[j])
-                                          : const SizedBox(),
+              child: visible.isEmpty
+                  ? Center(
+                      child: Text('没有匹配的提供商。',
+                          style: TextStyle(color: context.tokens.faint)))
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        final cols = constraints.maxWidth ~/ 430;
+                        final perRow = cols < 1 ? 1 : cols;
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                          child: Column(
+                            children: [
+                              for (var i = 0;
+                                  i < visible.length;
+                                  i += perRow)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.only(bottom: 12),
+                                  child: IntrinsicHeight(
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        for (var j = i;
+                                            j < i + perRow;
+                                            j++) ...[
+                                          if (j > i)
+                                            const SizedBox(width: 12),
+                                          Expanded(
+                                            child: j < visible.length
+                                                ? _ProviderCard(
+                                                    spec: visible[j])
+                                                : const SizedBox(),
+                                          ),
+                                        ],
+                                      ],
                                     ),
-                                  ],
-                                ],
-                              ),
-                            ),
+                                  ),
+                                ),
+                            ],
                           ),
-                      ],
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
             ),
           ],
         );

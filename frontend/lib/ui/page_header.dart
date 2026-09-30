@@ -2,9 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// 页面顶部条:主色小竖条 + 16 半粗标题 + 弱化计数,右侧放操作按钮。
-/// 取代原先 21 号粗黑大标题(与侧栏选中项语义重复且生硬)。
-/// 竖条呼应侧栏「管理/系统」分组标签的绿色小竖条。
+/// 页面顶部条:小标题 + 弱化计数,右侧放操作按钮。
+/// 装饰交给页头与列表之间的 SummaryBand,标题本身保持素净。
 class PageHeader extends StatelessWidget {
   const PageHeader({
     super.key,
@@ -33,15 +32,6 @@ class PageHeader extends StatelessWidget {
       child: Row(
         children: [
           if (leading != null) ...[leading!, const SizedBox(width: 12)],
-          Container(
-            width: 4,
-            height: 16,
-            decoration: BoxDecoration(
-              color: t.primary,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(width: 8),
           Text(
             title,
             style: TextStyle(
