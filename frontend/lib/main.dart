@@ -5,6 +5,8 @@ import 'api_client.dart';
 import 'models.dart';
 import 'pages/accounts_page.dart';
 import 'pages/all_models_page.dart';
+import 'pages/chat_page.dart';
+import 'pages/logs_page.dart';
 import 'pages/providers_page.dart';
 import 'pages/proxy_page.dart';
 import 'pages/settings_page.dart';
@@ -163,6 +165,22 @@ class _AdminShellState extends State<AdminShell> {
         () => ProxyPage(client: client, onOpenSettings: _openSettings),
       ),
       _NavItem(
+        'chat',
+        Icons.chat_bubble_outline_rounded,
+        '对话',
+        () => ChatPage(client: client, onOpenSettings: _openSettings),
+      ),
+      _NavItem(
+        'logs',
+        Icons.terminal_outlined,
+        '进程日志',
+        () => LogsPage(
+          client: client,
+          onOpenSettings: _openSettings,
+          active: _page == 'logs',
+        ),
+      ),
+      _NavItem(
         'settings',
         Icons.settings_outlined,
         '连接设置',
@@ -190,7 +208,7 @@ class _AdminShellState extends State<AdminShell> {
               child: SafeArea(
                 child: KeyedSubtree(
                   key: ObjectKey(client),
-                  // IndexedStack 常驻四个导航页:切换页签时状态
+                  // IndexedStack 常驻各导航页:切换页签时状态
                   // (已加载数据、滚动位置、搜索词)不丢,避免重新加载的抖动。
                   // 账号页点「模型」即切到模型页并下发搜索词,不再是覆盖子页。
                   child: IndexedStack(

@@ -35,3 +35,23 @@ CREATE TABLE IF NOT EXISTS proxy_settings (
 );
 
 INSERT INTO proxy_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- 对话页：会话与消息。消息按自增 id 定序（即时间序），
+-- 会话删时消息级联删。model_id 记最近一次发送所用模型，供选择器回显。
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id         TEXT PRIMARY KEY,
+    title      TEXT        NOT NULL DEFAULT '',
+    model_id   TEXT        NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    session_id TEXT        NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role       TEXT        NOT NULL,
+    content    TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON chat_messages(session_id);

@@ -66,6 +66,7 @@ class ApiClient {
     String path, {
     Map<String, String>? query,
     Map<String, dynamic>? body,
+    Duration? timeout,
   }) async {
     final uri = _uri(path, query);
     final request = http.Request(method, uri)..headers.addAll(_headers);
@@ -75,7 +76,8 @@ class ApiClient {
 
     http.Response response;
     try {
-      final streamed = await _http.send(request).timeout(_timeout);
+      final streamed =
+          await _http.send(request).timeout(timeout ?? _timeout);
       response = await http.Response.fromStream(streamed);
     } catch (e) {
       throw UnreachableException(baseUrl, '无法连接服务：$baseUrl');
@@ -252,6 +254,65 @@ class ApiClient {
       'lan_open': lanOpen,
     });
     return ProxySettings.fromJson(body['settings'] as Map<String, dynamic>);
+  }
+
+  /// 增量拉取进程日志：since 之后（不含）的条目 + 服务端当前尾 seq。
+  Future<(List<LogEntry>, int)> fetchLogs(int since) async {
+    final body =
+        await _send('GET', '/admin/logs', query: {'since': '$since'});
+    final entries = (body['entries'] as List<dynamic>? ?? const [])
+        .map((e) => LogEntry.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return (entries, body['next'] as int? ?? 0);
+  }
+
+  Future<void> clearLogs() => _send('DELETE', '/admin/logs');
+
+  Future<List<ChatSession>> listChatSessions() async {
+    final body = await _send('GET', '/admin/chat/sessions');
+    return (body['sessions'] as List<dynamic>? ?? const [])
+        .map((e) => ChatSession.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ChatSession> createChatSession() async {
+    final body = await _send('POST', '/admin/chat/sessions');
+    return ChatSession.fromJson(body['session'] as Map<String, dynamic>);
+  }
+
+  Future<void> deleteChatSession(String id) =>
+      _send('DELETE', '/admin/chat/sessions/$id');
+
+  Future<(ChatSession, List<ChatMessage>)> getChatMessages(String id) async {
+    final body = await _send('GET', '/admin/chat/sessions/$id/messages');
+    final msgs = (body['messages'] as List<dynamic>? ?? const [])
+        .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return (
+      ChatSession.fromJson(body['session'] as Map<String, dynamic>),
+      msgs,
+    );
+  }
+
+  Future<void> clearChatMessages(String id) =>
+      _send('DELETE', '/admin/chat/sessions/$id/messages');
+
+  /// 发送一轮对话：用户消息落库 → 服务端带上游补全 → 返回整段消息。
+  /// 超时放宽到 200s：长回复模型的整轮补全远超默认 15s。
+  Future<List<ChatMessage>> sendChatMessage(
+    String id, {
+    required String modelId,
+    required String content,
+  }) async {
+    final body = await _send(
+      'POST',
+      '/admin/chat/sessions/$id/messages',
+      body: {'model_id': modelId, 'content': content},
+      timeout: const Duration(seconds: 200),
+    );
+    return (body['messages'] as List<dynamic>? ?? const [])
+        .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   void close() => _http.close();

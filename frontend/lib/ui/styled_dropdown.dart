@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
@@ -15,6 +17,9 @@ class StyledDropdown extends StatefulWidget {
   final String Function(String)? labelOf;
   // false=未选占位态:框内显示 label,值隐藏;true=显示值,label 浮在框缘
   final bool showValue;
+  // 菜单朝触发器上方展开:触发器贴近窗口底缘(如对话页输入栏)时
+  // 默认的下翻菜单会落到窗口外,既看不见也点不到。
+  final bool dropUp;
   const StyledDropdown(
       {super.key,
       required this.value,
@@ -22,7 +27,8 @@ class StyledDropdown extends StatefulWidget {
       required this.onChanged,
       this.decoration,
       this.labelOf,
-      this.showValue = true});
+      this.showValue = true,
+      this.dropUp = false});
 
   @override
   State<StyledDropdown> createState() => _StyledDropdownState();
@@ -43,6 +49,13 @@ class _StyledDropdownState extends State<StyledDropdown> {
     final box = _triggerKey.currentContext!.findRenderObject() as RenderBox;
     final t = context.tokens;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    // 菜单高度可算:子项定高 38 + 内边距 12,封顶与 maxHeight 一致。
+    // 上翻时按它把菜单底缘贴到触发器顶缘上方 6px。
+    final menuHeight =
+        math.min(360.0, widget.options.length * 38.0 + 12.0);
+    final dy = widget.dropUp
+        ? -(menuHeight + 6.0)
+        : box.size.height + 6.0;
     _entry = OverlayEntry(
       builder: (_) => Stack(children: [
         // 透明屏障:点外部收菜单
@@ -56,7 +69,7 @@ class _StyledDropdownState extends State<StyledDropdown> {
         CompositedTransformFollower(
           link: _link,
           showWhenUnlinked: false,
-          offset: Offset(0, box.size.height + 6),
+          offset: Offset(0, dy),
           child: Align(
             alignment: Alignment.topLeft,
             // 底色必须画在 Material 上:InkWell 的 hover 墨水绘在最近 Material 层,

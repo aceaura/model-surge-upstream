@@ -243,3 +243,78 @@ class ProxySettings {
         lanOpen: json['lan_open'] as bool? ?? false,
       );
 }
+
+/// 进程日志条目。seq 单调递增，客户端用它做增量轮询 cursor。
+class LogEntry {
+  const LogEntry({
+    required this.seq,
+    required this.at,
+    required this.level,
+    required this.source,
+    required this.msg,
+  });
+
+  final int seq;
+  final DateTime at;
+
+  /// info / warn / error。
+  final String level;
+  final String source;
+  final String msg;
+
+  factory LogEntry.fromJson(Map<String, dynamic> json) => LogEntry(
+        seq: json['seq'] as int? ?? 0,
+        at: DateTime.tryParse(json['at'] as String? ?? '') ?? DateTime.now(),
+        level: json['level'] as String? ?? 'info',
+        source: json['source'] as String? ?? '',
+        msg: json['msg'] as String? ?? '',
+      );
+}
+
+/// 一次对话。modelId 是最近一次发送所用模型，供选择器回显。
+class ChatSession {
+  const ChatSession({
+    required this.id,
+    required this.title,
+    required this.modelId,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String title;
+  final String modelId;
+  final DateTime updatedAt;
+
+  factory ChatSession.fromJson(Map<String, dynamic> json) => ChatSession(
+        id: json['id'] as String? ?? '',
+        title: json['title'] as String? ?? '',
+        modelId: json['model_id'] as String? ?? '',
+        updatedAt:
+            DateTime.tryParse(json['updated_at'] as String? ?? '') ??
+                DateTime.now(),
+      );
+}
+
+/// 一条对话消息。role 取 user / assistant。
+class ChatMessage {
+  const ChatMessage({
+    required this.id,
+    required this.role,
+    required this.content,
+    required this.createdAt,
+  });
+
+  final int id;
+  final String role;
+  final String content;
+  final DateTime createdAt;
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: json['id'] as int? ?? 0,
+        role: json['role'] as String? ?? '',
+        content: json['content'] as String? ?? '',
+        createdAt:
+            DateTime.tryParse(json['created_at'] as String? ?? '') ??
+                DateTime.now(),
+      );
+}

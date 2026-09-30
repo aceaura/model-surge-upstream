@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
+	"github.com/aceaura/model-surge-upstream/backend/chat"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
@@ -59,6 +60,16 @@ type ProxyApply interface {
 	Apply(settings proxysettings.Settings) error
 }
 
+// Chat 承载管理面对话页的会话与补全能力。
+type Chat interface {
+	ListSessions(ctx context.Context) ([]chat.Session, error)
+	CreateSession(ctx context.Context) (chat.Session, error)
+	DeleteSession(ctx context.Context, id string) error
+	Messages(ctx context.Context, id string) (chat.Session, []chat.Message, error)
+	ClearMessages(ctx context.Context, id string) error
+	Send(ctx context.Context, sessionID, modelID, content string) ([]chat.Message, error)
+}
+
 // Health 报告依赖就绪状态。Redis 只是缓存，不影响 ready。
 type Health interface {
 	PingDB(ctx context.Context) error
@@ -73,6 +84,7 @@ type Deps struct {
 	UpstreamModels UpstreamModels
 	ProxySettings  ProxySettings
 	ProxyApply     ProxyApply
+	Chat           Chat
 	Health         Health
 	AdminKey       string
 	DeliveryKey    string
@@ -101,6 +113,14 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("DELETE /admin/models/{id...}", h.deleteModel)
 	admin.HandleFunc("GET /admin/proxy-settings", h.getProxySettings)
 	admin.HandleFunc("PUT /admin/proxy-settings", h.putProxySettings)
+	admin.HandleFunc("GET /admin/logs", h.listLogs)
+	admin.HandleFunc("DELETE /admin/logs", h.clearLogs)
+	admin.HandleFunc("GET /admin/chat/sessions", h.listChatSessions)
+	admin.HandleFunc("POST /admin/chat/sessions", h.createChatSession)
+	admin.HandleFunc("DELETE /admin/chat/sessions/{id}", h.deleteChatSession)
+	admin.HandleFunc("GET /admin/chat/sessions/{id}/messages", h.listChatMessages)
+	admin.HandleFunc("POST /admin/chat/sessions/{id}/messages", h.sendChatMessage)
+	admin.HandleFunc("DELETE /admin/chat/sessions/{id}/messages", h.clearChatMessages)
 	mux.Handle("/admin/", requireKey(d.AdminKey, admin))
 
 	delivery := http.NewServeMux()
