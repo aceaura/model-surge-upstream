@@ -157,6 +157,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       if (_connected)
                         FilledButton.icon(
                           onPressed: null,
+                          // 禁用态默认是灰底,但「已连接」是好消息,
+                          // 用成功色表达状态而不是"不可用"。
+                          style: FilledButton.styleFrom(
+                            disabledBackgroundColor: t.success,
+                            disabledForegroundColor: Colors.white,
+                          ),
                           icon: const Icon(Icons.check_circle_outline, size: 16),
                           label: const Text('已连接'),
                         )
