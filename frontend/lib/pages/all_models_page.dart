@@ -120,6 +120,22 @@ class _AllModelsPageState extends State<AllModelsPage> {
     if (saved == true) _reload();
   }
 
+  /// 拷贝(CC Switch 式):以该模型配置预填新建弹窗,标识加 -copy 后缀需自行调整。
+  Future<void> _copy(UpstreamModel model, List<Account> accounts,
+      List<ProviderSpec> providers) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => ModelForm(
+        client: widget.client,
+        accounts: accounts,
+        providers: providers,
+        initialAccount: model.account,
+        copyFrom: model,
+      ),
+    );
+    if (saved == true) _reload();
+  }
+
   Future<void> _toggle(UpstreamModel model) async {
     setState(() => _toggling.add(model.id));
     try {
@@ -312,6 +328,8 @@ class _AllModelsPageState extends State<AllModelsPage> {
               ),
             _action(Icons.edit_outlined, '编辑',
                 () => _edit(m, accounts, providers), t),
+            _action(Icons.copy_outlined, '拷贝',
+                () => _copy(m, accounts, providers), t),
             _action(Icons.delete_outline, '删除', () => _delete(m), t),
           ],
         ),

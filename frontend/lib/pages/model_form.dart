@@ -9,6 +9,8 @@ import '../ui/styled_dropdown.dart';
 
 /// 模型创建与编辑表单。协议候选来自所选账号对应 provider 的支持集，
 /// 随账号切换联动，避免提交注定被服务端拒绝的组合。
+/// copyFrom 非空时为"拷贝创建":以该模型配置预填(标识加 -copy 后缀),
+/// 仍是新建语义。
 class ModelForm extends StatefulWidget {
   const ModelForm({
     super.key,
@@ -17,6 +19,7 @@ class ModelForm extends StatefulWidget {
     required this.providers,
     required this.initialAccount,
     this.editing,
+    this.copyFrom,
   });
 
   final ApiClient client;
@@ -25,28 +28,35 @@ class ModelForm extends StatefulWidget {
   final String initialAccount;
   final UpstreamModel? editing;
 
+  /// 拷贝来源:以其配置预填新建表单。
+  final UpstreamModel? copyFrom;
+
   @override
   State<ModelForm> createState() => _ModelFormState();
 }
 
 class _ModelFormState extends State<ModelForm> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _id =
-      TextEditingController(text: widget.editing?.id ?? '');
+
+  UpstreamModel? get _source => widget.editing ?? widget.copyFrom;
+
+  late final TextEditingController _id = TextEditingController(
+      text: widget.editing?.id ??
+          (widget.copyFrom != null ? '${widget.copyFrom!.id}-copy' : ''));
   late final TextEditingController _nativeModel =
-      TextEditingController(text: widget.editing?.nativeModel ?? '');
+      TextEditingController(text: _source?.nativeModel ?? '');
   // 上下文窗口按 k 单位录入/回显(1k = 1000 tokens),提交时换回 token 数
   late final TextEditingController _contextWindow = TextEditingController(
-      text: tokensToK(widget.editing?.contextWindow ?? 0));
+      text: tokensToK(_source?.contextWindow ?? 0));
   late final TextEditingController _defaults = TextEditingController(
-      text: prettyJson(widget.editing?.defaults ?? const {}));
+      text: prettyJson(_source?.defaults ?? const {}));
   late final TextEditingController _overrides = TextEditingController(
-      text: prettyJson(widget.editing?.overrides ?? const {}));
+      text: prettyJson(_source?.overrides ?? const {}));
 
-  late String _account = widget.editing?.account ?? widget.initialAccount;
+  late String _account = _source?.account ?? widget.initialAccount;
   String? _protocol;
-  // 启停由列表行开关控制,表单不再展示;编辑沿用原值提交,新建默认启用
-  late final bool _enabled = widget.editing?.enabled ?? true;
+  // 启停由列表行开关控制,表单不再展示;编辑/拷贝时沿用原值提交,新建默认启用
+  late final bool _enabled = _source?.enabled ?? true;
 
   bool _defaultsValid = true;
   bool _overridesValid = true;
@@ -57,7 +67,7 @@ class _ModelFormState extends State<ModelForm> {
   @override
   void initState() {
     super.initState();
-    _protocol = widget.editing?.protocol ?? _protocols.firstOrNull;
+    _protocol = _source?.protocol ?? _protocols.firstOrNull;
   }
 
   @override
@@ -139,7 +149,12 @@ class _ModelFormState extends State<ModelForm> {
   Widget build(BuildContext context) {
     return AlertDialog(
       titlePadding: EdgeInsets.zero,
-      title: DialogHeader(title: _isEdit ? '编辑模型 ${widget.editing!.id}' : '新建模型'),
+      title: DialogHeader(
+          title: _isEdit
+              ? '编辑模型 ${widget.editing!.id}'
+              : widget.copyFrom != null
+                  ? '拷贝模型 ${widget.copyFrom!.id}'
+                  : '新建模型'),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(

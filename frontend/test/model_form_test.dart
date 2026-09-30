@@ -56,7 +56,8 @@ ApiClient stubClient() => ApiClient(
       httpClient: MockClient((_) async => http.Response('{}', 200)),
     );
 
-Future<void> pumpForm(WidgetTester tester, {UpstreamModel? editing}) async {
+Future<void> pumpForm(WidgetTester tester,
+    {UpstreamModel? editing, UpstreamModel? copyFrom}) async {
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
     home: Scaffold(
@@ -66,6 +67,7 @@ Future<void> pumpForm(WidgetTester tester, {UpstreamModel? editing}) async {
         providers: providers,
         initialAccount: 'kimi-1',
         editing: editing,
+        copyFrom: copyFrom,
       ),
     ),
   ));
@@ -153,6 +155,34 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('copy prefills config but keeps create semantics',
+      (tester) async {
+    final source = UpstreamModel.fromJson(const {
+      'id': 'kimi-1/k2',
+      'account': 'kimi-1',
+      'native_model': 'kimi-k2-turbo',
+      'protocol': 'anthropic',
+      'context_window': 262144,
+      'defaults': {'temperature': 0.6},
+      'overrides': {'max_tokens': 8192},
+      'enabled': true,
+    });
+    await pumpForm(tester, copyFrom: source);
+
+    expect(find.text('拷贝模型 kimi-1/k2'), findsOneWidget);
+    // 标识加 -copy 后缀,且标识字段可编辑(新建语义)
+    final idField = tester.widget<TextFormField>(find.ancestor(
+        of: find.text('模型标识'), matching: find.byType(TextFormField)));
+    expect(idField.controller!.text, 'kimi-1/k2-copy');
+    expect(find.text('kimi-k2-turbo'), findsAtLeastNWidgets(1));
+    expect(find.text('262.144'), findsAtLeastNWidgets(1),
+        reason: '上下文窗口随源模型预填');
+    expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
+    expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
+    expect(find.text('创建'), findsOneWidget,
+        reason: 'copy is a create, not an edit');
   });
 
   testWidgets('context window rejects non-numeric input', (tester) async {
