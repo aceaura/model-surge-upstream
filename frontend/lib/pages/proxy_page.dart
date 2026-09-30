@@ -318,7 +318,9 @@ class _ProxyPageState extends State<ProxyPage> {
                           style: TextStyle(fontSize: 12.5, color: t.dim),
                         ),
                       ),
-                      Expanded(
+                      // Flexible 松散适配：地址按自身宽度排，复制按钮
+                      // 紧跟其后，而不是被 Expanded 顶到行尾右端。
+                      Flexible(
                         child: SelectableText(
                           'http://$_displayHost:$_portText$path',
                           style: TextStyle(
@@ -334,6 +336,8 @@ class _ProxyPageState extends State<ProxyPage> {
                             size: 15, color: t.faint),
                         splashRadius: 16,
                         visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
                         onPressed: () => _copyEndpoint(
                             'http://$_displayHost:$_portText$path'),
                       ),
