@@ -167,7 +167,7 @@ class _AdminShellState extends State<AdminShell> {
       _NavItem(
         'logs',
         Icons.terminal_outlined,
-        '进程日志',
+        '日志',
         () => LogsPage(
           client: client,
           onOpenSettings: _openSettings,

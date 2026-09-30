@@ -167,7 +167,7 @@ class _LogsPageState extends State<LogsPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         titlePadding: EdgeInsets.zero,
-        title: const DialogHeader(title: '清空进程日志'),
+        title: const DialogHeader(title: '清空日志'),
         content: const Text('将清空服务端缓冲中本次运行的日志，界面上已展示的内容一并消失。'),
         actions: [
           TextButton(
@@ -202,7 +202,7 @@ class _LogsPageState extends State<LogsPage> {
     return Column(
       children: [
         PageHeader(
-          title: '进程日志',
+          title: '日志',
           count: _filtered.length,
           trailing: [
             SizedBox(
