@@ -165,6 +165,15 @@ class _ProxyPageState extends State<ProxyPage> {
     return 1;
   }
 
+  /// 复制接入地址到剪贴板，SnackBar 回显所抄内容便于确认没抄错行。
+  Future<void> _copyEndpoint(String url) async {
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已复制 $url')),
+    );
+  }
+
   Future<void> _apply() async {
     final port = int.tryParse(_port.text.trim()) ?? 0;
     if (port < 1 || port > 65535) {
@@ -308,6 +317,15 @@ class _ProxyPageState extends State<ProxyPage> {
                             color: t.ink,
                           ),
                         ),
+                      ),
+                      IconButton(
+                        tooltip: '复制地址',
+                        icon: Icon(Icons.content_copy,
+                            size: 15, color: t.faint),
+                        splashRadius: 16,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _copyEndpoint(
+                            'http://$_displayHost:$_portText$path'),
                       ),
                     ],
                   ),
