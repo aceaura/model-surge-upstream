@@ -23,9 +23,8 @@ class AccountsPage extends StatefulWidget {
   final ApiClient client;
   final VoidCallback onOpenSettings;
 
-  /// 点「模型」时通知主壳切换到内嵌模型页(不再推路由)。
-  final void Function(Account account, List<ProviderSpec> providers)
-      onOpenModels;
+  /// 点「模型」时通知主壳跳到模型总览页,并以该账号名作为搜索词过滤。
+  final void Function(Account account) onOpenModels;
 
   @override
   State<AccountsPage> createState() => _AccountsPageState();
@@ -145,8 +144,7 @@ class _AccountsPageState extends State<AccountsPage> {
     }
   }
 
-  void _openModels(Account account, List<ProviderSpec> providers) =>
-      widget.onOpenModels(account, providers);
+  void _openModels(Account account) => widget.onOpenModels(account);
 
   @override
   Widget build(BuildContext context) {
@@ -185,13 +183,8 @@ class _AccountsPageState extends State<AccountsPage> {
             PageHeader(
               title: '账号',
               count: accounts.length,
+              // 页头不放刷新:数据随操作自动重载,重试入口在错误面板
               trailing: [
-                OutlinedButton.icon(
-                  onPressed: _reload,
-                  icon: const Icon(Icons.refresh, size: 15),
-                  label: const Text('刷新'),
-                ),
-                const SizedBox(width: 10),
                 FilledButton.icon(
                   onPressed: () => _create(providers),
                   icon: const Icon(Icons.add, size: 16),
@@ -299,7 +292,7 @@ class _AccountsPageState extends State<AccountsPage> {
                                 _action(Icons.copy_outlined, '拷贝',
                                     () => _copy(a, providers), t),
                                 _action(Icons.list_alt, '模型',
-                                    () => _openModels(a, providers), t),
+                                    () => _openModels(a), t),
                                 _action(Icons.delete_outline, '删除',
                                     () => _delete(a), t),
                               ],

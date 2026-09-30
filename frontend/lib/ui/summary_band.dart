@@ -26,6 +26,7 @@ class SummaryBand extends StatefulWidget {
     required this.stats,
     required this.searchHint,
     required this.onSearch,
+    this.controller,
   });
 
   final String summary;
@@ -35,16 +36,21 @@ class SummaryBand extends StatefulWidget {
   /// 搜索词变化回调(已 trim,可能为空串)。
   final ValueChanged<String> onSearch;
 
+  /// 可选外部搜索框控制器:页面需要程序化改写搜索词时传入
+  /// (如从账号页跳转过来并预填账号名);生命周期由外部负责。
+  final TextEditingController? controller;
+
   @override
   State<SummaryBand> createState() => _SummaryBandState();
 }
 
 class _SummaryBandState extends State<SummaryBand> {
-  final _controller = TextEditingController();
+  late final TextEditingController _controller =
+      widget.controller ?? TextEditingController();
 
   @override
   void dispose() {
-    _controller.dispose();
+    if (widget.controller == null) _controller.dispose();
     super.dispose();
   }
 

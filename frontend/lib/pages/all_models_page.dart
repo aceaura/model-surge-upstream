@@ -11,6 +11,14 @@ import '../ui/provider_tag.dart';
 import '../ui/summary_band.dart';
 import 'model_form.dart';
 
+/// 搜索词种子:主壳在账号页点「模型」时下发,每次点击都是新实例,
+/// 保证同一账号连点两次也能触发监听。模型页收到后写入搜索框并按之过滤。
+class SearchSeed {
+  const SearchSeed(this.text);
+
+  final String text;
+}
+
 /// 全部账号下的模型总览。侧栏一级导航页,不按账号分组,
 /// 卡片形态与账号内模型页一致,副标题额外标注所属账号以作区分。
 class AllModelsPage extends StatefulWidget {
@@ -18,10 +26,14 @@ class AllModelsPage extends StatefulWidget {
     super.key,
     required this.client,
     required this.onOpenSettings,
+    this.searchSeed,
   });
 
   final ApiClient client;
   final VoidCallback onOpenSettings;
+
+  /// 外部下发的搜索词种子(账号页「模型」按钮跳转时携带账号名)。
+  final ValueNotifier<SearchSeed?>? searchSeed;
 
   @override
   State<AllModelsPage> createState() => _AllModelsPageState();
@@ -31,7 +43,30 @@ class _AllModelsPageState extends State<AllModelsPage> {
   late Future<(List<UpstreamModel>, List<Account>, List<ProviderSpec>)>
       _future = _load();
   final _toggling = <String>{};
+  final _searchController = TextEditingController();
   String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    widget.searchSeed?.addListener(_onSearchSeed);
+  }
+
+  @override
+  void dispose() {
+    widget.searchSeed?.removeListener(_onSearchSeed);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// 种子到达:搜索框填入账号名并立即按之过滤。
+  /// 程序化改 controller 不触发 onChanged,这里直接同步 _query。
+  void _onSearchSeed() {
+    final seed = widget.searchSeed?.value;
+    if (seed == null) return;
+    _searchController.text = seed.text;
+    setState(() => _query = seed.text);
+  }
 
   Future<(List<UpstreamModel>, List<Account>, List<ProviderSpec>)>
       _load() async {
@@ -187,13 +222,8 @@ class _AllModelsPageState extends State<AllModelsPage> {
           children: [
             PageHeader(
               title: '模型',
+              // 页头不放刷新:数据随操作自动重载,重试入口在错误面板
               trailing: [
-                OutlinedButton.icon(
-                  onPressed: _reload,
-                  icon: const Icon(Icons.refresh, size: 15),
-                  label: const Text('刷新'),
-                ),
-                const SizedBox(width: 10),
                 FilledButton.icon(
                   onPressed: loaded && accounts.isNotEmpty
                       ? () => _create(accounts, providers, accounts.first.name)
@@ -211,6 +241,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
                     BandStat(label: e.key, count: e.value, colorKey: e.key),
                 ],
                 searchHint: '搜索模型标识、上游模型名或账号',
+                controller: _searchController,
                 onSearch: (v) => setState(() => _query = v),
               ),
             Expanded(child: content),

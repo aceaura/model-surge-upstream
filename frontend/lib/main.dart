@@ -5,7 +5,6 @@ import 'api_client.dart';
 import 'models.dart';
 import 'pages/accounts_page.dart';
 import 'pages/all_models_page.dart';
-import 'pages/models_page.dart';
 import 'pages/providers_page.dart';
 import 'pages/settings_page.dart';
 import 'settings_store.dart';
@@ -65,8 +64,8 @@ class _AdminShellState extends State<AdminShell> {
   ApiClient? _client;
   String _page = 'accounts';
 
-  /// 非空时右侧显示该账号的内嵌模型页(账号页的子页,侧栏保持可见)。
-  (Account, List<ProviderSpec>)? _modelsCtx;
+  /// 账号页点「模型」时下发给模型总览页的搜索词种子(账号名)。
+  final _modelsSearchSeed = ValueNotifier<SearchSeed?>(null);
 
   @override
   void initState() {
@@ -93,23 +92,23 @@ class _AdminShellState extends State<AdminShell> {
       _client?.close();
       _settings = s;
       _client = _clientFor(s);
-      _modelsCtx = null; // 连接已换,子页里的账号快照作废
     });
   }
 
   /// 错误面板里的「打开设置」:切到设置导航页,不再推路由。
-  void _openSettings() => setState(() {
-        _page = 'settings';
-        _modelsCtx = null;
-      });
+  void _openSettings() => setState(() => _page = 'settings');
 
-  void _onNav(String id) => setState(() {
-        _page = id;
-        _modelsCtx = null;
-      });
+  void _onNav(String id) => setState(() => _page = id);
+
+  /// 账号页点「模型」:切到模型总览页,并以账号名作为搜索词过滤。
+  void _openAccountModels(Account account) {
+    _modelsSearchSeed.value = SearchSeed(account.name);
+    setState(() => _page = 'models');
+  }
 
   @override
   void dispose() {
+    _modelsSearchSeed.dispose();
     _client?.close();
     super.dispose();
   }
@@ -137,15 +136,18 @@ class _AdminShellState extends State<AdminShell> {
         () => AccountsPage(
           client: client,
           onOpenSettings: _openSettings,
-          onOpenModels: (account, providers) =>
-              setState(() => _modelsCtx = (account, providers)),
+          onOpenModels: _openAccountModels,
         ),
       ),
       _NavItem(
         'models',
         Icons.smart_toy_outlined,
         '模型',
-        () => AllModelsPage(client: client, onOpenSettings: _openSettings),
+        () => AllModelsPage(
+          client: client,
+          onOpenSettings: _openSettings,
+          searchSeed: _modelsSearchSeed,
+        ),
       ),
       _NavItem(
         'providers',
@@ -165,7 +167,6 @@ class _AdminShellState extends State<AdminShell> {
       _NavGroup('系统', items.sublist(3)),
     ];
     final cur = items.firstWhere((i) => i.id == _page, orElse: () => items[0]);
-    final modelsCtx = _modelsCtx;
     final contentBg = Theme.of(context).brightness == Brightness.light
         ? Colors.white
         : context.tokens.bg;
@@ -182,30 +183,12 @@ class _AdminShellState extends State<AdminShell> {
               child: SafeArea(
                 child: KeyedSubtree(
                   key: ObjectKey(client),
-                  // IndexedStack 常驻三个导航页:切换/从模型页返回时状态
+                  // IndexedStack 常驻四个导航页:切换页签时状态
                   // (已加载数据、滚动位置、搜索词)不丢,避免重新加载的抖动。
-                  // 模型页作为覆盖层压在上面,返回时直接揭开。
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      IndexedStack(
-                        index: items.indexOf(cur),
-                        children: [for (final i in items) i.build()],
-                      ),
-                      if (modelsCtx != null)
-                        Positioned.fill(
-                          child: ColoredBox(
-                            color: contentBg,
-                            child: ModelsPage(
-                              client: client,
-                              account: modelsCtx.$1,
-                              providers: modelsCtx.$2,
-                              onOpenSettings: _openSettings,
-                              onBack: () => setState(() => _modelsCtx = null),
-                            ),
-                          ),
-                        ),
-                    ],
+                  // 账号页点「模型」即切到模型页并下发搜索词,不再是覆盖子页。
+                  child: IndexedStack(
+                    index: items.indexOf(cur),
+                    children: [for (final i in items) i.build()],
                   ),
                 ),
               ),
