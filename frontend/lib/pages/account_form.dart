@@ -90,7 +90,7 @@ class _AccountFormState extends State<AccountForm> {
     return AlertDialog(
       title: Text(_isEdit ? '编辑账号 ${widget.editing!.name}' : '新建账号'),
       content: SizedBox(
-        width: 520,
+        width: 680,
         child: SingleChildScrollView(
           child: Form(
             key: _formKey,
@@ -119,18 +119,20 @@ class _AccountFormState extends State<AccountForm> {
                     child: Text('默认请求地址 ${spec.baseUrl}',
                         style: Theme.of(context).textTheme.bodySmall),
                   ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _name,
-                  enabled: !_isEdit,
-                  decoration: const InputDecoration(
-                    labelText: '账号名',
-                    hintText: 'kimi-1',
-                    border: OutlineInputBorder(),
+                // 编辑模式下账号名不可改,直接不渲染该字段(标题已含账号名)
+                if (!_isEdit) ...[
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _name,
+                    decoration: const InputDecoration(
+                      labelText: '账号名',
+                      hintText: 'kimi-1',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? '账号名不能为空' : null,
                   ),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? '账号名不能为空' : null,
-                ),
+                ],
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _apiKey,
