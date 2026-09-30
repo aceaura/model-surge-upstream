@@ -166,22 +166,12 @@ class _AdminShellState extends State<AdminShell> {
           _sidebar(context.tokens, groups, cur.id, settings),
           // client 更换(保存设置)后强制重建页面,避免列表页持有旧连接。
           Expanded(
-            // 内容区铺微弱竖向渐变(亮模式):顶部近白、底部极浅青灰,
-            // 比平铺灰底更有质感;暗模式保持纯色
+            // 内容区底色:亮模式用近白带一丝青调的纯色(比灰底干净),
+            // 暗模式跟随 tokens
             child: Container(
-              decoration: BoxDecoration(
-                gradient:
-                    Theme.of(context).brightness == Brightness.light
-                        ? const LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [Color(0xFFFFFFFF), Color(0xFFEFF4F1)],
-                          )
-                        : null,
-                color: Theme.of(context).brightness == Brightness.dark
-                    ? context.tokens.bg
-                    : null,
-              ),
+              color: Theme.of(context).brightness == Brightness.light
+                  ? const Color(0xFFF8FAF9)
+                  : context.tokens.bg,
               child: SafeArea(
                 child: KeyedSubtree(
                   key: ObjectKey(client),
@@ -268,56 +258,6 @@ class _AdminShellState extends State<AdminShell> {
                 ],
               ],
             ),
-          ),
-          _connectionCard(t, settings),
-        ],
-      ),
-    );
-  }
-
-  /// 侧栏底部的当前连接信息(替代原 AppBar 上的地址/密钥展示)。
-  Widget _connectionCard(AppTokens t, Settings settings) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: t.bg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: t.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.link, size: 13, color: t.faint),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  settings.baseUrl,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5, color: t.dim),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Icon(Icons.key, size: 13, color: t.faint),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  mask(settings.adminKey),
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: t.dim,
-                    fontFamily: AppConst.fontMono,
-                  ),
-                ),
-              ),
-            ],
           ),
         ],
       ),
