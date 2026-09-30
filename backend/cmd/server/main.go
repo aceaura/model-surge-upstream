@@ -19,6 +19,8 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/httpapi"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
+	"github.com/aceaura/model-surge-upstream/backend/proxyplane"
+	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
 	"github.com/aceaura/model-surge-upstream/backend/quota"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/store"
@@ -58,12 +60,26 @@ func run() error {
 	quotas := quota.New(accounts, cfg.QuotaTTL)
 	upstream := upmodels.New(accounts, cfg.QuotaTTL)
 
+	// 代理转发面：独立端口、独立密钥，配置落库、运行期可改。
+	// 启动时按已存配置开监听；应用失败（如端口被占）只告警，
+	// 管理面不可用才是致命问题，转发面不是。
+	proxyRepo := proxysettings.NewRepo(db.Pool())
+	proxySup := proxyplane.NewSupervisor(resolver)
+	defer proxySup.Close()
+	if s, err := proxyRepo.Get(ctx); err != nil {
+		log.Printf("proxyplane: load settings: %v", err)
+	} else if err := proxySup.Apply(s); err != nil {
+		log.Printf("proxyplane: apply saved settings: %v", err)
+	}
+
 	handler := httpapi.NewServer(httpapi.Deps{
 		Accounts:       accounts,
 		Models:         models,
 		Resolver:       resolver,
 		Quota:          quotas,
 		UpstreamModels: upstream,
+		ProxySettings:  proxyRepo,
+		ProxyApply:     proxySup,
 		Health:         health{db: db, cache: c},
 		AdminKey:       cfg.AdminKey,
 		DeliveryKey:    cfg.DeliveryKey,

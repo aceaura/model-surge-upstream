@@ -6,6 +6,7 @@ import 'models.dart';
 import 'pages/accounts_page.dart';
 import 'pages/all_models_page.dart';
 import 'pages/providers_page.dart';
+import 'pages/proxy_page.dart';
 import 'pages/settings_page.dart';
 import 'settings_store.dart';
 import 'theme.dart';
@@ -154,6 +155,12 @@ class _AdminShellState extends State<AdminShell> {
         Icons.dns_outlined,
         '提供商',
         () => ProvidersPage(client: client, onOpenSettings: _openSettings),
+      ),
+      _NavItem(
+        'proxy',
+        Icons.lan_outlined,
+        '代理服务',
+        () => ProxyPage(client: client, onOpenSettings: _openSettings),
       ),
       _NavItem(
         'settings',

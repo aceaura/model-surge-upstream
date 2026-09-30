@@ -221,3 +221,25 @@ class QuotaReport {
             .toList(growable: false),
       );
 }
+
+/// 代理转发面配置。与账号凭据不同，apiKey 从管理面读到的是真实值——
+/// 持管理密钥者需要把它拷进第三方客户端，脱敏则无法使用。
+class ProxySettings {
+  const ProxySettings({
+    required this.apiKey,
+    required this.port,
+    required this.lanOpen,
+  });
+
+  final String apiKey;
+  final int port;
+
+  /// 是否开放局域网访问：false 仅监听 127.0.0.1，true 监听全部接口。
+  final bool lanOpen;
+
+  factory ProxySettings.fromJson(Map<String, dynamic> json) => ProxySettings(
+        apiKey: json['api_key'] as String? ?? '',
+        port: json['port'] as int? ?? 12344,
+        lanOpen: json['lan_open'] as bool? ?? false,
+      );
+}

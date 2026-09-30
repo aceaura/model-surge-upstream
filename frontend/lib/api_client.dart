@@ -235,5 +235,24 @@ class ApiClient {
     return QuotaReport.fromJson(body);
   }
 
+  Future<ProxySettings> getProxySettings() async {
+    final body = await _send('GET', '/admin/proxy-settings');
+    return ProxySettings.fromJson(body['settings'] as Map<String, dynamic>);
+  }
+
+  /// 全量替换代理转发面配置，服务端立即应用（重绑监听）。
+  Future<ProxySettings> updateProxySettings({
+    required String apiKey,
+    required int port,
+    required bool lanOpen,
+  }) async {
+    final body = await _send('PUT', '/admin/proxy-settings', body: {
+      'api_key': apiKey,
+      'port': port,
+      'lan_open': lanOpen,
+    });
+    return ProxySettings.fromJson(body['settings'] as Map<String, dynamic>);
+  }
+
   void close() => _http.close();
 }

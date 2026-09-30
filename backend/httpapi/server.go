@@ -1,5 +1,5 @@
 // Package httpapi 暴露管理面与下发面两组接口。管理面改配置，下发面读目标，
-// 两者密钥独立。数据面（真正的聊天请求）不经过本服务。
+// 两者密钥独立。数据面的聊天流量由 proxyplane 包的独立监听承载，不走这里。
 package httpapi
 
 import (
@@ -9,6 +9,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
+	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
 	"github.com/aceaura/model-surge-upstream/backend/quota"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/upmodels"
@@ -47,6 +48,17 @@ type UpstreamModels interface {
 	Forget(name string)
 }
 
+// ProxySettings 读写代理转发面配置。
+type ProxySettings interface {
+	Get(ctx context.Context) (proxysettings.Settings, error)
+	Put(ctx context.Context, s proxysettings.Settings) error
+}
+
+// ProxyApply 使一份转发面配置立即生效（重绑独立端口的监听）。
+type ProxyApply interface {
+	Apply(settings proxysettings.Settings) error
+}
+
 // Health 报告依赖就绪状态。Redis 只是缓存，不影响 ready。
 type Health interface {
 	PingDB(ctx context.Context) error
@@ -59,6 +71,8 @@ type Deps struct {
 	Resolver       Resolver
 	Quota          Quota
 	UpstreamModels UpstreamModels
+	ProxySettings  ProxySettings
+	ProxyApply     ProxyApply
 	Health         Health
 	AdminKey       string
 	DeliveryKey    string
@@ -85,6 +99,8 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/models/{id...}", h.getModel)
 	admin.HandleFunc("PUT /admin/models/{id...}", h.updateModel)
 	admin.HandleFunc("DELETE /admin/models/{id...}", h.deleteModel)
+	admin.HandleFunc("GET /admin/proxy-settings", h.getProxySettings)
+	admin.HandleFunc("PUT /admin/proxy-settings", h.putProxySettings)
 	mux.Handle("/admin/", requireKey(d.AdminKey, admin))
 
 	delivery := http.NewServeMux()
