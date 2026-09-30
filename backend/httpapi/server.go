@@ -13,6 +13,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
 	"github.com/aceaura/model-surge-upstream/backend/quota"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/store"
 	"github.com/aceaura/model-surge-upstream/backend/upmodels"
 )
 
@@ -76,6 +77,15 @@ type Health interface {
 	CacheReady(ctx context.Context) bool
 }
 
+// UsageStats 用量统计的查询能力，*store.Store 满足该接口。
+type UsageStats interface {
+	UsageSummary(ctx context.Context, f store.UsageFilter) (store.UsageTotals, error)
+	UsageTrend(ctx context.Context, f store.UsageFilter, granularity string) ([]store.UsageBucket, error)
+	UsageByModel(ctx context.Context, f store.UsageFilter) ([]store.UsageGroup, error)
+	UsageByAccount(ctx context.Context, f store.UsageFilter) ([]store.UsageGroup, error)
+	UsageLogs(ctx context.Context, f store.UsageFilter, limit, offset int) ([]store.UsageLog, int64, error)
+}
+
 type Deps struct {
 	Accounts       Accounts
 	Models         Models
@@ -85,6 +95,7 @@ type Deps struct {
 	ProxySettings  ProxySettings
 	ProxyApply     ProxyApply
 	Chat           Chat
+	Usage          UsageStats
 	Health         Health
 	AdminKey       string
 	DeliveryKey    string
@@ -121,6 +132,11 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/chat/sessions/{id}/messages", h.listChatMessages)
 	admin.HandleFunc("POST /admin/chat/sessions/{id}/messages", h.sendChatMessage)
 	admin.HandleFunc("DELETE /admin/chat/sessions/{id}/messages", h.clearChatMessages)
+	admin.HandleFunc("GET /admin/usage/summary", h.usageSummary)
+	admin.HandleFunc("GET /admin/usage/trend", h.usageTrend)
+	admin.HandleFunc("GET /admin/usage/models", h.usageModels)
+	admin.HandleFunc("GET /admin/usage/accounts", h.usageAccounts)
+	admin.HandleFunc("GET /admin/usage/logs", h.usageLogs)
 	mux.Handle("/admin/", requireKey(d.AdminKey, admin))
 
 	delivery := http.NewServeMux()

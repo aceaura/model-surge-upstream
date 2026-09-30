@@ -315,5 +315,120 @@ class ApiClient {
         .toList();
   }
 
+  /// 用量查询的公共过滤参数：时间区间 + 模型/账号/来源过滤。
+  Map<String, String> _usageQuery({
+    DateTime? start,
+    DateTime? end,
+    String? model,
+    String? account,
+    String? source,
+    String? granularity,
+    int? limit,
+    int? offset,
+  }) {
+    final q = <String, String>{};
+    if (start != null) q['start'] = start.toUtc().toIso8601String();
+    if (end != null) q['end'] = end.toUtc().toIso8601String();
+    if (model != null && model.isNotEmpty) q['model'] = model;
+    if (account != null && account.isNotEmpty) q['account'] = account;
+    if (source != null && source.isNotEmpty) q['source'] = source;
+    if (granularity != null) q['granularity'] = granularity;
+    if (limit != null) q['limit'] = '$limit';
+    if (offset != null) q['offset'] = '$offset';
+    return q;
+  }
+
+  /// 区间总指标：请求数/成功数/四桶/真实消耗/命中率。
+  Future<UsageTotals> usageSummary({
+    DateTime? start,
+    DateTime? end,
+    String? model,
+    String? account,
+    String? source,
+  }) async {
+    final body = await _send('GET', '/admin/usage/summary',
+        query: _usageQuery(
+            start: start, end: end, model: model, account: account, source: source));
+    return UsageTotals.fromJson(body);
+  }
+
+  /// 趋势分桶。granularity 传 hour/day；不传由服务端按跨度自动。
+  Future<(String, List<UsageBucket>)> usageTrend({
+    DateTime? start,
+    DateTime? end,
+    String? model,
+    String? account,
+    String? source,
+    String? granularity,
+  }) async {
+    final body = await _send('GET', '/admin/usage/trend',
+        query: _usageQuery(
+            start: start,
+            end: end,
+            model: model,
+            account: account,
+            source: source,
+            granularity: granularity));
+    final g = body['granularity'] as String? ?? 'hour';
+    final buckets = (body['buckets'] as List<dynamic>? ?? const [])
+        .map((e) => UsageBucket.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return (g, buckets);
+  }
+
+  /// 按命名模型聚合。
+  Future<List<UsageGroup>> usageModels({
+    DateTime? start,
+    DateTime? end,
+    String? account,
+    String? source,
+  }) async {
+    final body = await _send('GET', '/admin/usage/models',
+        query: _usageQuery(
+            start: start, end: end, account: account, source: source));
+    return (body['models'] as List<dynamic>? ?? const [])
+        .map((e) => UsageGroup.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 按账号聚合。
+  Future<List<UsageGroup>> usageAccounts({
+    DateTime? start,
+    DateTime? end,
+    String? model,
+    String? source,
+  }) async {
+    final body = await _send('GET', '/admin/usage/accounts',
+        query: _usageQuery(start: start, end: end, model: model, source: source));
+    return (body['accounts'] as List<dynamic>? ?? const [])
+        .map((e) => UsageGroup.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 请求明细分页。
+  Future<(List<UsageLogRow>, int)> usageLogs({
+    DateTime? start,
+    DateTime? end,
+    String? model,
+    String? account,
+    String? source,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final body = await _send('GET', '/admin/usage/logs',
+        query: _usageQuery(
+            start: start,
+            end: end,
+            model: model,
+            account: account,
+            source: source,
+            limit: limit,
+            offset: offset));
+    final logs = (body['logs'] as List<dynamic>? ?? const [])
+        .map((e) => UsageLogRow.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return (logs, (body['total'] as num?)?.toInt() ?? 0);
+  }
+
   void close() => _http.close();
 }

@@ -2,6 +2,7 @@ package proxyplane
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
 // bodyLimit 是转发请求的体上限。聊天请求体（含长上下文）远小于此；
@@ -33,15 +35,36 @@ type Handler struct {
 	key      []byte
 	resolver Resolver
 	client   *http.Client
+	sink     UsageSink
 }
 
-func NewHandler(apiKey string, resolver Resolver) *Handler {
+// UsageRecord 转发面旁路统计产出的一次请求记录：不管成功失败都记，
+// 失败请求用量为 0，但请求数与状态码要进统计（运维要看失败率）。
+type UsageRecord struct {
+	Protocol    string
+	ModelID     string
+	Account     string
+	NativeModel string
+	Usage       usage.Usage
+	StatusCode  int
+	IsStreaming bool
+	LatencyMS   int64
+	DurationMS  int64
+	At          time.Time
+}
+
+// UsageSink 接收用量记录。在响应透传完成的路径上被调用，
+// 实现方必须自己起 goroutine：不能拖慢客户端连接。nil 表示不统计。
+type UsageSink func(ctx context.Context, rec UsageRecord)
+
+func NewHandler(apiKey string, resolver Resolver, sink UsageSink) *Handler {
 	// 不设整体超时：流式响应可能持续数分钟，生命周期由客户端断开控制。
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	return &Handler{
 		key:      []byte(apiKey),
 		resolver: resolver,
 		client:   &http.Client{Transport: tr},
+		sink:     sink,
 	}
 }
 
@@ -170,6 +193,20 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 	obj["model"] = target.NativeModel
 	merged := mergeParams(rawObject(target.Defaults), obj)
 	merged = mergeParams(merged, rawObject(target.Overrides))
+	// OpenAI 流式默认不回 usage，统计会全盲。仅当客户端要流式时注入
+	// include_usage：非流式响应本就带 usage，不碰请求体。
+	if wantProtocol == provider.ProtocolChatCompletions {
+		if stream, _ := merged["stream"].(bool); stream {
+			opts, _ := merged["stream_options"].(map[string]any)
+			if opts == nil {
+				opts = map[string]any{}
+			}
+			if _, ok := opts["include_usage"]; !ok {
+				opts["include_usage"] = true
+				merged["stream_options"] = opts
+			}
+		}
+	}
 	h.forward(w, r, fam, target, suffix, merged)
 }
 
@@ -226,12 +263,14 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 }
 
 // forward 把改写后的请求发往解析出的上游，并把响应（含流式）原样回传。
+// 回传的同时旁路嗅探用量：统计失败或无用量都不影响透传本身。
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, target resolve.ResolvedTarget, suffix string, body map[string]any) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		writeFamilyError(w, fam, apperr.New(apperr.InvalidJSON, "re-encode request body failed"))
 		return
 	}
+	isStream, _ := body["stream"].(bool)
 
 	url := strings.TrimRight(target.BaseURL, "/") + suffix
 	if q := stripKeyQuery(r.URL.RawQuery); q != "" {
@@ -249,17 +288,68 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		up.Header.Set(k, v)
 	}
 
+	start := time.Now()
 	resp, err := h.client.Do(up)
 	if err != nil {
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
+		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 		return
 	}
 	defer resp.Body.Close()
 
+	sniffer := usage.NewSniffer(target.Protocol, resp.Header.Get("Content-Type"))
+	out := &usageWriter{ResponseWriter: w, sniffer: sniffer, start: start}
+
 	copyHeaders(w.Header(), resp.Header, stripResponseHeaders)
 	w.WriteHeader(resp.StatusCode)
 	// 每次写入后立即 flush：SSE 逐事件到达客户端，不等缓冲区填满。
-	_, _ = io.Copy(flushWriter{w}, resp.Body)
+	_, _ = io.Copy(out, resp.Body)
+
+	u, _ := sniffer.Result()
+	h.record(r.Context(), target, isStream, u, resp.StatusCode, out.latency, time.Since(start))
+}
+
+// record 把一次转发的用量交给 sink。sink 为 nil（统计未装配）即无操作；
+// 上下文取 WithoutCancel：handler 返回后请求上下文即取消，落库不能跟着取消。
+func (h *Handler) record(ctx context.Context, target resolve.ResolvedTarget, isStream bool, u usage.Usage, status int, latency, duration time.Duration) {
+	if h.sink == nil {
+		return
+	}
+	rec := UsageRecord{
+		Protocol:    target.Protocol,
+		ModelID:     target.ModelID,
+		Account:     target.Account,
+		NativeModel: target.NativeModel,
+		Usage:       u,
+		StatusCode:  status,
+		IsStreaming: isStream,
+		LatencyMS:   latency.Milliseconds(),
+		DurationMS:  duration.Milliseconds(),
+		At:          time.Now(),
+	}
+	h.sink(context.WithoutCancel(ctx), rec)
+}
+
+// usageWriter 透传响应的同时把字节喂给嗅探器，并记首字节时延。
+type usageWriter struct {
+	http.ResponseWriter
+	sniffer *usage.Sniffer
+	start   time.Time
+	latency time.Duration
+	primed  bool
+}
+
+func (u *usageWriter) Write(p []byte) (int, error) {
+	if !u.primed {
+		u.latency = time.Since(u.start)
+		u.primed = true
+	}
+	u.sniffer.Write(p)
+	n, err := u.ResponseWriter.Write(p)
+	if f, ok := u.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
 }
 
 // listModels 按族输出原生形态的命名模型清单。只列启用中且协议匹配的：
@@ -397,15 +487,4 @@ func stripKeyQuery(raw string) string {
 		kept = append(kept, p)
 	}
 	return strings.Join(kept, "&")
-}
-
-// flushWriter 每次写入后立刻冲刷，保证 SSE 事件实时到达。
-type flushWriter struct{ w http.ResponseWriter }
-
-func (fw flushWriter) Write(p []byte) (int, error) {
-	n, err := fw.w.Write(p)
-	if f, ok := fw.w.(http.Flusher); ok {
-		f.Flush()
-	}
-	return n, err
 }

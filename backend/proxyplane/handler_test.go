@@ -91,7 +91,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			resolver.targets[id] = tgt
 		}
 	}
-	return NewHandler(testKey, resolver), cap, up.Close
+	return NewHandler(testKey, resolver, nil), cap, up.Close
 }
 
 func doRequest(t *testing.T, h http.Handler, method, path string, headers map[string]string, body string) *httptest.ResponseRecorder {
@@ -324,7 +324,7 @@ func TestUpstreamNon2xxPassesThrough(t *testing.T) {
 		"my-gpt": {ModelID: "my-gpt", Protocol: "chat_completions", BaseURL: up.URL,
 			NativeModel: "gpt-5", Headers: map[string]string{"Authorization": "Bearer k"}},
 	}}
-	h := NewHandler(testKey, resolver)
+	h := NewHandler(testKey, resolver, nil)
 
 	rec := doRequest(t, h, http.MethodPost, "/openai/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey}, `{"model":"my-gpt"}`)

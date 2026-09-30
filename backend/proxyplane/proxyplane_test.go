@@ -35,7 +35,7 @@ func get(t *testing.T, addr, key string) int {
 
 func TestSupervisorSamePortRebind(t *testing.T) {
 	port := freePort(t)
-	sup := NewSupervisor(fakeResolver{})
+	sup := NewSupervisor(fakeResolver{}, nil)
 	defer sup.Close()
 
 	lanOpen := proxysettings.Settings{APIKey: "k1", Port: port, LanOpen: true}
@@ -83,7 +83,7 @@ func TestSupervisorSamePortRebind(t *testing.T) {
 }
 
 func TestSupervisorSamePortBindFailureRestoresOld(t *testing.T) {
-	sup := NewSupervisor(fakeResolver{})
+	sup := NewSupervisor(fakeResolver{}, nil)
 	defer sup.Close()
 	lanOpen := proxysettings.Settings{APIKey: "k1", Port: freePort(t), LanOpen: true}
 	if err := sup.Apply(lanOpen); err != nil {

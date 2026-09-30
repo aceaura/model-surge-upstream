@@ -13,6 +13,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
 // completeTimeout 是单轮补全的上游超时。长回复模型可能跑满一分钟以上，
@@ -22,17 +23,17 @@ const completeTimeout = 180 * time.Second
 // respSnippet 是错误信息里附带的上游响应截断长度。
 const respSnippet = 300
 
-// Complete 按目标模型的出站协议构造请求、调用上游并抽取回复文本。
+// Complete 按目标模型的出站协议构造请求、调用上游并抽取回复文本与用量。
 // history 含本轮用户消息（调用方已追加）。不做流式：对话页整轮等待，
-// 换取四协议一套简单可靠的解析路径。
-func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Message) (string, error) {
+// 换取四协议一套简单可靠的解析路径。返回上游 HTTP 状态码供用量统计记失败率。
+func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Message) (string, usage.Usage, int, error) {
 	suffix, body, err := buildRequest(target, history)
 	if err != nil {
-		return "", err
+		return "", usage.Usage{}, 0, err
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
-		return "", apperr.Wrap(apperr.InvalidJSON, "encode upstream request", err)
+		return "", usage.Usage{}, 0, apperr.Wrap(apperr.InvalidJSON, "encode upstream request", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
@@ -40,7 +41,7 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Mess
 	url := strings.TrimRight(target.BaseURL, "/") + suffix
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
 	if err != nil {
-		return "", apperr.Wrap(apperr.UpstreamUnavailable, "build upstream request", err)
+		return "", usage.Usage{}, 0, apperr.Wrap(apperr.UpstreamUnavailable, "build upstream request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range target.Headers {
@@ -50,18 +51,23 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Mess
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err)
+		return "", usage.Usage{}, 0, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return "", apperr.Wrap(apperr.UpstreamUnavailable, "read upstream response", err)
+		return "", usage.Usage{}, resp.StatusCode, apperr.Wrap(apperr.UpstreamUnavailable, "read upstream response", err)
 	}
+	u, _ := usage.FromResponse(target.Protocol, raw)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", apperr.New(apperr.UpstreamUnavailable,
+		return "", u, resp.StatusCode, apperr.New(apperr.UpstreamUnavailable,
 			fmt.Sprintf("上游返回 HTTP %d：%s", resp.StatusCode, snippet(raw)))
 	}
-	return extractReply(target.Protocol, raw)
+	reply, err := extractReply(target.Protocol, raw)
+	if err != nil {
+		return "", u, resp.StatusCode, err
+	}
+	return reply, u, resp.StatusCode, nil
 }
 
 func snippet(raw []byte) string {

@@ -32,14 +32,15 @@ const stopGrace = 5 * time.Second
 
 type Supervisor struct {
 	resolver Resolver
+	sink     UsageSink
 
 	mu       sync.Mutex
 	srv      *http.Server
 	settings proxysettings.Settings
 }
 
-func NewSupervisor(resolver Resolver) *Supervisor {
-	return &Supervisor{resolver: resolver}
+func NewSupervisor(resolver Resolver, sink UsageSink) *Supervisor {
+	return &Supervisor{resolver: resolver, sink: sink}
 }
 
 // Apply 使一份配置生效。密钥为空 = 关闭转发面；配置与当前一致 = 无操作，
@@ -86,7 +87,7 @@ func (s *Supervisor) Apply(settings proxysettings.Settings) error {
 // serveLocked 在已绑定的监听上起服务并记录为当前配置。
 func (s *Supervisor) serveLocked(ln net.Listener, settings proxysettings.Settings) {
 	srv := &http.Server{
-		Handler:           NewHandler(settings.APIKey, s.resolver),
+		Handler:           NewHandler(settings.APIKey, s.resolver, s.sink),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	go func() {

@@ -318,3 +318,129 @@ class ChatMessage {
                 DateTime.now(),
       );
 }
+
+/// 一组用量聚合值。input 是服务端归一后的净输入（已扣缓存）。
+class UsageTotals {
+  const UsageTotals({
+    required this.requests,
+    required this.success,
+    required this.input,
+    required this.output,
+    required this.cacheRead,
+    required this.cacheWrite,
+    required this.realTotal,
+    required this.hitRate,
+  });
+
+  final int requests;
+  final int success;
+  final int input;
+  final int output;
+  final int cacheRead;
+  final int cacheWrite;
+  final int realTotal;
+
+  /// 缓存命中率 0..1。
+  final double hitRate;
+
+  static int _i(Map<String, dynamic> j, String k) =>
+      (j[k] as num?)?.toInt() ?? 0;
+
+  factory UsageTotals.fromJson(Map<String, dynamic> json) => UsageTotals(
+        requests: _i(json, 'requests'),
+        success: _i(json, 'success'),
+        input: _i(json, 'input_tokens'),
+        output: _i(json, 'output_tokens'),
+        cacheRead: _i(json, 'cache_read_tokens'),
+        cacheWrite: _i(json, 'cache_write_tokens'),
+        realTotal: _i(json, 'real_total_tokens'),
+        hitRate: (json['cache_hit_rate'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+/// 趋势图的一个时间桶（按小时或按天）。
+class UsageBucket {
+  const UsageBucket({required this.bucket, required this.totals});
+
+  final DateTime bucket;
+  final UsageTotals totals;
+
+  factory UsageBucket.fromJson(Map<String, dynamic> json) => UsageBucket(
+        bucket: DateTime.tryParse(json['bucket'] as String? ?? '') ??
+            DateTime.now(),
+        totals: UsageTotals.fromJson(json),
+      );
+}
+
+/// 按模型或按账号的一行聚合。
+class UsageGroup {
+  const UsageGroup({required this.key, required this.totals});
+
+  final String key;
+  final UsageTotals totals;
+
+  factory UsageGroup.fromJson(Map<String, dynamic> json) => UsageGroup(
+        key: json['key'] as String? ?? '',
+        totals: UsageTotals.fromJson(json),
+      );
+}
+
+/// 用量明细行：一次上游请求的四桶与状态。
+class UsageLogRow {
+  const UsageLogRow({
+    required this.id,
+    required this.source,
+    required this.protocol,
+    required this.modelId,
+    required this.account,
+    required this.nativeModel,
+    required this.input,
+    required this.output,
+    required this.cacheRead,
+    required this.cacheWrite,
+    required this.statusCode,
+    required this.isStreaming,
+    required this.latencyMs,
+    required this.durationMs,
+    required this.errorMessage,
+    required this.createdAt,
+  });
+
+  final int id;
+  final String source;
+  final String protocol;
+  final String modelId;
+  final String account;
+  final String nativeModel;
+  final int input;
+  final int output;
+  final int cacheRead;
+  final int cacheWrite;
+  final int statusCode;
+  final bool isStreaming;
+  final int? latencyMs;
+  final int? durationMs;
+  final String errorMessage;
+  final DateTime createdAt;
+
+  factory UsageLogRow.fromJson(Map<String, dynamic> json) => UsageLogRow(
+        id: json['id'] as int? ?? 0,
+        source: json['source'] as String? ?? '',
+        protocol: json['protocol'] as String? ?? '',
+        modelId: json['model_id'] as String? ?? '',
+        account: json['account'] as String? ?? '',
+        nativeModel: json['native_model'] as String? ?? '',
+        input: (json['input_tokens'] as num?)?.toInt() ?? 0,
+        output: (json['output_tokens'] as num?)?.toInt() ?? 0,
+        cacheRead: (json['cache_read_tokens'] as num?)?.toInt() ?? 0,
+        cacheWrite: (json['cache_write_tokens'] as num?)?.toInt() ?? 0,
+        statusCode: json['status_code'] as int? ?? 0,
+        isStreaming: json['is_streaming'] as bool? ?? false,
+        latencyMs: (json['latency_ms'] as num?)?.toInt(),
+        durationMs: (json['duration_ms'] as num?)?.toInt(),
+        errorMessage: json['error_message'] as String? ?? '',
+        createdAt:
+            DateTime.tryParse(json['created_at'] as String? ?? '') ??
+                DateTime.now(),
+      );
+}

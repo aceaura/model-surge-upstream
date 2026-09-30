@@ -69,7 +69,7 @@ func run() error {
 	// 启动时按已存配置开监听；应用失败（如端口被占）只告警，
 	// 管理面不可用才是致命问题，转发面不是。
 	proxyRepo := proxysettings.NewRepo(db.Pool())
-	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver)}
+	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db))}
 	defer proxySup.inner.Close()
 	if s, err := proxyRepo.Get(ctx); err != nil {
 		log.Printf("proxyplane: load settings: %v", err)
@@ -78,7 +78,7 @@ func run() error {
 	}
 
 	// 对话页：会话与消息落库，补全走解析出的上游目标。
-	chats := chat.NewService(chat.NewRepo(db.Pool()), resolver)
+	chats := chat.NewService(chat.NewRepo(db.Pool()), resolver, chatUsage(db))
 
 	handler := withRequestLog(httpapi.NewServer(httpapi.Deps{
 		Accounts:       accounts,
@@ -89,6 +89,7 @@ func run() error {
 		ProxySettings:  proxyRepo,
 		ProxyApply:     proxySup,
 		Chat:           chats,
+		Usage:          db,
 		Health:         health{db: db, cache: c},
 		AdminKey:       cfg.AdminKey,
 		DeliveryKey:    cfg.DeliveryKey,
@@ -164,6 +165,66 @@ func (l loggedResolver) Resolve(ctx context.Context, modelID string) (resolve.Re
 
 func (l loggedResolver) List(ctx context.Context) ([]resolve.Listing, error) {
 	return l.inner.List(ctx)
+}
+
+// saveUsage 把旁路用量异步落库。统计失败只进进程日志：
+// 丢一条统计远好于让转发或对话主路径报错。
+func saveUsage(db *store.Store, l store.UsageLog) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := db.RecordUsage(ctx, &l); err != nil {
+			ringlog.Push(ringlog.LevelWarn, "usage", fmt.Sprintf("record failed: %v", err))
+		}
+	}()
+}
+
+// proxyUsage 转发面的用量 sink：成功失败都记一行，失败请求用量为 0。
+func proxyUsage(db *store.Store) proxyplane.UsageSink {
+	return func(_ context.Context, rec proxyplane.UsageRecord) {
+		latency, duration := rec.LatencyMS, rec.DurationMS
+		saveUsage(db, store.UsageLog{
+			RequestID:      rec.Usage.MessageID,
+			Source:         "proxy",
+			Protocol:       rec.Protocol,
+			ModelID:        rec.ModelID,
+			Account:        rec.Account,
+			NativeModel:    rec.NativeModel,
+			InputTokens:    rec.Usage.InputTokens,
+			OutputTokens:   rec.Usage.OutputTokens,
+			CacheRead:      rec.Usage.CacheReadTokens,
+			CacheWrite:     rec.Usage.CacheWriteTokens,
+			InputSemantics: int(rec.Usage.Semantics),
+			StatusCode:     rec.StatusCode,
+			IsStreaming:    rec.IsStreaming,
+			LatencyMS:      &latency,
+			DurationMS:     &duration,
+		})
+	}
+}
+
+// chatUsage 对话面的用量记录器：非流式整轮等待，首字时延即整轮时延。
+func chatUsage(db *store.Store) chat.UsageRecorder {
+	return func(_ context.Context, rec chat.UsageRecord) {
+		duration := rec.DurationMS
+		saveUsage(db, store.UsageLog{
+			RequestID:      rec.Usage.MessageID,
+			Source:         "chat",
+			Protocol:       rec.Target.Protocol,
+			ModelID:        rec.Target.ModelID,
+			Account:        rec.Target.Account,
+			NativeModel:    rec.Target.NativeModel,
+			InputTokens:    rec.Usage.InputTokens,
+			OutputTokens:   rec.Usage.OutputTokens,
+			CacheRead:      rec.Usage.CacheReadTokens,
+			CacheWrite:     rec.Usage.CacheWriteTokens,
+			InputSemantics: int(rec.Usage.Semantics),
+			StatusCode:     rec.StatusCode,
+			LatencyMS:      &duration,
+			DurationMS:     &duration,
+			ErrorMessage:   rec.ErrorMessage,
+		})
+	}
 }
 
 // loggedApply 把转发面配置应用结果记进进程日志：成功记端口与监听范围，

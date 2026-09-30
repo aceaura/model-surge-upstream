@@ -10,6 +10,7 @@ import 'pages/logs_page.dart';
 import 'pages/providers_page.dart';
 import 'pages/settings_hub_page.dart';
 import 'pages/settings_page.dart';
+import 'pages/usage_page.dart';
 import 'settings_store.dart';
 import 'theme.dart';
 
@@ -163,6 +164,12 @@ class _AdminShellState extends State<AdminShell> {
         Icons.chat_bubble_outline_rounded,
         '对话',
         () => ChatPage(client: client, onOpenSettings: _openSettings),
+      ),
+      _NavItem(
+        'usage',
+        Icons.insights_outlined,
+        '用量',
+        () => UsagePage(client: client, onOpenSettings: _openSettings),
       ),
       _NavItem(
         'logs',

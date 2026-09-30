@@ -19,6 +19,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/ringlog"
+	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
 // Session 是一次对话。ModelID 记最近一次发送所用模型，供界面回显选择器。
@@ -190,11 +191,24 @@ type Resolver interface {
 type Service struct {
 	repo     *Repo
 	resolver Resolver
+	record   UsageRecorder
 }
 
+// UsageRecord 对话一轮补全的旁路用量记录：成功失败都记。
+type UsageRecord struct {
+	Target       resolve.ResolvedTarget
+	Usage        usage.Usage
+	StatusCode   int
+	DurationMS   int64
+	ErrorMessage string
+}
+
+// UsageRecorder 接收对话用量。实现方自行起 goroutine，nil 表示不统计。
+type UsageRecorder func(ctx context.Context, rec UsageRecord)
+
 // NewService 组装对话服务。
-func NewService(repo *Repo, resolver Resolver) *Service {
-	return &Service{repo: repo, resolver: resolver}
+func NewService(repo *Repo, resolver Resolver, record UsageRecorder) *Service {
+	return &Service{repo: repo, resolver: resolver, record: record}
 }
 
 func (s *Service) ListSessions(ctx context.Context) ([]Session, error) {
@@ -248,7 +262,23 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content string) 
 	}
 	history = append(history, user)
 
-	reply, err := Complete(ctx, target, history)
+	start := time.Now()
+	reply, u, status, err := Complete(ctx, target, history)
+	elapsed := time.Since(start)
+	if s.record != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		// 统计是旁路：上下文脱钩请求生命周期，落库不随响应结束而取消。
+		s.record(context.WithoutCancel(ctx), UsageRecord{
+			Target:       target,
+			Usage:        u,
+			StatusCode:   status,
+			DurationMS:   elapsed.Milliseconds(),
+			ErrorMessage: errMsg,
+		})
+	}
 	if err != nil {
 		ringlog.Push(ringlog.LevelWarn, "chat",
 			fmt.Sprintf("session=%s model=%s upstream failed: %v", sessionID, modelID, err))

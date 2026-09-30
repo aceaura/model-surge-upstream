@@ -55,3 +55,32 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON chat_messages(session_id);
+
+-- 用量统计：每次上游请求的四桶 token 明细（输入/输出/缓存读取/缓存写入）。
+-- 转发面与对话面共用，source 区分来源。input_semantics 记录该行的输入语义：
+-- 1=输入含缓存（OpenAI 两族/Gemini），2=输入已是净输入（Anthropic）；
+-- 聚合时统一归一为净输入，否则跨协议的「新增输入」会重复计缓存。
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    request_id        TEXT        NOT NULL DEFAULT '',
+    source            TEXT        NOT NULL,
+    protocol          TEXT        NOT NULL,
+    model_id          TEXT        NOT NULL DEFAULT '',
+    account           TEXT        NOT NULL DEFAULT '',
+    native_model      TEXT        NOT NULL DEFAULT '',
+    input_tokens      BIGINT      NOT NULL DEFAULT 0,
+    output_tokens     BIGINT      NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT      NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT     NOT NULL DEFAULT 0,
+    input_semantics   SMALLINT    NOT NULL DEFAULT 2,
+    status_code       INTEGER     NOT NULL DEFAULT 0,
+    is_streaming      BOOLEAN     NOT NULL DEFAULT FALSE,
+    latency_ms        INTEGER,
+    duration_ms       INTEGER,
+    error_message     TEXT        NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS usage_logs_created_idx ON usage_logs(created_at);
+CREATE INDEX IF NOT EXISTS usage_logs_model_idx ON usage_logs(model_id);
+CREATE INDEX IF NOT EXISTS usage_logs_account_idx ON usage_logs(account);
