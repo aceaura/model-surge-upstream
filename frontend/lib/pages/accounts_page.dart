@@ -72,6 +72,19 @@ class _AccountsPageState extends State<AccountsPage> {
     if (saved == true) _reload();
   }
 
+  /// 拷贝(CC Switch 式):以该账号配置预填新建弹窗,密钥需重填。
+  Future<void> _copy(Account account, List<ProviderSpec> providers) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => AccountForm(
+        client: widget.client,
+        providers: providers,
+        copyFrom: account,
+      ),
+    );
+    if (saved == true) _reload();
+  }
+
   Future<void> _toggle(Account account) async {
     setState(() => _toggling.add(account.name));
     try {
@@ -267,10 +280,14 @@ class _AccountsPageState extends State<AccountsPage> {
                                     value: a.enabled,
                                     onChanged: (_) => _toggle(a),
                                   ),
-                                _action(Icons.list_alt, '模型',
-                                    () => _openModels(a, providers), t),
+                                // 操作顺序仿 CC Switch(去掉其第 4 个
+                                // 用量图标):编辑、拷贝、模型、删除
                                 _action(Icons.edit_outlined, '编辑',
                                     () => _edit(a, providers), t),
+                                _action(Icons.copy_outlined, '拷贝',
+                                    () => _copy(a, providers), t),
+                                _action(Icons.list_alt, '模型',
+                                    () => _openModels(a, providers), t),
                                 _action(Icons.delete_outline, '删除',
                                     () => _delete(a), t),
                               ],

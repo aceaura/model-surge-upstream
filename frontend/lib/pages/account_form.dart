@@ -7,17 +7,23 @@ import '../ui/header_editor.dart';
 import '../ui/styled_dropdown.dart';
 
 /// 账号创建与编辑表单。editing 非空时为编辑：密钥留空表示保留原凭据。
+/// copyFrom 非空时为"拷贝创建":以该账号的配置预填(密钥不可见需重填),
+/// 仍是新建语义。
 class AccountForm extends StatefulWidget {
   const AccountForm({
     super.key,
     required this.client,
     required this.providers,
     this.editing,
+    this.copyFrom,
   });
 
   final ApiClient client;
   final List<ProviderSpec> providers;
   final Account? editing;
+
+  /// 拷贝来源:以其配置预填新建表单。
+  final Account? copyFrom;
 
   @override
   State<AccountForm> createState() => _AccountFormState();
@@ -25,16 +31,21 @@ class AccountForm extends StatefulWidget {
 
 class _AccountFormState extends State<AccountForm> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _name =
-      TextEditingController(text: widget.editing?.name ?? '');
+  late final TextEditingController _name = TextEditingController(
+      text: widget.editing?.name ??
+          (widget.copyFrom != null ? '${widget.copyFrom!.name}-copy' : ''));
   late final TextEditingController _apiKey = TextEditingController();
-  late final TextEditingController _baseUrl =
-      TextEditingController(text: widget.editing?.baseUrl ?? '');
+  late final TextEditingController _baseUrl = TextEditingController(
+      text: widget.editing?.baseUrl ?? widget.copyFrom?.baseUrl ?? '');
 
   late String? _providerId = widget.editing?.providerId ??
+      widget.copyFrom?.providerId ??
       (widget.providers.isNotEmpty ? widget.providers.first.id : null);
-  late Map<String, String> _headers = {...?widget.editing?.headers};
-  late bool _enabled = widget.editing?.enabled ?? true;
+  late Map<String, String> _headers = {
+    ...?widget.editing?.headers ?? widget.copyFrom?.headers
+  };
+  late bool _enabled =
+      widget.editing?.enabled ?? widget.copyFrom?.enabled ?? true;
 
   bool _busy = false;
 
@@ -88,7 +99,11 @@ class _AccountFormState extends State<AccountForm> {
   Widget build(BuildContext context) {
     final spec = _spec;
     return AlertDialog(
-      title: Text(_isEdit ? '编辑账号 ${widget.editing!.name}' : '新建账号'),
+      title: Text(_isEdit
+          ? '编辑账号 ${widget.editing!.name}'
+          : widget.copyFrom != null
+              ? '拷贝账号 ${widget.copyFrom!.name}'
+              : '新建账号'),
       content: SizedBox(
         width: 680,
         child: SingleChildScrollView(
@@ -141,7 +156,9 @@ class _AccountFormState extends State<AccountForm> {
                     labelText: '密钥',
                     hintText: _isEdit
                         ? '留空保留原密钥（当前 ${widget.editing!.maskedApiKey}）'
-                        : null,
+                        : widget.copyFrom != null
+                            ? '原密钥不可见（${widget.copyFrom!.maskedApiKey}），需重新填入'
+                            : null,
                     border: const OutlineInputBorder(),
                   ),
                   validator: (v) {
