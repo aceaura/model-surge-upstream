@@ -74,11 +74,41 @@ class _ProvidersPageState extends State<ProvidersPage> {
               ),
             ),
             Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                itemCount: providers.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (context, i) => _ProviderCard(spec: providers[i]),
+              // 方块拼接:按可用宽度决定每排个数(非全屏约 2 个,
+              // 全屏更多),同排用 IntrinsicHeight 拉齐高度
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final cols = constraints.maxWidth ~/ 430;
+                  final perRow = cols < 1 ? 1 : cols;
+                  return SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < providers.length; i += perRow)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: IntrinsicHeight(
+                              child: Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.stretch,
+                                children: [
+                                  for (var j = i; j < i + perRow; j++) ...[
+                                    if (j > i) const SizedBox(width: 12),
+                                    Expanded(
+                                      child: j < providers.length
+                                          ? _ProviderCard(
+                                              spec: providers[j])
+                                          : const SizedBox(),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
           ],
