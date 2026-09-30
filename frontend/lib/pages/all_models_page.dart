@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/page_header.dart';
@@ -135,7 +136,8 @@ class _AllModelsPageState extends State<AllModelsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('删除模型 ${model.id}？'),
+        titlePadding: EdgeInsets.zero,
+        title: DialogHeader(title: '删除模型 ${model.id}？'),
         content: const Text('删除模型不影响其所属账号。'),
         actions: [
           TextButton(

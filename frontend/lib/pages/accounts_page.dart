@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/page_header.dart';
@@ -114,7 +115,8 @@ class _AccountsPageState extends State<AccountsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('删除账号 ${account.name}？'),
+        titlePadding: EdgeInsets.zero,
+        title: DialogHeader(title: '删除账号 ${account.name}？'),
         content: Text(modelCount == 0
             ? '该账号下没有模型，删除后不可恢复。'
             : '该操作将级联删除其下全部 $modelCount 个模型，删除后不可恢复。'),

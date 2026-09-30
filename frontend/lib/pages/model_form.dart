@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/json_field.dart';
 import '../ui/styled_dropdown.dart';
@@ -137,7 +138,8 @@ class _ModelFormState extends State<ModelForm> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(_isEdit ? '编辑模型 ${widget.editing!.id}' : '新建模型'),
+      titlePadding: EdgeInsets.zero,
+      title: DialogHeader(title: _isEdit ? '编辑模型 ${widget.editing!.id}' : '新建模型'),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(

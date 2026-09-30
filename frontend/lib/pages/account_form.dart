@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/header_editor.dart';
 import '../ui/styled_dropdown.dart';
@@ -132,11 +133,13 @@ class _AccountFormState extends State<AccountForm> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(_isEdit
-          ? '编辑账号 ${widget.editing!.name}'
-          : widget.copyFrom != null
-              ? '拷贝账号 ${widget.copyFrom!.name}'
-              : '新建账号'),
+      titlePadding: EdgeInsets.zero,
+      title: DialogHeader(
+          title: _isEdit
+              ? '编辑账号 ${widget.editing!.name}'
+              : widget.copyFrom != null
+                  ? '拷贝账号 ${widget.copyFrom!.name}'
+                  : '新建账号'),
       content: SizedBox(
         width: 680,
         child: SingleChildScrollView(

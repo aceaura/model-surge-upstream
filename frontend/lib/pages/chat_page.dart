@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import '../ui/styled_dropdown.dart';
@@ -143,7 +144,8 @@ class _ChatPageState extends State<ChatPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除会话'),
+        titlePadding: EdgeInsets.zero,
+        title: const DialogHeader(title: '删除会话'),
         content: Text('将删除「${s.title}」及其全部消息，不可恢复。'),
         actions: [
           TextButton(
@@ -178,7 +180,8 @@ class _ChatPageState extends State<ChatPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('清空消息'),
+        titlePadding: EdgeInsets.zero,
+        title: const DialogHeader(title: '清空消息'),
         content: const Text('将清空当前会话的全部消息，会话本身保留。'),
         actions: [
           TextButton(
