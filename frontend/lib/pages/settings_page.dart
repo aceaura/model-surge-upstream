@@ -27,10 +27,12 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  late final TextEditingController _baseUrl =
-      TextEditingController(text: widget.initial.baseUrl);
-  late final TextEditingController _adminKey =
-      TextEditingController(text: widget.initial.adminKey);
+  late final TextEditingController _baseUrl = TextEditingController(
+    text: widget.initial.baseUrl,
+  );
+  late final TextEditingController _adminKey = TextEditingController(
+    text: widget.initial.adminKey,
+  );
 
   bool _busy = false;
   bool _revealKey = false;
@@ -54,10 +56,8 @@ class _SettingsPageState extends State<SettingsPage> {
     super.dispose();
   }
 
-  Settings get _draft => Settings(
-        baseUrl: _baseUrl.text.trim(),
-        adminKey: _adminKey.text.trim(),
-      );
+  Settings get _draft =>
+      Settings(baseUrl: _baseUrl.text.trim(), adminKey: _adminKey.text.trim());
 
   /// 草稿与已保存的配置一致即视为已连接:保存前已做过连通性探测,
   /// 且整个应用正基于这份配置运行。改掉任一字段即回到「连接」。
@@ -69,8 +69,13 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _save() async {
     final draft = _draft;
     if (!draft.complete) {
-      setState(() => _error = const ValidationException(
-          'invalid_request', '服务地址与管理密钥都不能为空', 400));
+      setState(
+        () => _error = const ValidationException(
+          'invalid_request',
+          '服务地址与管理密钥都不能为空',
+          400,
+        ),
+      );
       return;
     }
     setState(() {
@@ -109,6 +114,71 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _body(BuildContext context, bool onboarding) {
     final t = context.tokens;
+    final messages = <Widget>[
+      if (_probeResult != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 16),
+          child: Text(_probeResult!, style: TextStyle(color: t.success)),
+        ),
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 16),
+          child: SelectableText(
+            describeError(_error!),
+            style: TextStyle(color: t.danger),
+          ),
+        ),
+    ];
+    final fields = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _baseUrl,
+          decoration: const InputDecoration(
+            labelText: '服务地址',
+            hintText: 'http://127.0.0.1:8080',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _adminKey,
+          obscureText: !_revealKey,
+          decoration: InputDecoration(
+            labelText: '管理密钥',
+            border: const OutlineInputBorder(),
+            suffixIcon: IconButton(
+              tooltip: _revealKey ? '隐藏' : '显示',
+              icon: Icon(_revealKey ? Icons.visibility_off : Icons.visibility),
+              onPressed: () => setState(() => _revealKey = !_revealKey),
+            ),
+          ),
+        ),
+        const SizedBox(height: 22),
+        if (_connected)
+          FilledButton.icon(
+            onPressed: null,
+            // 禁用态默认是灰底,但「已连接」是好消息,
+            // 用成功色表达状态而不是"不可用"。
+            style: FilledButton.styleFrom(
+              disabledBackgroundColor: t.success,
+              disabledForegroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.check_circle_outline, size: 16),
+            label: const Text('已连接'),
+          )
+        else
+          BusyButton(busy: _busy, onPressed: _save, child: const Text('连接')),
+      ],
+    );
+    // 嵌入设置枢纽的可折叠分栏时:不出卡片与滚动,直接铺内容列,
+    // 容器与滚动由 CollapsibleSection 和枢纽页提供。
+    if (widget.embedded) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [fields, ...messages],
+      );
+    }
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560),
@@ -125,71 +195,10 @@ class _SettingsPageState extends State<SettingsPage> {
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(22),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      TextField(
-                        controller: _baseUrl,
-                        decoration: const InputDecoration(
-                          labelText: '服务地址',
-                          hintText: 'http://127.0.0.1:8080',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _adminKey,
-                        obscureText: !_revealKey,
-                        decoration: InputDecoration(
-                          labelText: '管理密钥',
-                          border: const OutlineInputBorder(),
-                          suffixIcon: IconButton(
-                            tooltip: _revealKey ? '隐藏' : '显示',
-                            icon: Icon(_revealKey
-                                ? Icons.visibility_off
-                                : Icons.visibility),
-                            onPressed: () =>
-                                setState(() => _revealKey = !_revealKey),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 22),
-                      if (_connected)
-                        FilledButton.icon(
-                          onPressed: null,
-                          // 禁用态默认是灰底,但「已连接」是好消息,
-                          // 用成功色表达状态而不是"不可用"。
-                          style: FilledButton.styleFrom(
-                            disabledBackgroundColor: t.success,
-                            disabledForegroundColor: Colors.white,
-                          ),
-                          icon: const Icon(Icons.check_circle_outline, size: 16),
-                          label: const Text('已连接'),
-                        )
-                      else
-                        BusyButton(
-                          busy: _busy,
-                          onPressed: _save,
-                          child: const Text('连接'),
-                        ),
-                    ],
-                  ),
+                  child: fields,
                 ),
               ),
-              if (_probeResult != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 16),
-                  child:
-                      Text(_probeResult!, style: TextStyle(color: t.success)),
-                ),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 16),
-                  child: SelectableText(
-                    describeError(_error!),
-                    style: TextStyle(color: t.danger),
-                  ),
-                ),
+              ...messages,
             ],
           ),
         ),

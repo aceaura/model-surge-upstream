@@ -81,8 +81,9 @@ class _ProxyPageState extends State<ProxyPage> {
   void _generateKey() {
     final rand = Random.secure();
     final hex = List.generate(
-            12, (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0'))
-        .join();
+      12,
+      (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
     setState(() {
       _apiKey.text = 'msu-proxy-$hex';
       _appliedMsg = null;
@@ -134,8 +135,17 @@ class _ProxyPageState extends State<ProxyPage> {
   bool _isVirtualInterface(String name) {
     final n = name.toLowerCase();
     const patterns = [
-      'vethernet', 'hyper-v', 'wsl', 'docker', 'mihomo', 'clash',
-      'tun', 'tap', 'vmware', 'virtualbox', 'loopback',
+      'vethernet',
+      'hyper-v',
+      'wsl',
+      'docker',
+      'mihomo',
+      'clash',
+      'tun',
+      'tap',
+      'vmware',
+      'virtualbox',
+      'loopback',
     ];
     return patterns.any(n.contains);
   }
@@ -158,8 +168,13 @@ class _ProxyPageState extends State<ProxyPage> {
   Future<void> _apply() async {
     final port = int.tryParse(_port.text.trim()) ?? 0;
     if (port < 1 || port > 65535) {
-      setState(() => _error =
-          const ValidationException('invalid_request', '端口须在 1-65535 之间', 400));
+      setState(
+        () => _error = const ValidationException(
+          'invalid_request',
+          '端口须在 1-65535 之间',
+          400,
+        ),
+      );
       return;
     }
     setState(() {
@@ -203,142 +218,151 @@ class _ProxyPageState extends State<ProxyPage> {
       );
     }
     final t = context.tokens;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _section(
-            context,
-            '代理 API 密钥',
-            '客户端（如 Cursor 或 VS Code）必须在 Authorization 头中包含此密钥，留空则关闭代理服务',
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _apiKey,
-                    obscureText: !_revealKey,
-                    decoration: InputDecoration(
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      suffixIcon: IconButton(
-                        tooltip: _revealKey ? '隐藏' : '显示',
-                        icon: Icon(_revealKey
-                            ? Icons.visibility_off
-                            : Icons.visibility),
-                        onPressed: () =>
-                            setState(() => _revealKey = !_revealKey),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  onPressed: _generateKey,
-                  icon: const Icon(Icons.autorenew, size: 16),
-                  label: const Text('生成'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 26),
-          _section(
-            context,
-            '服务器端口',
-            '代理服务独立监听的端口，与管理面端口互不影响',
-            SizedBox(
-              width: 220,
-              child: TextField(
-                controller: _port,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(
-                    border: OutlineInputBorder(), isDense: true),
-              ),
-            ),
-          ),
-          const SizedBox(height: 18),
-          _lanRow(context),
-          const SizedBox(height: 26),
-          _section(
-            context,
-            '客户端接入地址',
-            _lanOpen ? '局域网设备使用以下地址访问' : '仅本机可访问',
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final (label, path) in [
-                  ('Anthropic 协议', '/anthropic'),
-                  ('OpenAI 协议', '/openai'),
-                  ('Gemini 协议', '/gemini'),
-                ])
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 110,
-                          child: Text(label,
-                              style:
-                                  TextStyle(fontSize: 12.5, color: t.dim)),
-                        ),
-                        Expanded(
-                          child: SelectableText(
-                            'http://$_displayHost:$_portText$path',
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontFamily: 'monospace',
-                              color: t.ink,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 26),
-          Divider(height: 1, color: t.border),
-          const SizedBox(height: 18),
+    // 本页只作为设置枢纽的可折叠分栏内容渲染,滚动交给枢纽页,
+    // 这里只出内容列(内边距由 CollapsibleSection 提供)。
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _section(
+          context,
+          '代理 API 密钥',
+          '客户端（如 Cursor 或 VS Code）必须在 Authorization 头中包含此密钥，留空则关闭代理服务',
           Row(
             children: [
               Expanded(
-                child: _appliedMsg != null
-                    ? Text(_appliedMsg!,
-                        style: TextStyle(fontSize: 12.5, color: t.success))
-                    : _error != null
-                        ? SelectableText(
-                            describeError(_error!),
-                            style:
-                                TextStyle(fontSize: 12.5, color: t.danger),
-                          )
-                        : const SizedBox.shrink(),
+                child: TextField(
+                  controller: _apiKey,
+                  obscureText: !_revealKey,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    suffixIcon: IconButton(
+                      tooltip: _revealKey ? '隐藏' : '显示',
+                      icon: Icon(
+                        _revealKey ? Icons.visibility_off : Icons.visibility,
+                      ),
+                      onPressed: () => setState(() => _revealKey = !_revealKey),
+                    ),
+                  ),
+                ),
               ),
-              const SizedBox(width: 12),
-              BusyButton(
-                busy: _busy,
-                onPressed: _apply,
-                child: const Text('应用配置'),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: _generateKey,
+                icon: const Icon(Icons.autorenew, size: 16),
+                label: const Text('生成'),
               ),
             ],
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 26),
+        _section(
+          context,
+          '服务器端口',
+          '代理服务独立监听的端口，与管理面端口互不影响',
+          SizedBox(
+            width: 220,
+            child: TextField(
+              controller: _port,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
+        _lanRow(context),
+        const SizedBox(height: 26),
+        _section(
+          context,
+          '客户端接入地址',
+          _lanOpen ? '局域网设备使用以下地址访问' : '仅本机可访问',
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final (label, path) in [
+                ('Anthropic 协议', '/anthropic'),
+                ('OpenAI 协议', '/openai'),
+                ('Gemini 协议', '/gemini'),
+              ])
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 110,
+                        child: Text(
+                          label,
+                          style: TextStyle(fontSize: 12.5, color: t.dim),
+                        ),
+                      ),
+                      Expanded(
+                        child: SelectableText(
+                          'http://$_displayHost:$_portText$path',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontFamily: 'monospace',
+                            color: t.ink,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 26),
+        Divider(height: 1, color: t.border),
+        const SizedBox(height: 18),
+        Row(
+          children: [
+            Expanded(
+              child: _appliedMsg != null
+                  ? Text(
+                      _appliedMsg!,
+                      style: TextStyle(fontSize: 12.5, color: t.success),
+                    )
+                  : _error != null
+                  ? SelectableText(
+                      describeError(_error!),
+                      style: TextStyle(fontSize: 12.5, color: t.danger),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            const SizedBox(width: 12),
+            BusyButton(
+              busy: _busy,
+              onPressed: _apply,
+              child: const Text('应用配置'),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
   /// 分区头：粗标题 + 灰说明，控件跟在下方。对齐 CC Switch 设置页分区。
   Widget _section(
-      BuildContext context, String title, String desc, Widget control) {
+    BuildContext context,
+    String title,
+    String desc,
+    Widget control,
+  ) {
     final t = context.tokens;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style:
-              TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.ink),
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: t.ink,
+          ),
         ),
         const SizedBox(height: 4),
         Text(desc, style: TextStyle(fontSize: 12, color: t.faint)),
@@ -375,9 +399,10 @@ class _ProxyPageState extends State<ProxyPage> {
                     Text(
                       '开放局域网访问',
                       style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w600,
-                          color: t.ink),
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: t.ink,
+                      ),
                     ),
                     const SizedBox(height: 3),
                     Text(

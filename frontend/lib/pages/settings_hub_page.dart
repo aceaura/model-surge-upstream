@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../settings_store.dart';
-import '../theme.dart';
+import '../ui/collapsible_section.dart';
 import '../ui/page_header.dart';
 import 'proxy_page.dart';
 import 'settings_page.dart';
 
-/// 设置枢纽页:代理服务与连接两个子页以页内分页签合并,
-/// 侧栏只保留一个「设置」入口。TabController 持有在 State 里,
-/// 外壳重建(如切换导航)不会把分页签弹回第一页。
-class SettingsHubPage extends StatefulWidget {
+/// 设置枢纽页:代理服务与连接两个分栏以 CC Switch 式可折叠卡片呈现,
+/// 侧栏只保留一个「设置」入口。点击分栏行展开内容,内容常驻树中,
+/// 折叠不丢已填状态。
+class SettingsHubPage extends StatelessWidget {
   const SettingsHubPage({
     super.key,
     required this.client,
@@ -23,57 +23,38 @@ class SettingsHubPage extends StatefulWidget {
   final Future<void> Function(Settings) onSaved;
 
   @override
-  State<SettingsHubPage> createState() => _SettingsHubPageState();
-}
-
-class _SettingsHubPageState extends State<SettingsHubPage>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
-
-  @override
-  void dispose() {
-    _tabs.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const PageHeader(title: '设置', trailing: []),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 4),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: TabBar(
-              controller: _tabs,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              labelColor: t.primaryInk,
-              unselectedLabelColor: t.faint,
-              indicatorColor: t.primary,
-              dividerColor: t.border,
-              tabs: const [Tab(text: '代理服务'), Tab(text: '连接')],
-            ),
-          ),
-        ),
-        // 两页互为邻页,TabBarView 会一并保活:切换分页签不重载代理配置。
         Expanded(
-          child: TabBarView(
-            controller: _tabs,
-            children: [
-              ProxyPage(
-                client: widget.client,
-                onOpenSettings: () => _tabs.animateTo(1),
-              ),
-              SettingsPage(
-                initial: widget.initial,
-                onSaved: widget.onSaved,
-                embedded: true,
-              ),
-            ],
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                CollapsibleSection(
+                  icon: Icons.lan_outlined,
+                  title: '代理服务',
+                  subtitle: '独立端口与密钥,把命名模型按三协议原生形态转发',
+                  child: ProxyPage(client: client),
+                ),
+                const SizedBox(height: 14),
+                CollapsibleSection(
+                  icon: Icons.link_outlined,
+                  title: '连接',
+                  subtitle: initial.baseUrl.isEmpty
+                      ? '尚未配置服务地址'
+                      : initial.baseUrl,
+                  child: SettingsPage(
+                    initial: initial,
+                    onSaved: onSaved,
+                    embedded: true,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
