@@ -496,7 +496,13 @@ class _UsagePageState extends State<UsagePage> {
     });
   }
 
-  Widget _statCard(AppTokens t, String label, IconData icon, Color color, String value) {
+  /// 五张卡共用同一骨架：定高标签行 + 定高值槽，保证标签与值跨卡对齐。
+  Widget _cardShell(
+    AppTokens t, {
+    required Widget labelRow,
+    required Widget value,
+    Alignment valueAlignment = Alignment.centerLeft,
+  }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -507,53 +513,59 @@ class _UsagePageState extends State<UsagePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, size: 14, color: color),
-              const SizedBox(width: 6),
-              Text(label, style: TextStyle(fontSize: 12, color: t.faint)),
-            ],
-          ),
+          SizedBox(height: 18, child: labelRow),
           const SizedBox(height: 8),
-          Text(value,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: t.ink)),
+          SizedBox(
+            height: 26,
+            child: Align(alignment: valueAlignment, child: value),
+          ),
         ],
       ),
     );
   }
 
+  Widget _statCard(
+      AppTokens t, String label, IconData icon, Color color, String value) {
+    return _cardShell(
+      t,
+      labelRow: Row(
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(fontSize: 12, color: t.faint)),
+        ],
+      ),
+      value: Text(value,
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: t.ink)),
+    );
+  }
+
   Widget _hitRateCard(AppTokens t, UsageTotals? s) {
     final rate = s?.hitRate ?? 0;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: t.surface,
-        border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return _cardShell(
+      t,
+      // 命中率卡也占一个图标位，标签文字才与其余四卡同一起列。
+      labelRow: Row(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('缓存命中率', style: TextStyle(fontSize: 12, color: t.faint)),
-              Text('${(rate * 100).toStringAsFixed(1)}%',
-                  style: TextStyle(
-                      fontSize: 12.5, fontWeight: FontWeight.w600, color: t.success)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: rate.clamp(0, 1),
-              minHeight: 6,
-              backgroundColor: t.border,
-              valueColor: AlwaysStoppedAnimation(t.violet),
-            ),
-          ),
+          Icon(Icons.percent, size: 14, color: t.violet),
+          const SizedBox(width: 6),
+          Text('缓存命中率', style: TextStyle(fontSize: 12, color: t.faint)),
+          const Spacer(),
+          Text('${(rate * 100).toStringAsFixed(1)}%',
+              style: TextStyle(
+                  fontSize: 12.5, fontWeight: FontWeight.w600, color: t.success)),
         ],
+      ),
+      // 进度条在值槽内垂直居中，与其余四卡的大数字同一水平带。
+      valueAlignment: Alignment.center,
+      value: ClipRRect(
+        borderRadius: BorderRadius.circular(3),
+        child: LinearProgressIndicator(
+          value: rate.clamp(0, 1),
+          minHeight: 6,
+          backgroundColor: t.border,
+          valueColor: AlwaysStoppedAnimation(t.violet),
+        ),
       ),
     );
   }
