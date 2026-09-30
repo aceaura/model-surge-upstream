@@ -205,6 +205,13 @@ class _AccountsPageState extends State<AccountsPage> {
                       separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, i) {
                         final a = accounts[i];
+                        final spec = providers
+                            .where((p) => p.id == a.providerId)
+                            .firstOrNull;
+                        // 副标题显示实际生效的请求地址(覆盖优先,否则提供商
+                        // 默认),比脱敏密钥更能区分账号;密钥只在编辑弹窗出现
+                        final effectiveUrl =
+                            a.baseUrl.isNotEmpty ? a.baseUrl : spec?.baseUrl ?? '';
                         return HoverCard(
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
@@ -242,9 +249,7 @@ class _AccountsPageState extends State<AccountsPage> {
                                       const SizedBox(height: 4),
                                       Text(
                                         [
-                                          '密钥 ${a.maskedApiKey}',
-                                          if (a.baseUrl.isNotEmpty)
-                                            '地址 ${a.baseUrl}',
+                                          effectiveUrl,
                                           if (a.headers.isNotEmpty)
                                             '自定义头 ${a.headers.length} 个',
                                         ].join('   '),
@@ -261,11 +266,7 @@ class _AccountsPageState extends State<AccountsPage> {
                                 QuotaInline(
                                   client: widget.client,
                                   accountName: a.name,
-                                  queryable: providers
-                                          .where((p) => p.id == a.providerId)
-                                          .firstOrNull
-                                          ?.quotaQueryable ??
-                                      false,
+                                  queryable: spec?.quotaQueryable ?? false,
                                 ),
                                 const SizedBox(width: 8),
                                 if (_toggling.contains(a.name))
