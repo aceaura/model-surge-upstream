@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
+import '../ui/provider_tag.dart';
 import '../ui/quota_inline.dart';
 import 'account_form.dart';
 
@@ -239,11 +240,7 @@ class _AccountsPageState extends State<AccountsPage> {
                                             ),
                                           ),
                                           const SizedBox(width: 8),
-                                          Chip(
-                                            label: Text(a.providerId),
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                          ),
+                                          ProviderTag(a.providerId),
                                         ],
                                       ),
                                       const SizedBox(height: 4),

@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
+import '../ui/provider_tag.dart';
 
 /// provider 是编译期常量，界面全部只读。
 class ProvidersPage extends StatefulWidget {
@@ -114,10 +115,7 @@ class _ProviderCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Chip(
-                  label: Text(spec.id),
-                  visualDensity: VisualDensity.compact,
-                ),
+                ProviderTag(spec.id),
               ],
             ),
             const SizedBox(height: 12),
