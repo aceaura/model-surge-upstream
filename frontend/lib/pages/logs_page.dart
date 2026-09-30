@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import '../ui/styled_dropdown.dart';
@@ -52,12 +53,17 @@ class _LogsPageState extends State<LogsPage> {
   int _since = 0;
   String _level = 'all';
   bool _follow = true;
+
+  /// 跟随是否由「用户往上翻」自动暂停的：滚回底部时自动恢复；
+  /// 手动按开关关闭的不自动恢复，尊重显式意图。
+  bool _autoPaused = false;
   bool _loading = true;
   Object? _error;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onUserScroll);
     _reload();
   }
 
@@ -137,11 +143,31 @@ class _LogsPageState extends State<LogsPage> {
     });
   }
 
+  /// 用户滚离底部即暂停自动跟随（否则每 1.5s 被拽回尾部，翻不动历史）；
+  /// 滚回底部恢复。阈值留 40px 吸收跳尾与行高取整的误差。
+  void _onUserScroll() {
+    if (!_scroll.hasClients) return;
+    final p = _scroll.position;
+    final atEnd = p.pixels >= p.maxScrollExtent - 40;
+    if (_follow && !atEnd) {
+      setState(() {
+        _follow = false;
+        _autoPaused = true;
+      });
+    } else if (!_follow && _autoPaused && atEnd) {
+      setState(() {
+        _follow = true;
+        _autoPaused = false;
+      });
+    }
+  }
+
   Future<void> _clear() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('清空进程日志'),
+        titlePadding: EdgeInsets.zero,
+        title: const DialogHeader(title: '清空进程日志'),
         content: const Text('将清空服务端缓冲中本次运行的日志，界面上已展示的内容一并消失。'),
         actions: [
           TextButton(
@@ -199,7 +225,10 @@ class _LogsPageState extends State<LogsPage> {
                 color: _follow ? t.primaryInk : t.faint,
               ),
               onPressed: () {
-                setState(() => _follow = !_follow);
+                setState(() {
+                  _follow = !_follow;
+                  _autoPaused = false; // 手动开关优先，不被自动恢复覆盖
+                });
                 if (_follow) _followToEnd();
               },
             ),
