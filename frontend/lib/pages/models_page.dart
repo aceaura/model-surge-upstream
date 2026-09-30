@@ -185,8 +185,14 @@ class _ModelsPageState extends State<ModelsPage> {
           children: [
             PageHeader(
               title: '${widget.account.name} 的模型',
-              count: loaded ? models.length : null,
+              // 计数交给摘要带「已配置 N 个模型」,页头不再重复。
               leading: _backButton(t),
+              crumb: '账号',
+              onCrumbTap: widget.onBack,
+              avatar: ProviderAvatar(
+                providerId: widget.account.providerId,
+                size: 22,
+              ),
               trailing: [
                 OutlinedButton.icon(
                   onPressed: _reload,
