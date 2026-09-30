@@ -328,7 +328,7 @@ class _ProxyPageState extends State<ProxyPage> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     child: Text(
-                      _revealKey ? '隐藏' : '显示 真实值',
+                      _revealKey ? '隐藏密码' : '显示密码',
                       style: TextStyle(fontSize: 12, color: t.faint),
                     ),
                   ),
