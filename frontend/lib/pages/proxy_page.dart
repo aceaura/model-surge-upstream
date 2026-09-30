@@ -206,44 +206,83 @@ class _ProxyPageState extends State<ProxyPage> {
       );
     }
     final t = context.tokens;
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _keyCard(context),
-              const SizedBox(height: 14),
-              _portCard(context),
-              const SizedBox(height: 14),
-              _lanCard(context),
-              const SizedBox(height: 14),
-              _endpointCard(context),
-              const SizedBox(height: 20),
-              BusyButton(
-                busy: _busy,
-                onPressed: _apply,
-                child: const Text('应用配置'),
+    // 宽屏双栏(左配置右地址与提交),窄屏单栏堆叠;整体居中限宽,
+    // 避免全屏时一条窄列漂在中间。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 980;
+        final applyBlock = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            BusyButton(
+              busy: _busy,
+              onPressed: _apply,
+              child: const Text('应用配置'),
+            ),
+            if (_appliedMsg != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: Text(_appliedMsg!, style: TextStyle(color: t.success)),
               ),
-              if (_appliedMsg != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 14),
-                  child: Text(_appliedMsg!, style: TextStyle(color: t.success)),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: SelectableText(
+                  describeError(_error!),
+                  style: TextStyle(color: t.danger),
                 ),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 14),
-                  child: SelectableText(
-                    describeError(_error!),
-                    style: TextStyle(color: t.danger),
-                  ),
-                ),
-            ],
+              ),
+          ],
+        );
+        final configCards = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _keyCard(context),
+            const SizedBox(height: 14),
+            _portCard(context),
+            const SizedBox(height: 14),
+            _lanCard(context),
+          ],
+        );
+        return Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1080),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: wide
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 3, child: configCards),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          flex: 2,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _endpointCard(context),
+                              const SizedBox(height: 20),
+                              applyBlock,
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        configCards,
+                        const SizedBox(height: 14),
+                        _endpointCard(context),
+                        const SizedBox(height: 20),
+                        applyBlock,
+                      ],
+                    ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
