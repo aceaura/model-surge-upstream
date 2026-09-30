@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,6 +46,9 @@ const (
 
 	// 首条用户消息截取为会话标题的长度（按 rune）。
 	titleRunes = 24
+
+	// 手工改名上限：侧栏行宽有限，再长截断后也读不全。
+	maxTitleRunes = 40
 )
 
 type Repo struct {
@@ -103,6 +107,19 @@ func (r *Repo) GetSession(ctx context.Context, id string) (Session, error) {
 		return Session{}, apperr.Wrap(apperr.StorageError, "read chat session", err)
 	}
 	return s, nil
+}
+
+// RenameSession 改会话标题。自动标题只在标题为空或「新对话」时生效，
+// 故手工改过的标题不会被后续消息覆盖。
+func (r *Repo) RenameSession(ctx context.Context, id, title string) (Session, error) {
+	if _, err := r.GetSession(ctx, id); err != nil {
+		return Session{}, err
+	}
+	if _, err := r.pool.Exec(ctx,
+		`UPDATE chat_sessions SET title=$2 WHERE id=$1`, id, title); err != nil {
+		return Session{}, apperr.Wrap(apperr.StorageError, "rename chat session", err)
+	}
+	return r.GetSession(ctx, id)
 }
 
 func (r *Repo) DeleteSession(ctx context.Context, id string) error {
@@ -217,6 +234,19 @@ func (s *Service) ListSessions(ctx context.Context) ([]Session, error) {
 
 func (s *Service) CreateSession(ctx context.Context) (Session, error) {
 	return s.repo.CreateSession(ctx)
+}
+
+// RenameSession 手工改会话标题：去首尾空白、非空、限长。
+func (s *Service) RenameSession(ctx context.Context, id, title string) (Session, error) {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return Session{}, apperr.New(apperr.InvalidRequest, "session title is required")
+	}
+	if len([]rune(t)) > maxTitleRunes {
+		return Session{}, apperr.New(apperr.InvalidRequest,
+			fmt.Sprintf("session title too long (max %d runes)", maxTitleRunes))
+	}
+	return s.repo.RenameSession(ctx, id, t)
 }
 
 func (s *Service) DeleteSession(ctx context.Context, id string) error {

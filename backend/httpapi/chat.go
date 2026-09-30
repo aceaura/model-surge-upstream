@@ -24,6 +24,21 @@ func (h handler) createChatSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"session": s})
 }
 
+func (h handler) renameChatSession(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Title string `json:"title"`
+	}
+	if ok := decodeBody(w, r, &in); !ok {
+		return
+	}
+	sess, err := h.Chat.RenameSession(r.Context(), r.PathValue("id"), in.Title)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": sess})
+}
+
 func (h handler) deleteChatSession(w http.ResponseWriter, r *http.Request) {
 	if err := h.Chat.DeleteSession(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, err)

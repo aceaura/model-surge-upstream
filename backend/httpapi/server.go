@@ -65,6 +65,7 @@ type ProxyApply interface {
 type Chat interface {
 	ListSessions(ctx context.Context) ([]chat.Session, error)
 	CreateSession(ctx context.Context) (chat.Session, error)
+	RenameSession(ctx context.Context, id, title string) (chat.Session, error)
 	DeleteSession(ctx context.Context, id string) error
 	Messages(ctx context.Context, id string) (chat.Session, []chat.Message, error)
 	ClearMessages(ctx context.Context, id string) error
@@ -128,6 +129,7 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("DELETE /admin/logs", h.clearLogs)
 	admin.HandleFunc("GET /admin/chat/sessions", h.listChatSessions)
 	admin.HandleFunc("POST /admin/chat/sessions", h.createChatSession)
+	admin.HandleFunc("PATCH /admin/chat/sessions/{id}", h.renameChatSession)
 	admin.HandleFunc("DELETE /admin/chat/sessions/{id}", h.deleteChatSession)
 	admin.HandleFunc("GET /admin/chat/sessions/{id}/messages", h.listChatMessages)
 	admin.HandleFunc("POST /admin/chat/sessions/{id}/messages", h.sendChatMessage)

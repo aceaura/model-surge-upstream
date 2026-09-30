@@ -280,6 +280,16 @@ class ApiClient {
     return ChatSession.fromJson(body['session'] as Map<String, dynamic>);
   }
 
+  /// 手工改会话标题：服务端去空白并限长，返回更新后的会话。
+  Future<ChatSession> renameChatSession(String id, String title) async {
+    final body = await _send(
+      'PATCH',
+      '/admin/chat/sessions/$id',
+      body: {'title': title},
+    );
+    return ChatSession.fromJson(body['session'] as Map<String, dynamic>);
+  }
+
   Future<void> deleteChatSession(String id) =>
       _send('DELETE', '/admin/chat/sessions/$id');
 

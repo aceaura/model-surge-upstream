@@ -88,15 +88,20 @@ class BusyButton extends StatelessWidget {
     required this.busy,
     required this.onPressed,
     required this.child,
+    this.style,
   });
 
   final bool busy;
   final VoidCallback? onPressed;
   final Widget child;
 
+  /// 可选外形覆写：默认是常规填充按钮，对话页发送键用它收成圆形图标钮。
+  final ButtonStyle? style;
+
   @override
   Widget build(BuildContext context) {
     return FilledButton(
+      style: style,
       onPressed: busy ? null : onPressed,
       child: busy
           ? const SizedBox(

@@ -181,15 +181,15 @@ class _ChatPageState extends State<ChatPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         titlePadding: EdgeInsets.zero,
-        title: const DialogHeader(title: '清空消息'),
-        content: const Text('将清空当前会话的全部消息，会话本身保留。'),
+        title: const DialogHeader(title: '清除消息'),
+        content: const Text('将清除当前会话的全部消息，会话本身保留。'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('取消')),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('清空')),
+              child: const Text('清除')),
         ],
       ),
     );
@@ -198,6 +198,27 @@ class _ChatPageState extends State<ChatPage> {
       await widget.client.clearChatMessages(id);
       if (!mounted) return;
       setState(() => _messages = []);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  /// 重命名会话(KiroaaS 行内铅笔)：弹窗预填现标题，提交后原地替换列表项。
+  Future<void> _renameSession(ChatSession s) async {
+    final title = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _RenameDialog(initial: s.title),
+    );
+    if (title == null || title.isEmpty || title == s.title) return;
+    try {
+      final updated = await widget.client.renameChatSession(s.id, title);
+      if (!mounted) return;
+      setState(() {
+        _sessions = [
+          for (final x in _sessions)
+            if (x.id == updated.id) updated else x
+        ];
+      });
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -324,49 +345,20 @@ class _ChatPageState extends State<ChatPage> {
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-              children: [for (final s in _sessions) _sessionRow(t, s)],
+              children: [
+                for (final s in _sessions)
+                  _SessionRow(
+                    t: t,
+                    session: s,
+                    selected: s.id == _sessionId,
+                    onSelect: () => _select(s.id),
+                    onRename: () => _renameSession(s),
+                    onDelete: () => _deleteSession(s),
+                  ),
+              ],
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _sessionRow(AppTokens t, ChatSession s) {
-    final on = s.id == _sessionId;
-    final d = s.updatedAt.toLocal();
-    final sub =
-        '${d.month}月${d.day}日 ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: on ? t.primarySoft : Colors.transparent,
-        border: Border.all(color: on ? t.primary : t.border),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => _select(s.id),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                s.title.isEmpty ? '新对话' : s.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: on ? t.primaryInk : t.ink,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(sub, style: TextStyle(fontSize: 11, color: t.faint)),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -392,6 +384,7 @@ class _ChatPageState extends State<ChatPage> {
       children: [
         PageHeader(
           title: sess.title.isEmpty ? '新对话' : sess.title,
+          // 清除=清空当前会话消息(KiroaaS 右上「清除」);删除会话移到侧栏行内垃圾桶。
           trailing: [
             OutlinedButton(
               onPressed: _messages.isEmpty ? null : _clearMessages,
@@ -400,15 +393,9 @@ class _ChatPageState extends State<ChatPage> {
                 children: [
                   Icon(Icons.delete_sweep_outlined, size: 15),
                   SizedBox(width: 6),
-                  Text('清空'),
+                  Text('清除'),
                 ],
               ),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: '删除会话',
-              icon: Icon(Icons.delete_outline_rounded, size: 18, color: t.dim),
-              onPressed: () => _deleteSession(sess),
             ),
           ],
         ),
@@ -492,52 +479,247 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _inputBar(AppTokens t) {
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: t.border)),
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _input,
-              focusNode: _inputFocus,
-              minLines: 1,
-              maxLines: 5,
-              textInputAction: TextInputAction.newline,
-              decoration: const InputDecoration(
-                hintText: '输入消息… Enter 发送，Shift+Enter 换行',
+    // KiroaaS 式输入卡：圆角描边容器内，模型选择收成左上小胶囊，
+    // 输入框去边框贴底，发送键为圆形图标钮。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+      child: Container(
+        decoration: BoxDecoration(
+          color: t.surface,
+          border: Border.all(color: t.border),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: 220,
+                child: StyledDropdown(
+                  value: _modelId,
+                  options: _models.map((m) => m.id).toList(),
+                  showValue: _modelId != null,
+                  dropUp: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    fillColor: t.bg,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  onChanged: (v) => setState(() => _modelId = v),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 220,
-            child: StyledDropdown(
-              value: _modelId,
-              options: _models.map((m) => m.id).toList(),
-              showValue: _modelId != null,
-              dropUp: true,
-              decoration: const InputDecoration(labelText: '模型'),
-              onChanged: (v) => setState(() => _modelId = v),
-            ),
-          ),
-          const SizedBox(width: 10),
-          BusyButton(
-            busy: _sending,
-            onPressed: _send,
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Icon(Icons.send_rounded, size: 15),
-                SizedBox(width: 6),
-                Text('发送'),
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    focusNode: _inputFocus,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    decoration: const InputDecoration(
+                      border: InputBorder.none,
+                      isCollapsed: true,
+                      hintText: '输入消息… Enter 发送，Shift+Enter 换行',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                BusyButton(
+                  busy: _sending,
+                  onPressed: _send,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(34, 34),
+                    padding: EdgeInsets.zero,
+                    shape: const CircleBorder(),
+                  ),
+                  child: const Icon(Icons.send_rounded, size: 16),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 重命名会话弹窗：控制器归弹窗自身 State 所有，
+/// 关闭动画期间字段仍在构建，提前 dispose 会撞「used after being disposed」。
+/// 校验通过以修剪后的标题 pop，取消 pop null。
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit(BuildContext ctx) {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    Navigator.pop(ctx, _controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      titlePadding: EdgeInsets.zero,
+      title: const DialogHeader(title: '重命名会话'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: TextFormField(
+            controller: _controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: '会话标题',
+              border: OutlineInputBorder(),
+            ),
+            validator: (v) =>
+                (v == null || v.trim().isEmpty) ? '标题不能为空' : null,
+            onFieldSubmitted: (_) => _submit(context),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消')),
+        FilledButton(
+          onPressed: () => _submit(context),
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 会话行：标题 + 时间，右侧行内重命名/删除(仿 KiroaaS)。
+/// 动作悬停显现；选中行常显，保证不悬停也找得到入口。
+class _SessionRow extends StatefulWidget {
+  const _SessionRow({
+    required this.t,
+    required this.session,
+    required this.selected,
+    required this.onSelect,
+    required this.onRename,
+    required this.onDelete,
+  });
+
+  final AppTokens t;
+  final ChatSession session;
+  final bool selected;
+  final VoidCallback onSelect;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+
+  @override
+  State<_SessionRow> createState() => _SessionRowState();
+}
+
+class _SessionRowState extends State<_SessionRow> {
+  bool _hovered = false;
+
+  Widget _action(IconData icon, String tooltip, VoidCallback onPressed) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 15, color: widget.t.faint),
+      splashRadius: 15,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+      onPressed: onPressed,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.t;
+    final s = widget.session;
+    final d = s.updatedAt.toLocal();
+    final sub =
+        '${d.month}月${d.day}日 ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+    final showActions = _hovered || widget.selected;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: widget.selected ? t.primarySoft : Colors.transparent,
+        border: Border.all(color: widget.selected ? t.primary : t.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: widget.onSelect,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.title.isEmpty ? '新对话' : s.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: widget.selected ? t.primaryInk : t.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(sub, style: TextStyle(fontSize: 11, color: t.faint)),
+                    ],
+                  ),
+                ),
+                // 隐藏不从树里摘：悬停进出行高不变，列表不跳。
+                Opacity(
+                  opacity: showActions ? 1 : 0,
+                  child: IgnorePointer(
+                    ignoring: !showActions,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _action(Icons.edit_outlined, '重命名', widget.onRename),
+                        _action(
+                            Icons.delete_outline, '删除会话', widget.onDelete),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
