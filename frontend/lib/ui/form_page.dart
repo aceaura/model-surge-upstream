@@ -128,7 +128,8 @@ class _BackButton extends StatelessWidget {
   }
 }
 
-/// label 在框上的字段(CC Switch 式):小号深色 label + 下方全宽控件。
+/// label 在框上的字段(CC Switch 式):深色加粗 label + 下方全宽控件,
+/// 与 FormSection/JsonField 的分区标题同一字号色深,整幅表单标签一致。
 class LabeledField extends StatelessWidget {
   const LabeledField({super.key, required this.label, required this.child});
 
@@ -145,7 +146,7 @@ class LabeledField extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 6),
           child: Text(
             label,
-            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: t.dim),
+            style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: t.ink),
           ),
         ),
         child,
