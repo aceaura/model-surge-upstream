@@ -194,8 +194,7 @@ class _AccountsPageState extends State<AccountsPage> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       itemCount: accounts.length,
-                      separatorBuilder: (_, _) =>
-                          Divider(height: 1, color: t.border),
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, i) {
                         final a = accounts[i];
                         return HoverCard(

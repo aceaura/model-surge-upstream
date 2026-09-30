@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// 悬停自动亮起的列表行(参照 CC Switch):静止时完全扁平——透明底、
-/// 无描边无投影,行间靠细分隔线区分;鼠标进入后行底向 primarySoft
-/// 融合成一块圆角浅色高亮,130ms 过渡。仅外壳变化,内部布局不变。
+/// 悬停自动亮起的列表行(参照 CC Switch):静止时白底 + 灰色圆角单线
+/// 描边、无投影;鼠标进入后底色向 primarySoft 融合、描边转主色,
+/// 130ms 过渡。仅外壳变化,内部布局不变。
 class HoverCard extends StatefulWidget {
   final Widget child;
   const HoverCard({super.key, required this.child});
@@ -25,6 +25,7 @@ class _HoverCardState extends State<HoverCard> {
     final bg = _hover
         ? Color.alphaBlend(t.primarySoft.withValues(alpha: .5), base)
         : base;
+    final border = _hover ? t.primary.withValues(alpha: .45) : t.border;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -33,7 +34,8 @@ class _HoverCardState extends State<HoverCard> {
         curve: Curves.easeOut,
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppConst.radiusCard),
+          border: Border.all(color: border),
         ),
         child: widget.child,
       ),

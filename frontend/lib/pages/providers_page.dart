@@ -76,8 +76,7 @@ class _ProvidersPageState extends State<ProvidersPage> {
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                 itemCount: providers.length,
-                separatorBuilder: (_, _) =>
-                    Divider(height: 1, color: t.border),
+                separatorBuilder: (_, _) => const SizedBox(height: 12),
                 itemBuilder: (context, i) => _ProviderCard(spec: providers[i]),
               ),
             ),
