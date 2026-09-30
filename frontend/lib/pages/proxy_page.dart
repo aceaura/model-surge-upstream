@@ -7,10 +7,10 @@ import 'package:flutter/services.dart';
 import '../api_client.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
-import '../ui/page_header.dart';
 
-/// 代理转发面配置页：独立端口、独立密钥，把命名模型按各协议原生形态
+/// 代理转发面配置：独立端口、独立密钥，把命名模型按各协议原生形态
 /// 暴露给客户端（不做协议转化）。改动点「应用配置」后服务端立即重绑监听。
+/// 页面本体不带页头——在设置枢纽页里作为「代理服务」分页签渲染。
 class ProxyPage extends StatefulWidget {
   const ProxyPage({super.key, required this.client, this.onOpenSettings});
 
@@ -186,15 +186,7 @@ class _ProxyPageState extends State<ProxyPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const PageHeader(title: '代理服务', trailing: []),
-        Expanded(child: _body(context)),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => _body(context);
 
   Widget _body(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());

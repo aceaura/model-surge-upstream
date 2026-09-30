@@ -8,7 +8,7 @@ import 'pages/all_models_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/logs_page.dart';
 import 'pages/providers_page.dart';
-import 'pages/proxy_page.dart';
+import 'pages/settings_hub_page.dart';
 import 'pages/settings_page.dart';
 import 'settings_store.dart';
 import 'theme.dart';
@@ -159,12 +159,6 @@ class _AdminShellState extends State<AdminShell> {
         () => ProvidersPage(client: client, onOpenSettings: _openSettings),
       ),
       _NavItem(
-        'proxy',
-        Icons.lan_outlined,
-        '代理服务',
-        () => ProxyPage(client: client, onOpenSettings: _openSettings),
-      ),
-      _NavItem(
         'chat',
         Icons.chat_bubble_outline_rounded,
         '对话',
@@ -180,11 +174,12 @@ class _AdminShellState extends State<AdminShell> {
           active: _page == 'logs',
         ),
       ),
+      // 代理服务与连接设置合并为一个「设置」入口,页内再分页签。
       _NavItem(
         'settings',
         Icons.settings_outlined,
-        '连接设置',
-        () => SettingsPage(initial: settings, onSaved: _apply, embedded: true),
+        '设置',
+        () => SettingsHubPage(client: client, initial: settings, onSaved: _apply),
       ),
     ];
     final groups = [

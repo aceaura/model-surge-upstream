@@ -117,18 +117,6 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (widget.embedded)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: Text(
-                    '连接设置',
-                    style: TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      color: t.ink,
-                    ),
-                  ),
-                ),
               if (onboarding)
                 const Padding(
                   padding: EdgeInsets.only(bottom: 16),
