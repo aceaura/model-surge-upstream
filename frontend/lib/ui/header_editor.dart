@@ -1,7 +1,9 @@
-/// 自定义请求头的键值录入控件。
+/// 自定义请求头的键值录入控件。分区标题与「添加」钮走 FormSection 式排法。
 library;
 
 import 'package:flutter/material.dart';
+
+import 'form_page.dart';
 
 class HeaderEditor extends StatefulWidget {
   const HeaderEditor({
@@ -33,67 +35,65 @@ class _HeaderEditorState extends State<HeaderEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text('自定义请求头'),
-            const Spacer(),
-            IconButton(
-              tooltip: '添加',
-              icon: const Icon(Icons.add),
-              onPressed: () => setState(() => _pairs.add(_Pair())),
-            ),
-          ],
-        ),
-        for (var i = 0; i < _pairs.length; i++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    initialValue: _pairs[i].key,
-                    decoration: const InputDecoration(
-                      labelText: '名',
-                      border: OutlineInputBorder(),
-                      isDense: true,
+    return FormSection(
+      title: '自定义请求头',
+      desc: '随每次请求发往上游，用于租户标识等附加头',
+      trailing: IconButton(
+        tooltip: '添加',
+        icon: const Icon(Icons.add, size: 18),
+        visualDensity: VisualDensity.compact,
+        onPressed: () => setState(() => _pairs.add(_Pair())),
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < _pairs.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _pairs[i].key,
+                      decoration: const InputDecoration(
+                        labelText: '名',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) {
+                        _pairs[i].key = v;
+                        _emit();
+                      },
                     ),
-                    onChanged: (v) {
-                      _pairs[i].key = v;
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: TextFormField(
+                      initialValue: _pairs[i].value,
+                      decoration: const InputDecoration(
+                        labelText: '值',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (v) {
+                        _pairs[i].value = v;
+                        _emit();
+                      },
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '删除',
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: () {
+                      setState(() => _pairs.removeAt(i));
                       _emit();
                     },
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: TextFormField(
-                    initialValue: _pairs[i].value,
-                    decoration: const InputDecoration(
-                      labelText: '值',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onChanged: (v) {
-                      _pairs[i].value = v;
-                      _emit();
-                    },
-                  ),
-                ),
-                IconButton(
-                  tooltip: '删除',
-                  icon: const Icon(Icons.remove_circle_outline),
-                  onPressed: () {
-                    setState(() => _pairs.removeAt(i));
-                    _emit();
-                  },
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

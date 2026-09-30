@@ -56,28 +56,39 @@ ApiClient stubClient() => ApiClient(
       httpClient: MockClient((_) async => http.Response('{}', 200)),
     );
 
-Future<void> pumpForm(WidgetTester tester,
-    {UpstreamModel? editing, UpstreamModel? copyFrom}) async {
+/// 表单已是整页路由组件,直接作为 home pump。
+Future<void> pumpForm(
+  WidgetTester tester, {
+  UpstreamModel? editing,
+  UpstreamModel? copyFrom,
+  ApiClient? client,
+}) async {
+  tester.view.physicalSize = const Size(1200, 900);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
-    home: Scaffold(
-      body: ModelForm(
-        client: stubClient(),
-        accounts: accounts,
-        providers: providers,
-        initialAccount: 'kimi-1',
-        editing: editing,
-        copyFrom: copyFrom,
-      ),
+    home: ModelForm(
+      client: client ?? stubClient(),
+      accounts: accounts,
+      providers: providers,
+      initialAccount: 'kimi-1',
+      editing: editing,
+      copyFrom: copyFrom,
     ),
   ));
   await tester.pumpAndSettle();
 }
 
-/// 找到指定 label 的下拉控件(自绘 StyledDropdown)。
-Finder dropdownFor(String label) => find.ancestor(
-      of: find.text(label),
+/// 指定字段分区内的自绘下拉触发器(label 在框外,按分区 key 找)。
+Finder dropdownIn(String fieldKey) => find.descendant(
+      of: find.byKey(ValueKey(fieldKey)),
       matching: find.byType(StyledDropdown),
+    );
+
+Finder jsonBox(String fieldKey) => find.descendant(
+      of: find.byKey(ValueKey(fieldKey)),
+      matching: find.byType(TextField),
     );
 
 void main() {
@@ -85,7 +96,7 @@ void main() {
       (tester) async {
     await pumpForm(tester);
 
-    await tester.tap(dropdownFor('协议').first);
+    await tester.tap(dropdownIn('model-protocol-field'));
     await tester.pumpAndSettle();
     // kimi 支持 anthropic 与 chat_completions，不支持 responses。
     expect(find.text('anthropic'), findsWidgets);
@@ -99,12 +110,12 @@ void main() {
       (tester) async {
     await pumpForm(tester);
 
-    await tester.tap(dropdownFor('账号').first);
+    await tester.tap(dropdownIn('model-account-field'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('oa-1 (openai)').last);
     await tester.pumpAndSettle();
 
-    await tester.tap(dropdownFor('协议').first);
+    await tester.tap(dropdownIn('model-protocol-field'));
     await tester.pumpAndSettle();
     // openai 支持 responses 但不支持 anthropic。
     expect(find.text('responses'), findsWidgets);
@@ -117,7 +128,7 @@ void main() {
     final submit = find.widgetWithText(FilledButton, '创建');
     expect(tester.widget<FilledButton>(submit).onPressed, isNotNull);
 
-    await tester.enterText(find.widgetWithText(TextField, '默认参数'), '{bad');
+    await tester.enterText(jsonBox('model-defaults'), '{bad');
     await tester.pump();
 
     expect(find.textContaining('JSON 格式错误'), findsOneWidget);
@@ -125,7 +136,7 @@ void main() {
         reason: 'invalid json must block submission');
 
     await tester.enterText(
-        find.widgetWithText(TextField, '默认参数'), '{"temperature":0.6}');
+        jsonBox('model-defaults'), '{"temperature":0.6}');
     await tester.pump();
     expect(tester.widget<FilledButton>(submit).onPressed, isNotNull);
   });
@@ -149,12 +160,7 @@ void main() {
     expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
     // 编辑态不渲染标识字段(标题已含标识,且不可改)。
-    expect(
-      find.byWidgetPredicate(
-        (w) => w is TextField && w.decoration?.labelText == '模型标识',
-      ),
-      findsNothing,
-    );
+    expect(find.byKey(const ValueKey('model-id')), findsNothing);
   });
 
   testWidgets('copy prefills config but keeps create semantics',
@@ -173,8 +179,8 @@ void main() {
 
     expect(find.text('拷贝模型 kimi-1/k2'), findsOneWidget);
     // 标识加 -copy 后缀,且标识字段可编辑(新建语义)
-    final idField = tester.widget<TextFormField>(find.ancestor(
-        of: find.text('模型标识'), matching: find.byType(TextFormField)));
+    final idField =
+        tester.widget<TextFormField>(find.byKey(const ValueKey('model-id')));
     expect(idField.controller!.text, 'kimi-1/k2-copy');
     expect(find.text('kimi-k2-turbo'), findsAtLeastNWidgets(1));
     expect(find.text('262.144'), findsAtLeastNWidgets(1),
@@ -187,7 +193,7 @@ void main() {
 
   testWidgets('context window rejects non-numeric input', (tester) async {
     await pumpForm(tester);
-    await tester.enterText(find.widgetWithText(TextFormField, '上下文窗口'), 'abc');
+    await tester.enterText(find.byKey(const ValueKey('model-context')), 'abc');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pump();
     expect(find.text('请填写数字'), findsOneWidget);
@@ -195,7 +201,7 @@ void main() {
 
   testWidgets('context window rejects negative input', (tester) async {
     await pumpForm(tester);
-    await tester.enterText(find.widgetWithText(TextFormField, '上下文窗口'), '-5');
+    await tester.enterText(find.byKey(const ValueKey('model-context')), '-5');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pump();
     expect(find.text('不能为负数'), findsOneWidget);
@@ -213,35 +219,15 @@ void main() {
         return http.Response('{}', 200);
       }),
     );
-    await tester.pumpWidget(MaterialApp(
-      theme: buildAppTheme(),
-      home: Scaffold(
-        body: Builder(
-          builder: (context) => TextButton(
-            onPressed: () => showDialog<bool>(
-              context: context,
-              builder: (_) => ModelForm(
-                client: client,
-                accounts: accounts,
-                providers: providers,
-                initialAccount: 'kimi-1',
-              ),
-            ),
-            child: const Text('open'),
-          ),
-        ),
-      ),
-    ));
-    await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
+    await pumpForm(tester, client: client);
 
     await tester.enterText(
-        find.widgetWithText(TextFormField, '模型标识'), 'kimi-1/k2');
+        find.byKey(const ValueKey('model-id')), 'kimi-1/k2');
     await tester.enterText(
-        find.widgetWithText(TextFormField, '上游模型名'), 'kimi-k2-turbo');
+        find.byKey(const ValueKey('model-native')), 'kimi-k2-turbo');
     // 256k 应以 256000 tokens 提交
     await tester.enterText(
-        find.widgetWithText(TextFormField, '上下文窗口'), '256');
+        find.byKey(const ValueKey('model-context')), '256');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pumpAndSettle();
 

@@ -1,10 +1,13 @@
-/// 参数 JSON 编辑控件。内容不是合法 JSON object 时给出提示，
+/// 参数 JSON 编辑控件。CC Switch 式分区排法:粗标题 + 灰说明在上,
+/// 多行编辑框在下。内容不是合法 JSON object 时给出提示，
 /// 由外层据此阻止提交。
 library;
 
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+
+import '../theme.dart';
 
 /// parseJsonObject 返回 (对象, 错误说明)。空内容视为 {}。
 (Map<String, dynamic>?, String?) parseJsonObject(String raw) {
@@ -81,33 +84,43 @@ class _JsonFieldState extends State<JsonField> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    final t = context.tokens;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextField(
-          controller: widget.controller,
-          maxLines: 5,
-          minLines: 3,
-          style: const TextStyle(fontFamily: 'Consolas'),
-          decoration: InputDecoration(
-            labelText: widget.label,
-            helperText: widget.helper,
-            errorText: _error,
-            border: const OutlineInputBorder(),
-            alignLabelWithHint: true,
-            // 与框架默认 (12,20,12,12) 一致,仅右侧预留格式化按钮的位置,
-            // 避免长行文字压到图标
-            contentPadding: const EdgeInsets.fromLTRB(12, 20, 44, 12),
-          ),
+        Text(
+          widget.label,
+          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: t.ink),
         ),
-        Positioned(
-          top: 4,
-          right: 4,
-          child: IconButton(
-            tooltip: _error == null ? '格式化 JSON' : 'JSON 非法，无法格式化',
-            onPressed: _error == null ? _format : null,
-            icon: const Icon(Icons.auto_fix_high, size: 18),
-            visualDensity: VisualDensity.compact,
-          ),
+        const SizedBox(height: 3),
+        Text(widget.helper, style: TextStyle(fontSize: 12, color: t.faint)),
+        const SizedBox(height: 10),
+        Stack(
+          children: [
+            TextField(
+              controller: widget.controller,
+              maxLines: 5,
+              minLines: 3,
+              style: const TextStyle(fontFamily: 'Consolas'),
+              decoration: InputDecoration(
+                errorText: _error,
+                border: const OutlineInputBorder(),
+                // 与框架默认 (12,20,12,12) 一致,仅右侧预留格式化按钮的位置,
+                // 避免长行文字压到图标
+                contentPadding: const EdgeInsets.fromLTRB(12, 12, 44, 12),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                tooltip: _error == null ? '格式化 JSON' : 'JSON 非法，无法格式化',
+                onPressed: _error == null ? _format : null,
+                icon: const Icon(Icons.auto_fix_high, size: 18),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
         ),
       ],
     );

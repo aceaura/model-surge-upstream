@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
-import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
+import '../ui/form_page.dart';
 import '../ui/json_field.dart';
+import '../ui/provider_avatar.dart';
 import '../ui/styled_dropdown.dart';
 
-/// 模型创建与编辑表单。协议候选来自所选账号对应 provider 的支持集，
-/// 随账号切换联动，避免提交注定被服务端拒绝的组合。
+/// 模型创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
+/// 侧边栏保持可见;不用居中弹窗)。
+/// 协议候选来自所选账号对应 provider 的支持集，随账号切换联动，
+/// 避免提交注定被服务端拒绝的组合。
 /// copyFrom 非空时为"拷贝创建":以该模型配置预填(标识加 -copy 后缀),
 /// 仍是新建语义。
 class ModelForm extends StatefulWidget {
@@ -18,6 +21,7 @@ class ModelForm extends StatefulWidget {
     required this.accounts,
     required this.providers,
     required this.initialAccount,
+    required this.onDone,
     this.editing,
     this.copyFrom,
   });
@@ -26,6 +30,9 @@ class ModelForm extends StatefulWidget {
   final List<Account> accounts;
   final List<ProviderSpec> providers;
   final String initialAccount;
+
+  /// 表单收尾回调:true=已保存(宿主需重载列表),false=放弃修改。
+  final ValueChanged<bool> onDone;
   final UpstreamModel? editing;
 
   /// 拷贝来源:以其配置预填新建表单。
@@ -91,6 +98,13 @@ class _ModelFormState extends State<ModelForm> {
     return spec?.protocols ?? const [];
   }
 
+  /// 卡顶居中头像取所选账号的提供商,随账号切换联动。
+  String get _avatarProvider => widget.accounts
+          .where((a) => a.name == _account)
+          .firstOrNull
+          ?.providerId ??
+      '?';
+
   void _onAccountChanged(String? name) {
     if (name == null) return;
     setState(() {
@@ -134,7 +148,7 @@ class _ModelFormState extends State<ModelForm> {
         );
       }
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      widget.onDone(true);
     } catch (e) {
       if (!mounted) return;
       showError(context, e);
@@ -147,28 +161,32 @@ class _ModelFormState extends State<ModelForm> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      titlePadding: EdgeInsets.zero,
-      title: DialogHeader(
-          title: _isEdit
-              ? '编辑模型 ${widget.editing!.id}'
-              : widget.copyFrom != null
-                  ? '拷贝模型 ${widget.copyFrom!.id}'
-                  : '新建模型'),
-      content: SizedBox(
-        width: 560,
-        child: SingleChildScrollView(
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                StyledDropdownFormField(
+    return FormPage(
+      title: _isEdit
+          ? '编辑模型 ${widget.editing!.id}'
+          : widget.copyFrom != null
+              ? '拷贝模型 ${widget.copyFrom!.id}'
+              : '新建模型',
+      avatar: ProviderAvatar(providerId: _avatarProvider, size: 56),
+      onCancel: () => widget.onDone(false),
+      onSubmit: _submit,
+      submitEnabled: _canSubmit,
+      submitLabel: _isEdit ? '保存' : '创建',
+      busy: _busy,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 账号与协议联动,并排成组(CC Switch 式双列)
+            FormRow2(
+              LabeledField(
+                key: const ValueKey('model-account-field'),
+                label: '账号',
+                child: StyledDropdownFormField(
+                  key: const ValueKey('model-account'),
                   value: _account,
-                  decoration: const InputDecoration(
-                    labelText: '账号',
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(border: OutlineInputBorder()),
                   options: [for (final a in widget.accounts) a.name],
                   labelOf: (name) {
                     final a = widget.accounts
@@ -178,51 +196,62 @@ class _ModelFormState extends State<ModelForm> {
                   },
                   onChanged: _onAccountChanged,
                 ),
-                // 编辑模式下模型标识不可改,直接不渲染该字段
-                // (弹窗标题已含标识)
-                if (!_isEdit) ...[
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _id,
-                    decoration: const InputDecoration(
-                      labelText: '模型标识',
-                      hintText: 'kimi-1/k2',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? '模型标识不能为空' : null,
-                  ),
-                ],
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _nativeModel,
-                  decoration: const InputDecoration(
-                    labelText: '上游模型名',
-                    hintText: 'kimi-k2-turbo',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? '上游模型名不能为空' : null,
-                ),
-                const SizedBox(height: 16),
-                StyledDropdownFormField(
+              ),
+              LabeledField(
+                key: const ValueKey('model-protocol-field'),
+                label: '协议',
+                child: StyledDropdownFormField(
                   key: ValueKey('protocol-$_account'),
                   value: _protocol,
-                  decoration: const InputDecoration(
-                    labelText: '协议',
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(border: OutlineInputBorder()),
                   options: _protocols,
                   onChanged: (v) => setState(() => _protocol = v),
                   validator: (v) => v == null ? '请选择协议' : null,
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
+              ),
+            ),
+            // 编辑模式下模型标识不可改,直接不渲染该字段(标题已含标识)
+            if (!_isEdit) ...[
+              const SizedBox(height: 20),
+              LabeledField(
+                label: '模型标识',
+                child: TextFormField(
+                  key: const ValueKey('model-id'),
+                  controller: _id,
+                  decoration: const InputDecoration(
+                    hintText: 'kimi-1/k2',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? '模型标识不能为空'
+                      : null,
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+            FormRow2(
+              LabeledField(
+                label: '上游模型名',
+                child: TextFormField(
+                  key: const ValueKey('model-native'),
+                  controller: _nativeModel,
+                  decoration: const InputDecoration(
+                    hintText: 'kimi-k2-turbo',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? '上游模型名不能为空'
+                      : null,
+                ),
+              ),
+              LabeledField(
+                label: '上下文窗口',
+                child: TextFormField(
+                  key: const ValueKey('model-context'),
                   controller: _contextWindow,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(
-                    labelText: '上下文窗口',
                     suffixText: 'k',
                     helperText: '单位 k(1k = 1000 tokens),0 表示未声明',
                     border: OutlineInputBorder(),
@@ -234,38 +263,27 @@ class _ModelFormState extends State<ModelForm> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 16),
-                JsonField(
-                  label: '默认参数',
-                  helper: '调用方未提供该键时生效',
-                  controller: _defaults,
-                  onValidityChanged: (ok) =>
-                      setState(() => _defaultsValid = ok),
-                ),
-                const SizedBox(height: 16),
-                JsonField(
-                  label: '覆盖参数',
-                  helper: '强制值，优先级最高',
-                  controller: _overrides,
-                  onValidityChanged: (ok) =>
-                      setState(() => _overridesValid = ok),
-                ),
-              ],
+              ),
             ),
-          ),
+            const SizedBox(height: 26),
+            JsonField(
+              key: const ValueKey('model-defaults'),
+              label: '默认参数',
+              helper: '调用方未提供该键时生效',
+              controller: _defaults,
+              onValidityChanged: (ok) => setState(() => _defaultsValid = ok),
+            ),
+            const SizedBox(height: 22),
+            JsonField(
+              key: const ValueKey('model-overrides'),
+              label: '覆盖参数',
+              helper: '强制值，优先级最高',
+              controller: _overrides,
+              onValidityChanged: (ok) => setState(() => _overridesValid = ok),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
-        ),
-        BusyButton(
-          busy: _busy,
-          onPressed: _canSubmit ? _submit : null,
-          child: Text(_isEdit ? '保存' : '创建'),
-        ),
-      ],
     );
   }
 }

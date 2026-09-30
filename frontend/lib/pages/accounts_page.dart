@@ -36,6 +36,9 @@ class _AccountsPageState extends State<AccountsPage> {
   final _toggling = <String>{};
   String _query = '';
 
+  /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
+  AccountForm? _form;
+
   Future<(List<Account>, List<ProviderSpec>)> _load() async {
     final accounts = await widget.client.listAccounts();
     final providers = await widget.client.listProviders();
@@ -56,37 +59,40 @@ class _AccountsPageState extends State<AccountsPage> {
     );
   }
 
-  Future<void> _create(List<ProviderSpec> providers) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => AccountForm(client: widget.client, providers: providers),
-    );
-    if (saved == true) _reload();
+  /// 整页表单(CC Switch 式):页内内联替换列表,不再推根路由遮盖侧边栏。
+  void _openForm(AccountForm form) => setState(() => _form = form);
+
+  /// 表单收尾:关闭内联表单,已保存则重载列表。
+  void _closeForm(bool saved) {
+    setState(() => _form = null);
+    if (saved) _reload();
   }
 
-  Future<void> _edit(Account account, List<ProviderSpec> providers) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => AccountForm(
-        client: widget.client,
-        providers: providers,
-        editing: account,
-      ),
-    );
-    if (saved == true) _reload();
+  void _create(List<ProviderSpec> providers) {
+    _openForm(AccountForm(
+      client: widget.client,
+      providers: providers,
+      onDone: _closeForm,
+    ));
   }
 
-  /// 拷贝(CC Switch 式):以该账号配置预填新建弹窗,密钥需重填。
-  Future<void> _copy(Account account, List<ProviderSpec> providers) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => AccountForm(
-        client: widget.client,
-        providers: providers,
-        copyFrom: account,
-      ),
-    );
-    if (saved == true) _reload();
+  void _edit(Account account, List<ProviderSpec> providers) {
+    _openForm(AccountForm(
+      client: widget.client,
+      providers: providers,
+      onDone: _closeForm,
+      editing: account,
+    ));
+  }
+
+  /// 拷贝(CC Switch 式):以该账号配置预填新建整页表单,密钥需重填。
+  void _copy(Account account, List<ProviderSpec> providers) {
+    _openForm(AccountForm(
+      client: widget.client,
+      providers: providers,
+      onDone: _closeForm,
+      copyFrom: account,
+    ));
   }
 
   Future<void> _toggle(Account account) async {
@@ -150,6 +156,9 @@ class _AccountsPageState extends State<AccountsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 表单打开时整幅替换列表内容(侧边栏在主壳,不受影响)。
+    final form = _form;
+    if (form != null) return form;
     return FutureBuilder<(List<Account>, List<ProviderSpec>)>(
       future: _future,
       builder: (context, snapshot) {

@@ -91,49 +91,50 @@ class _AllModelsPageState extends State<AllModelsPage> {
     );
   }
 
+  /// 整页表单(CC Switch 式):推路由占满窗口,返回 true 表示已保存。
+  Future<bool> _openForm(ModelForm form) async =>
+      await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => form),
+      ) ==
+      true;
+
   Future<void> _create(List<Account> accounts, List<ProviderSpec> providers,
       String initialAccount) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => ModelForm(
-        client: widget.client,
-        accounts: accounts,
-        providers: providers,
-        initialAccount: initialAccount,
-      ),
-    );
-    if (saved == true) _reload();
+    if (await _openForm(ModelForm(
+      client: widget.client,
+      accounts: accounts,
+      providers: providers,
+      initialAccount: initialAccount,
+    ))) {
+      _reload();
+    }
   }
 
   Future<void> _edit(UpstreamModel model, List<Account> accounts,
       List<ProviderSpec> providers) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => ModelForm(
-        client: widget.client,
-        accounts: accounts,
-        providers: providers,
-        initialAccount: model.account,
-        editing: model,
-      ),
-    );
-    if (saved == true) _reload();
+    if (await _openForm(ModelForm(
+      client: widget.client,
+      accounts: accounts,
+      providers: providers,
+      initialAccount: model.account,
+      editing: model,
+    ))) {
+      _reload();
+    }
   }
 
-  /// 拷贝(CC Switch 式):以该模型配置预填新建弹窗,标识加 -copy 后缀需自行调整。
+  /// 拷贝(CC Switch 式):以该模型配置预填新建整页表单,标识加 -copy 后缀需自行调整。
   Future<void> _copy(UpstreamModel model, List<Account> accounts,
       List<ProviderSpec> providers) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => ModelForm(
-        client: widget.client,
-        accounts: accounts,
-        providers: providers,
-        initialAccount: model.account,
-        copyFrom: model,
-      ),
-    );
-    if (saved == true) _reload();
+    if (await _openForm(ModelForm(
+      client: widget.client,
+      accounts: accounts,
+      providers: providers,
+      initialAccount: model.account,
+      copyFrom: model,
+    ))) {
+      _reload();
+    }
   }
 
   Future<void> _toggle(UpstreamModel model) async {

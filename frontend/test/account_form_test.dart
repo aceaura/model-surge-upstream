@@ -8,7 +8,6 @@ import 'package:msu_admin/api_client.dart';
 import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/account_form.dart';
 import 'package:msu_admin/theme.dart';
-import 'package:msu_admin/ui/styled_dropdown.dart';
 
 final providers = [
   ProviderSpec.fromJson(const {
@@ -75,33 +74,27 @@ ApiClient recordingClient(List<String> captured) => ApiClient(
       }),
     );
 
+/// 表单已是整页路由组件,直接作为 home pump。
 Future<void> pumpForm(
   WidgetTester tester, {
   Account? copyFrom,
   ApiClient? client,
 }) async {
+  tester.view.physicalSize = const Size(1200, 900);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
-    home: Scaffold(
-      body: AccountForm(
-          client: client ?? stubClient(),
-          providers: providers,
-          copyFrom: copyFrom),
-    ),
+    home: AccountForm(
+        client: client ?? stubClient(), providers: providers, copyFrom: copyFrom),
   ));
   await tester.pumpAndSettle();
 }
 
-String urlText(WidgetTester tester) {
-  final field = tester.widget<TextFormField>(find.ancestor(
-      of: find.text('请求地址'), matching: find.byType(TextFormField)));
-  return field.controller!.text;
-}
-
-Finder dropdownFor(String label) => find.ancestor(
-      of: find.text(label),
-      matching: find.byType(StyledDropdown),
-    );
+String fieldText(WidgetTester tester, String key) => tester
+    .widget<TextFormField>(find.byKey(ValueKey(key)))
+    .controller!
+    .text;
 
 void main() {
   testWidgets('copy prefills config but keeps create semantics', (tester) async {
@@ -110,10 +103,8 @@ void main() {
     expect(find.text('拷贝账号 ds-1'), findsOneWidget);
     expect(find.text('DeepSeek (deepseek)'), findsOneWidget,
         reason: 'provider dropdown follows the source account');
-    final nameField = tester.widget<TextFormField>(find.ancestor(
-        of: find.text('账号名'), matching: find.byType(TextFormField)));
-    expect(nameField.controller!.text, 'ds-1-copy');
-    expect(urlText(tester), 'https://ds.example.com',
+    expect(fieldText(tester, 'account-name'), 'ds-1-copy');
+    expect(fieldText(tester, 'account-base-url'), 'https://ds.example.com',
         reason: '已存覆盖值直接预填');
     expect(find.textContaining('原密钥不可见（sk-d***efgh），需重新填入'),
         findsOneWidget);
@@ -126,46 +117,45 @@ void main() {
   testWidgets('copy falls back to provider default when no override',
       (tester) async {
     await pumpForm(tester, copyFrom: accountNoOverride);
-    expect(urlText(tester), 'https://api.deepseek.com');
+    expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com');
   });
 
   testWidgets('plain create stays blank but url prefills provider default',
       (tester) async {
     await pumpForm(tester);
     expect(find.text('新建账号'), findsOneWidget);
-    final nameField = tester.widget<TextFormField>(find.ancestor(
-        of: find.text('账号名'), matching: find.byType(TextFormField)));
-    expect(nameField.controller!.text, isEmpty);
-    expect(urlText(tester), 'https://api.deepseek.com',
+    expect(fieldText(tester, 'account-name'), isEmpty);
+    expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com',
         reason: '默认值是所选提供商的默认请求地址');
   });
 
   testWidgets('switching provider swaps an untouched default', (tester) async {
     await pumpForm(tester);
 
-    await tester.tap(dropdownFor('提供商').first);
+    await tester.tap(find.byKey(const ValueKey('account-provider')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OpenAI (openai)').last);
     await tester.pumpAndSettle();
 
-    expect(urlText(tester), 'https://api.openai.com',
+    expect(fieldText(tester, 'account-base-url'), 'https://api.openai.com',
         reason: '用户没改过地址,换提供商时跟着换新默认值');
   });
 
   testWidgets('switching provider preserves a customized url', (tester) async {
     await pumpForm(tester);
+
     await tester.enterText(
-        find.ancestor(
-            of: find.text('请求地址'), matching: find.byType(TextFormField)),
+        find.byKey(const ValueKey('account-base-url')),
         'https://my-gateway.example.com');
     await tester.pumpAndSettle();
 
-    await tester.tap(dropdownFor('提供商').first);
+    await tester.tap(find.byKey(const ValueKey('account-provider')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OpenAI (openai)').last);
     await tester.pumpAndSettle();
 
-    expect(urlText(tester), 'https://my-gateway.example.com');
+    expect(fieldText(tester, 'account-base-url'),
+        'https://my-gateway.example.com');
   });
 
   testWidgets('submit sends empty override when url equals provider default',
@@ -173,14 +163,9 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
-        find.ancestor(
-            of: find.text('账号名'), matching: find.byType(TextFormField)),
-        'ds-new');
-    await tester.enterText(
-        find.ancestor(
-            of: find.text('密钥'), matching: find.byType(TextFormField)),
-        'sk-test');
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pumpAndSettle();
 
@@ -194,17 +179,10 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
-        find.ancestor(
-            of: find.text('账号名'), matching: find.byType(TextFormField)),
-        'ds-new');
-    await tester.enterText(
-        find.ancestor(
-            of: find.text('密钥'), matching: find.byType(TextFormField)),
-        'sk-test');
-    await tester.enterText(
-        find.ancestor(
-            of: find.text('请求地址'), matching: find.byType(TextFormField)),
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.enterText(find.byKey(const ValueKey('account-base-url')),
         'https://my-gateway.example.com');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pumpAndSettle();
@@ -218,17 +196,10 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
-        find.ancestor(
-            of: find.text('账号名'), matching: find.byType(TextFormField)),
-        'ds-new');
-    await tester.enterText(
-        find.ancestor(
-            of: find.text('密钥'), matching: find.byType(TextFormField)),
-        'sk-test');
-    await tester.enterText(
-        find.ancestor(
-            of: find.text('请求地址'), matching: find.byType(TextFormField)),
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.enterText(find.byKey(const ValueKey('account-base-url')),
         'api.deepseek.com');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pumpAndSettle();

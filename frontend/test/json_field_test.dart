@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/json_field.dart';
 
 void main() {
@@ -41,6 +42,7 @@ void main() {
     final validity = <bool>[];
 
     await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
       home: Scaffold(
         body: JsonField(
           label: '默认参数',
@@ -67,6 +69,7 @@ void main() {
         TextEditingController(text: '{"a":1,"b":{"c":2}}');
 
     await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
       home: Scaffold(
         body: JsonField(
           label: '默认参数',
@@ -93,6 +96,7 @@ void main() {
     final controller = TextEditingController(text: '{bad');
 
     await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
       home: Scaffold(
         body: JsonField(
           label: '默认参数',
