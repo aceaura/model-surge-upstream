@@ -214,12 +214,6 @@ class _ProxyPageState extends State<ProxyPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                '把命名模型按各协议原生形态暴露给客户端，多协议共用一个端口出口；'
-                '不做协议之间的转化，模型协议与入口不匹配会直接报错。',
-                style: TextStyle(fontSize: 12.5, color: t.faint),
-              ),
-              const SizedBox(height: 16),
               _keyCard(context),
               const SizedBox(height: 14),
               _portCard(context),
