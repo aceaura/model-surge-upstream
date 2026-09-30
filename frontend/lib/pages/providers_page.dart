@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
 
 /// provider 是编译期常量，界面全部只读。
@@ -94,7 +95,7 @@ class _ProviderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Card(
+    return HoverCard(
       child: Padding(
         padding: const EdgeInsets.all(18),
         child: Column(

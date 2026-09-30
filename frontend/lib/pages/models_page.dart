@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
 import 'model_form.dart';
 
@@ -221,7 +222,7 @@ class _ModelsPageState extends State<ModelsPage> {
   }
 
   Widget _modelCard(UpstreamModel m, List<Account> accounts, AppTokens t) {
-    return Card(
+    return HoverCard(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(

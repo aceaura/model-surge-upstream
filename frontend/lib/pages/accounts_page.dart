@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
 import 'account_form.dart';
 import 'quota_dialog.dart';
@@ -196,7 +197,7 @@ class _AccountsPageState extends State<AccountsPage> {
                       separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (context, i) {
                         final a = accounts[i];
-                        return Card(
+                        return HoverCard(
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 14),
