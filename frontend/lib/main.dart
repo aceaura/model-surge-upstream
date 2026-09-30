@@ -4,6 +4,7 @@ import 'package:window_manager/window_manager.dart';
 import 'api_client.dart';
 import 'models.dart';
 import 'pages/accounts_page.dart';
+import 'pages/all_models_page.dart';
 import 'pages/models_page.dart';
 import 'pages/providers_page.dart';
 import 'pages/settings_page.dart';
@@ -141,6 +142,12 @@ class _AdminShellState extends State<AdminShell> {
         ),
       ),
       _NavItem(
+        'models',
+        Icons.smart_toy_outlined,
+        '模型',
+        () => AllModelsPage(client: client, onOpenSettings: _openSettings),
+      ),
+      _NavItem(
         'providers',
         Icons.dns_outlined,
         '提供商',
@@ -154,11 +161,14 @@ class _AdminShellState extends State<AdminShell> {
       ),
     ];
     final groups = [
-      _NavGroup('管理', items.sublist(0, 2)),
-      _NavGroup('系统', items.sublist(2)),
+      _NavGroup('管理', items.sublist(0, 3)),
+      _NavGroup('系统', items.sublist(3)),
     ];
     final cur = items.firstWhere((i) => i.id == _page, orElse: () => items[0]);
     final modelsCtx = _modelsCtx;
+    final contentBg = Theme.of(context).brightness == Brightness.light
+        ? Colors.white
+        : context.tokens.bg;
 
     return Scaffold(
       body: Row(
@@ -168,21 +178,35 @@ class _AdminShellState extends State<AdminShell> {
           Expanded(
             // 内容区底色:亮模式纯白(CC Switch 式干净底色),暗模式跟随 tokens
             child: Container(
-              color: Theme.of(context).brightness == Brightness.light
-                  ? Colors.white
-                  : context.tokens.bg,
+              color: contentBg,
               child: SafeArea(
                 child: KeyedSubtree(
                   key: ObjectKey(client),
-                  child: modelsCtx != null
-                      ? ModelsPage(
-                          client: client,
-                          account: modelsCtx.$1,
-                          providers: modelsCtx.$2,
-                          onOpenSettings: _openSettings,
-                          onBack: () => setState(() => _modelsCtx = null),
-                        )
-                      : cur.build(),
+                  // IndexedStack 常驻三个导航页:切换/从模型页返回时状态
+                  // (已加载数据、滚动位置、搜索词)不丢,避免重新加载的抖动。
+                  // 模型页作为覆盖层压在上面,返回时直接揭开。
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      IndexedStack(
+                        index: items.indexOf(cur),
+                        children: [for (final i in items) i.build()],
+                      ),
+                      if (modelsCtx != null)
+                        Positioned.fill(
+                          child: ColoredBox(
+                            color: contentBg,
+                            child: ModelsPage(
+                              client: client,
+                              account: modelsCtx.$1,
+                              providers: modelsCtx.$2,
+                              onOpenSettings: _openSettings,
+                              onBack: () => setState(() => _modelsCtx = null),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
