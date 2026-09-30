@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -31,9 +32,15 @@ class _ProxyPageState extends State<ProxyPage> {
   Object? _error;
   String? _appliedMsg;
 
+  /// 接入地址卡里展示的主机：关局域网恒为 127.0.0.1；开局域网时为
+  /// 服务端对局域网可见的地址（推导规则见 _resolveDisplayHost）。
+  String _displayHost = '127.0.0.1';
+
   @override
   void initState() {
     super.initState();
+    // 端口输入联动接入地址卡的展示。
+    _port.addListener(() => setState(() {}));
     _load();
   }
 
@@ -58,6 +65,7 @@ class _ProxyPageState extends State<ProxyPage> {
         _lanOpen = s.lanOpen;
         _loading = false;
       });
+      await _resolveDisplayHost();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -77,6 +85,72 @@ class _ProxyPageState extends State<ProxyPage> {
       _apiKey.text = 'msu-proxy-$hex';
       _appliedMsg = null;
     });
+  }
+
+  /// 推导接入地址卡的主机。关局域网：恒 127.0.0.1。开局域网：
+  /// 管理端经局域网地址/域名连的服务端，直接用它（别的设备也这么到）；
+  /// 管理端走回环说明服务端就在本机，取本机第一个非回环 IPv4。
+  Future<void> _resolveDisplayHost() async {
+    if (!_lanOpen) {
+      setState(() => _displayHost = '127.0.0.1');
+      return;
+    }
+    final host = Uri.tryParse(widget.client.baseUrl)?.host ?? '';
+    if (host.isNotEmpty &&
+        host != '127.0.0.1' &&
+        host != 'localhost' &&
+        host != '::1') {
+      setState(() => _displayHost = host);
+      return;
+    }
+    try {
+      final ifs = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      String? best;
+      var bestScore = 0;
+      for (final i in ifs) {
+        if (_isVirtualInterface(i.name)) continue;
+        for (final a in i.addresses) {
+          if (a.isLoopback) continue;
+          final score = _lanScore(a.address);
+          if (score > bestScore) {
+            best = a.address;
+            bestScore = score;
+          }
+        }
+      }
+      if (best != null && mounted) {
+        setState(() => _displayHost = best!);
+      }
+    } catch (_) {
+      // 取不到就停在 127.0.0.1，地址卡降级为占位展示。
+    }
+  }
+
+  /// 虚拟网卡按名字排除：它们的地址别的设备永远到不了。
+  /// 覆盖 Hyper-V/WSL/docker 的 vEthernet、TUN 代理（Mihomo/Clash）、
+  /// VMware/VirtualBox 与各类 TAP。
+  bool _isVirtualInterface(String name) {
+    final n = name.toLowerCase();
+    const patterns = [
+      'vethernet', 'hyper-v', 'wsl', 'docker', 'mihomo', 'clash',
+      'tun', 'tap', 'vmware', 'virtualbox', 'loopback',
+    ];
+    return patterns.any(n.contains);
+  }
+
+  /// 局域网地址打分：TUN 代理的 198.18/15 与 link-local 不可用记 0 分；
+  /// 172.16/12 多为容器/虚拟网段压低；真实物理网段（192.168/16、10/8）优先。
+  int _lanScore(String ip) {
+    final parts = ip.split('.');
+    if (parts.length != 4) return 0;
+    final p0 = int.tryParse(parts[0]) ?? 0;
+    final p1 = int.tryParse(parts[1]) ?? 0;
+    if (p0 == 192 && p1 == 168) return 4;
+    if (p0 == 10) return 3;
+    if (p0 == 172 && p1 >= 16 && p1 <= 31) return 2;
+    if (p0 == 198 && (p1 == 18 || p1 == 19)) return 0; // TUN 代理常用
+    if (p0 == 169 && p1 == 254) return 0; // link-local
+    return 1;
   }
 
   Future<void> _apply() async {
@@ -300,19 +374,22 @@ class _ProxyPageState extends State<ProxyPage> {
           style: TextStyle(fontSize: 12, color: t.faint),
         ),
         value: _lanOpen,
-        onChanged: (v) => setState(() {
-          _lanOpen = v;
-          _appliedMsg = null;
-        }),
+        onChanged: (v) {
+          setState(() {
+            _lanOpen = v;
+            _appliedMsg = null;
+          });
+          _resolveDisplayHost();
+        },
       ),
     );
   }
 
-  /// 三协议接入地址提示。端口随输入联动，便于填完后直接拷给客户端。
+  /// 三协议接入地址提示。主机随局域网开关切换（127.0.0.1 ↔ 局域网地址），
+  /// 端口随输入联动，便于填完后直接拷给客户端。
   Widget _endpointCard(BuildContext context) {
     final t = context.tokens;
     final port = _port.text.trim().isEmpty ? '12344' : _port.text.trim();
-    const host = '127.0.0.1';
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(22),
@@ -344,7 +421,7 @@ class _ProxyPageState extends State<ProxyPage> {
                     ),
                     Expanded(
                       child: SelectableText(
-                        'http://$host:$port$path',
+                        'http://$_displayHost:$port$path',
                         style: TextStyle(
                           fontSize: 12.5,
                           fontFamily: 'monospace',
@@ -357,7 +434,7 @@ class _ProxyPageState extends State<ProxyPage> {
               ),
             const SizedBox(height: 8),
             Text(
-              '开放局域网后把 127.0.0.1 换成本机局域网 IP',
+              _lanOpen ? '局域网设备使用此地址访问' : '仅本机可访问',
               style: TextStyle(fontSize: 12, color: t.faint),
             ),
           ],

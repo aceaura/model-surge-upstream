@@ -43,7 +43,9 @@ func NewSupervisor(resolver Resolver) *Supervisor {
 }
 
 // Apply 使一份配置生效。密钥为空 = 关闭转发面；配置与当前一致 = 无操作，
-// 不中断在飞的流式连接。bind 失败时旧监听保持不动。
+// 不中断在飞的流式连接。换端口时先 bind 新监听成功再停旧的，应用失败不
+// 影响在跑的配置；同端口换绑（如只切换监听范围）只能先停后绑——新旧地址
+// 重叠时共存 bind 必然冲突，此时绑不上会尝试恢复旧监听。
 func (s *Supervisor) Apply(settings proxysettings.Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -59,26 +61,56 @@ func (s *Supervisor) Apply(settings proxysettings.Settings) error {
 	}
 
 	addr := settings.ListenAddr()
+	// 同端口的新旧地址必然重叠（:12344 与 127.0.0.1:12344 不能同时 bind），
+	// 只能先停旧的。换端口则保持「先 bind 后停」的热切换。
+	samePort := s.srv != nil && s.settings.Port == settings.Port
+	if samePort {
+		s.stopLocked()
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return apperr.Wrap(apperr.InvalidRequest,
-			fmt.Sprintf("proxy listen %s failed", addr), err)
+		if samePort {
+			// 旧监听已停，尽力恢复，让在跑的配置不因一次失败的应用而消失。
+			s.restoreLocked()
+		}
+		return apperr.New(apperr.InvalidRequest,
+			fmt.Sprintf("proxy listen %s failed: %v", addr, err))
 	}
 
 	s.stopLocked()
+	s.serveLocked(ln, settings)
+	return nil
+}
+
+// serveLocked 在已绑定的监听上起服务并记录为当前配置。
+func (s *Supervisor) serveLocked(ln net.Listener, settings proxysettings.Settings) {
 	srv := &http.Server{
 		Handler:           NewHandler(settings.APIKey, s.resolver),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("proxyplane: serve %s: %v", addr, err)
+			log.Printf("proxyplane: serve %s: %v", settings.ListenAddr(), err)
 		}
 	}()
 	s.srv = srv
 	s.settings = settings
-	log.Printf("proxyplane: listening on %s", addr)
-	return nil
+	log.Printf("proxyplane: listening on %s", settings.ListenAddr())
+}
+
+// restoreLocked 尝试按当前记录的配置重新开监听（同端口换绑失败后的挽回）。
+// 恢复失败只记日志：错误已在 Apply 返回给调用方。
+func (s *Supervisor) restoreLocked() {
+	if !s.settings.Enabled() {
+		return
+	}
+	ln, err := net.Listen("tcp", s.settings.ListenAddr())
+	if err != nil {
+		log.Printf("proxyplane: restore %s failed: %v", s.settings.ListenAddr(), err)
+		return
+	}
+	s.serveLocked(ln, s.settings)
 }
 
 // Close 停掉转发面监听，进程退出时调用。
