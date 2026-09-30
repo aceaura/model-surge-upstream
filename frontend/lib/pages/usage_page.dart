@@ -464,36 +464,27 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  /// 四桶 + 命中率卡片行。
+  /// 四桶 + 命中率卡片行。任何宽度都保持一行五卡、等比缩放,
+  /// 不做固定宽度换行(换行会在行尾留出大块空白)。
   Widget _statCards(AppTokens t) {
     final s = _summary;
-    return LayoutBuilder(builder: (context, c) {
-      final wide = c.maxWidth >= 900;
-      final cards = [
-        _statCard(t, '新增输入', Icons.arrow_downward, t.primary,
-            s == null ? '—' : _fmtTokens(s.input)),
-        _statCard(t, '输出', Icons.arrow_upward, t.success,
-            s == null ? '—' : _fmtTokens(s.output)),
-        _statCard(t, '缓存创建', Icons.storage_outlined, t.warn,
-            s == null ? '—' : _fmtTokens(s.cacheWrite)),
-        _statCard(t, '缓存命中', Icons.flash_on_outlined, t.violet,
-            s == null ? '—' : _fmtTokens(s.cacheRead)),
-        _hitRateCard(t, s),
-      ];
-      if (wide) {
-        return Row(children: [
-          for (var i = 0; i < cards.length; i++) ...[
-            if (i > 0) const SizedBox(width: 14),
-            Expanded(child: cards[i]),
-          ],
-        ]);
-      }
-      return Wrap(
-        spacing: 14,
-        runSpacing: 14,
-        children: [for (final c2 in cards) SizedBox(width: 220, child: c2)],
-      );
-    });
+    final cards = [
+      _statCard(t, '新增输入', Icons.arrow_downward, t.primary,
+          s == null ? '—' : _fmtTokens(s.input)),
+      _statCard(t, '输出', Icons.arrow_upward, t.success,
+          s == null ? '—' : _fmtTokens(s.output)),
+      _statCard(t, '缓存创建', Icons.storage_outlined, t.warn,
+          s == null ? '—' : _fmtTokens(s.cacheWrite)),
+      _statCard(t, '缓存命中', Icons.flash_on_outlined, t.violet,
+          s == null ? '—' : _fmtTokens(s.cacheRead)),
+      _hitRateCard(t, s),
+    ];
+    return Row(children: [
+      for (var i = 0; i < cards.length; i++) ...[
+        if (i > 0) const SizedBox(width: 14),
+        Expanded(child: cards[i]),
+      ],
+    ]);
   }
 
   /// 五张卡共用同一骨架：定高标签行 + 定高值槽，保证标签与值跨卡对齐。
@@ -532,7 +523,13 @@ class _UsagePageState extends State<UsagePage> {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(fontSize: 12, color: t.faint)),
+          // 窄屏卡宽收缩时标签截断而不是溢出。
+          Expanded(
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: t.faint)),
+          ),
         ],
       ),
       value: Text(value,
@@ -549,8 +546,13 @@ class _UsagePageState extends State<UsagePage> {
         children: [
           Icon(Icons.percent, size: 14, color: t.violet),
           const SizedBox(width: 6),
-          Text('缓存命中率', style: TextStyle(fontSize: 12, color: t.faint)),
-          const Spacer(),
+          Expanded(
+            child: Text('缓存命中率',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: t.faint)),
+          ),
+          const SizedBox(width: 4),
           Text('${(rate * 100).toStringAsFixed(1)}%',
               style: TextStyle(
                   fontSize: 12.5, fontWeight: FontWeight.w600, color: t.success)),
