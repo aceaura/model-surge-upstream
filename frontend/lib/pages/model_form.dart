@@ -43,7 +43,8 @@ class _ModelFormState extends State<ModelForm> {
 
   late String _account = widget.editing?.account ?? widget.initialAccount;
   String? _protocol;
-  late bool _enabled = widget.editing?.enabled ?? true;
+  // 启停由列表行开关控制,表单不再展示;编辑沿用原值提交,新建默认启用
+  late final bool _enabled = widget.editing?.enabled ?? true;
 
   bool _defaultsValid = true;
   bool _overridesValid = true;
@@ -159,18 +160,21 @@ class _ModelFormState extends State<ModelForm> {
                   },
                   onChanged: _onAccountChanged,
                 ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _id,
-                  enabled: !_isEdit,
-                  decoration: const InputDecoration(
-                    labelText: '模型标识',
-                    hintText: 'kimi-1/k2',
-                    border: OutlineInputBorder(),
+                // 编辑模式下模型标识不可改,直接不渲染该字段
+                // (弹窗标题已含标识)
+                if (!_isEdit) ...[
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _id,
+                    decoration: const InputDecoration(
+                      labelText: '模型标识',
+                      hintText: 'kimi-1/k2',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? '模型标识不能为空' : null,
                   ),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? '模型标识不能为空' : null,
-                ),
+                ],
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _nativeModel,
@@ -225,11 +229,6 @@ class _ModelFormState extends State<ModelForm> {
                   controller: _overrides,
                   onValidityChanged: (ok) =>
                       setState(() => _overridesValid = ok),
-                ),
-                SwitchListTile(
-                  title: const Text('启用'),
-                  value: _enabled,
-                  onChanged: (v) => setState(() => _enabled = v),
                 ),
               ],
             ),

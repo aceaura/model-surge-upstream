@@ -143,11 +143,13 @@ void main() {
     expect(find.text('262144'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
-    // 编辑态不允许改标识。
-    final idField = tester.widget<TextField>(find.byWidgetPredicate(
-      (w) => w is TextField && w.decoration?.labelText == '模型标识',
-    ));
-    expect(idField.enabled, isFalse);
+    // 编辑态不渲染标识字段(标题已含标识,且不可改)。
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == '模型标识',
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('context window rejects non-numeric input', (tester) async {
