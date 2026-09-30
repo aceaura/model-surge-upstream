@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 abstract final class AppConst {
   static const radiusCard = 16.0;
   static const radiusCtrl = 10.0;
-  static const fontFamily = 'Microsoft YaHei';
+  // 字体栈对齐 CC Switch 的 system-ui:拉丁/数字用 Segoe UI,
+  // 中文经 fallback 落到雅黑(单设雅黑会让拉丁字形发闷)
+  static const fontFamily = 'Segoe UI';
+  static const fontFallback = ['Microsoft YaHei'];
   static const fontMono = 'Cascadia Code';
 }
 
@@ -103,7 +106,9 @@ ThemeData _build(AppTokens t, Brightness brightness) {
   return base.copyWith(
     colorScheme: scheme,
     scaffoldBackgroundColor: t.bg,
-    textTheme: base.textTheme.apply(fontFamily: AppConst.fontFamily),
+    textTheme: base.textTheme.apply(
+        fontFamily: AppConst.fontFamily,
+        fontFamilyFallback: AppConst.fontFallback),
     extensions: [t],
     cardTheme: CardThemeData(
       color: t.surface,
@@ -126,6 +131,7 @@ ThemeData _build(AppTokens t, Brightness brightness) {
         fontWeight: FontWeight.w700,
         color: t.ink,
         fontFamily: AppConst.fontFamily,
+        fontFamilyFallback: AppConst.fontFallback,
       ),
     ),
     chipTheme: base.chipTheme.copyWith(
@@ -136,6 +142,7 @@ ThemeData _build(AppTokens t, Brightness brightness) {
         fontSize: 11.5,
         color: t.dim,
         fontFamily: AppConst.fontFamily,
+        fontFamilyFallback: AppConst.fontFallback,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 6),
     ),
@@ -154,7 +161,8 @@ ThemeData _build(AppTokens t, Brightness brightness) {
         textStyle: const TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            fontFamily: AppConst.fontFamily),
+            fontFamily: AppConst.fontFamily,
+            fontFamilyFallback: AppConst.fontFallback),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppConst.radiusCtrl),
@@ -167,7 +175,8 @@ ThemeData _build(AppTokens t, Brightness brightness) {
         textStyle: const TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            fontFamily: AppConst.fontFamily),
+            fontFamily: AppConst.fontFamily,
+            fontFamilyFallback: AppConst.fontFallback),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
         side: BorderSide(color: t.border),
         shape: RoundedRectangleBorder(
@@ -203,7 +212,9 @@ ThemeData _build(AppTokens t, Brightness brightness) {
       behavior: SnackBarBehavior.floating,
       backgroundColor: isDark ? const Color(0xFF263040) : null,
       contentTextStyle: TextStyle(
-          color: isDark ? t.ink : null, fontFamily: AppConst.fontFamily),
+          color: isDark ? t.ink : null,
+          fontFamily: AppConst.fontFamily,
+          fontFamilyFallback: AppConst.fontFallback),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(

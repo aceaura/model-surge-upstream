@@ -131,6 +131,7 @@ class _StyledDropdownState extends State<StyledDropdown> {
                     color: sel ? t.primaryInk : t.ink,
                     fontWeight: sel ? FontWeight.w600 : null,
                     fontFamily: AppConst.fontFamily,
+                    fontFamilyFallback: AppConst.fontFallback,
                   )),
               const Spacer(),
               if (sel) Icon(Icons.check, size: 15, color: t.primary),
@@ -187,11 +188,12 @@ class _StyledDropdownState extends State<StyledDropdown> {
                       : Text(
                           current == null ? '' : _label(current),
                           overflow: TextOverflow.ellipsis,
-                          // 显式钉字体族:textStyle 缺 fontFamily 会在合并链上丢掉雅黑
+                          // 显式钉字体族:textStyle 缺 fontFamily 会在合并链上丢掉字体栈
                           style: TextStyle(
                               fontSize: 13,
                               color: t.ink,
-                              fontFamily: AppConst.fontFamily),
+                              fontFamily: AppConst.fontFamily,
+                              fontFamilyFallback: AppConst.fontFallback),
                         ),
                 ),
                 Icon(Icons.expand_more_rounded, size: 18, color: t.dim),
