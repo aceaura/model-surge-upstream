@@ -6,6 +6,7 @@ import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
+import '../ui/provider_tag.dart';
 import 'model_form.dart';
 
 /// 某账号下的模型列表。内嵌在主壳右侧内容区(不再推路由,侧栏保持可见),
@@ -247,10 +248,7 @@ class _ModelsPageState extends State<ModelsPage> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Chip(
-                        label: Text(m.protocol),
-                        visualDensity: VisualDensity.compact,
-                      ),
+                      ProviderTag(m.protocol),
                     ],
                   ),
                   const SizedBox(height: 4),
