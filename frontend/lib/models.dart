@@ -13,6 +13,7 @@ class ProviderSpec {
     required this.quotaKind,
     required this.quotaUnit,
     required this.quotaReset,
+    required this.quotaQueryable,
   });
 
   final String id;
@@ -23,12 +24,14 @@ class ProviderSpec {
   final String auth;
   final String credential;
 
-  /// 以下三项为 null 表示该 provider 未声明额度接口。
+  /// 后端只要带 quota 块即视为声明了额度接口;kind/unit 只是
+  /// 主计量项形态说明,老数据可能缺省,不能拿它们当可查询判据。
   final String? quotaKind;
   final String? quotaUnit;
   final String? quotaReset;
 
-  bool get quotaQueryable => quotaKind != null;
+  /// 提供商是否声明了额度查询接口(响应里有 quota 块)。
+  final bool quotaQueryable;
 
   factory ProviderSpec.fromJson(Map<String, dynamic> json) {
     final quota = json['quota'] as Map<String, dynamic>?;
@@ -44,6 +47,7 @@ class ProviderSpec {
       quotaKind: quota?['kind'] as String?,
       quotaUnit: quota?['unit'] as String?,
       quotaReset: quota?['reset'] as String?,
+      quotaQueryable: quota != null,
     );
   }
 }

@@ -129,7 +129,8 @@ class _ProviderCard extends StatelessWidget {
             if (!spec.quotaQueryable)
               _row(context, '额度查询', '不支持')
             else ...[
-              _row(context, '额度形态', '${spec.quotaKind} / ${spec.quotaUnit}'),
+              if (spec.quotaKind != null)
+                _row(context, '额度形态', '${spec.quotaKind} / ${spec.quotaUnit}'),
               _row(context, '额度重置', spec.quotaReset ?? '未声明'),
             ],
           ],

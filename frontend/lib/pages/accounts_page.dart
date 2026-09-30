@@ -6,8 +6,8 @@ import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/provider_avatar.dart';
+import '../ui/quota_inline.dart';
 import 'account_form.dart';
-import 'quota_dialog.dart';
 
 class AccountsPage extends StatefulWidget {
   const AccountsPage({
@@ -131,11 +131,6 @@ class _AccountsPageState extends State<AccountsPage> {
   void _openModels(Account account, List<ProviderSpec> providers) =>
       widget.onOpenModels(account, providers);
 
-  Future<void> _showQuota(Account account) => showDialog<void>(
-        context: context,
-        builder: (_) => QuotaDialog(client: widget.client, account: account),
-      );
-
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<(List<Account>, List<ProviderSpec>)>(
@@ -248,6 +243,18 @@ class _AccountsPageState extends State<AccountsPage> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
+                                // 行内额度摘要(CC Switch 式):提供商声明了
+                                // 额度接口才出现,加载后自动查询一次
+                                QuotaInline(
+                                  client: widget.client,
+                                  accountName: a.name,
+                                  queryable: providers
+                                          .where((p) => p.id == a.providerId)
+                                          .firstOrNull
+                                          ?.quotaQueryable ??
+                                      false,
+                                ),
+                                const SizedBox(width: 8),
                                 if (_toggling.contains(a.name))
                                   const SizedBox(
                                     width: 24,
@@ -262,8 +269,6 @@ class _AccountsPageState extends State<AccountsPage> {
                                   ),
                                 _action(Icons.list_alt, '模型',
                                     () => _openModels(a, providers), t),
-                                _action(Icons.savings_outlined, '额度',
-                                    () => _showQuota(a), t),
                                 _action(Icons.edit_outlined, '编辑',
                                     () => _edit(a, providers), t),
                                 _action(Icons.delete_outline, '删除',
