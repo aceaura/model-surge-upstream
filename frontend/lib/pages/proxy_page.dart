@@ -12,7 +12,7 @@ import '../ui/feedback.dart';
 /// 暴露给客户端（不做协议转化）。改动点「应用配置」后服务端立即重绑监听。
 /// 页面本体不带页头——在设置枢纽页里作为「代理服务」分页签渲染。
 /// 版式对齐 CC Switch 设置页：分区纵向铺排（粗标题+灰说明+控件），
-/// 开关为左圆形图标、右 Switch 的通栏行，行间细分隔线，不用卡片。
+/// 开关为通栏行（左标题说明、右 Switch），行间细分隔线，不用卡片。
 class ProxyPage extends StatefulWidget {
   const ProxyPage({super.key, required this.client, this.onOpenSettings});
 
@@ -390,7 +390,7 @@ class _ProxyPageState extends State<ProxyPage> {
     );
   }
 
-  /// 开关通栏行：左圆形图标 + 标题/说明 + 右 Switch，上下细分隔线。
+  /// 开关通栏行：标题/说明 + 右 Switch，上下细分隔线。
   Widget _lanRow(BuildContext context) {
     final t = context.tokens;
     return Column(
@@ -400,16 +400,6 @@ class _ProxyPageState extends State<ProxyPage> {
           padding: const EdgeInsets.symmetric(vertical: 14),
           child: Row(
             children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: t.primarySoft,
-                  borderRadius: BorderRadius.circular(17),
-                ),
-                child: Icon(Icons.lan_outlined, size: 17, color: t.primaryInk),
-              ),
-              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
