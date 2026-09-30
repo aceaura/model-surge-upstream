@@ -40,7 +40,9 @@ class FormPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     return Scaffold(
-      backgroundColor: t.bg,
+      // 透明底:透出主壳内容区底色(亮模式纯白、暗模式 tokens.bg),
+      // 与上一级列表页保持一致,不再自刷一层灰。
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
