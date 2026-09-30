@@ -73,6 +73,7 @@ Future<void> pumpForm(
       accounts: accounts,
       providers: providers,
       initialAccount: 'kimi-1',
+      onDone: (_) {},
       editing: editing,
       copyFrom: copyFrom,
     ),

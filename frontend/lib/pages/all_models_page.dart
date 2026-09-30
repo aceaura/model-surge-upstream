@@ -47,6 +47,9 @@ class _AllModelsPageState extends State<AllModelsPage> {
   final _searchController = TextEditingController();
   String _query = '';
 
+  /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
+  ModelForm? _form;
+
   @override
   void initState() {
     super.initState();
@@ -91,50 +94,49 @@ class _AllModelsPageState extends State<AllModelsPage> {
     );
   }
 
-  /// 整页表单(CC Switch 式):推路由占满窗口,返回 true 表示已保存。
-  Future<bool> _openForm(ModelForm form) async =>
-      await Navigator.of(context).push<bool>(
-        MaterialPageRoute(builder: (_) => form),
-      ) ==
-      true;
+  /// 整页表单(CC Switch 式):页内内联替换列表,不再推根路由遮盖侧边栏。
+  void _openForm(ModelForm form) => setState(() => _form = form);
 
-  Future<void> _create(List<Account> accounts, List<ProviderSpec> providers,
-      String initialAccount) async {
-    if (await _openForm(ModelForm(
+  /// 表单收尾:关闭内联表单,已保存则重载列表。
+  void _closeForm(bool saved) {
+    setState(() => _form = null);
+    if (saved) _reload();
+  }
+
+  void _create(List<Account> accounts, List<ProviderSpec> providers,
+      String initialAccount) {
+    _openForm(ModelForm(
       client: widget.client,
       accounts: accounts,
       providers: providers,
       initialAccount: initialAccount,
-    ))) {
-      _reload();
-    }
+      onDone: _closeForm,
+    ));
   }
 
-  Future<void> _edit(UpstreamModel model, List<Account> accounts,
-      List<ProviderSpec> providers) async {
-    if (await _openForm(ModelForm(
+  void _edit(UpstreamModel model, List<Account> accounts,
+      List<ProviderSpec> providers) {
+    _openForm(ModelForm(
       client: widget.client,
       accounts: accounts,
       providers: providers,
       initialAccount: model.account,
+      onDone: _closeForm,
       editing: model,
-    ))) {
-      _reload();
-    }
+    ));
   }
 
   /// 拷贝(CC Switch 式):以该模型配置预填新建整页表单,标识加 -copy 后缀需自行调整。
-  Future<void> _copy(UpstreamModel model, List<Account> accounts,
-      List<ProviderSpec> providers) async {
-    if (await _openForm(ModelForm(
+  void _copy(UpstreamModel model, List<Account> accounts,
+      List<ProviderSpec> providers) {
+    _openForm(ModelForm(
       client: widget.client,
       accounts: accounts,
       providers: providers,
       initialAccount: model.account,
+      onDone: _closeForm,
       copyFrom: model,
-    ))) {
-      _reload();
-    }
+    ));
   }
 
   Future<void> _toggle(UpstreamModel model) async {
@@ -185,6 +187,9 @@ class _AllModelsPageState extends State<AllModelsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 表单打开时整幅替换列表内容(侧边栏在主壳,不受影响)。
+    final form = _form;
+    if (form != null) return form;
     final t = context.tokens;
     return FutureBuilder<(List<UpstreamModel>, List<Account>, List<ProviderSpec>)>(
       future: _future,

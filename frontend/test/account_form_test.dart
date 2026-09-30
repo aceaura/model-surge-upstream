@@ -86,7 +86,10 @@ Future<void> pumpForm(
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
     home: AccountForm(
-        client: client ?? stubClient(), providers: providers, copyFrom: copyFrom),
+        client: client ?? stubClient(),
+        providers: providers,
+        onDone: (_) {},
+        copyFrom: copyFrom),
   ));
   await tester.pumpAndSettle();
 }
