@@ -34,8 +34,9 @@ class _ModelFormState extends State<ModelForm> {
       TextEditingController(text: widget.editing?.id ?? '');
   late final TextEditingController _nativeModel =
       TextEditingController(text: widget.editing?.nativeModel ?? '');
+  // 上下文窗口按 k 单位录入/回显(1k = 1000 tokens),提交时换回 token 数
   late final TextEditingController _contextWindow = TextEditingController(
-      text: (widget.editing?.contextWindow ?? 0).toString());
+      text: tokensToK(widget.editing?.contextWindow ?? 0));
   late final TextEditingController _defaults = TextEditingController(
       text: prettyJson(widget.editing?.defaults ?? const {}));
   late final TextEditingController _overrides = TextEditingController(
@@ -104,7 +105,7 @@ class _ModelFormState extends State<ModelForm> {
           account: _account,
           nativeModel: _nativeModel.text.trim(),
           protocol: _protocol,
-          contextWindow: int.parse(_contextWindow.text.trim()),
+          contextWindow: kToTokens(_contextWindow.text),
           defaults: defaults!,
           overrides: overrides!,
           enabled: _enabled,
@@ -115,7 +116,7 @@ class _ModelFormState extends State<ModelForm> {
           account: _account,
           nativeModel: _nativeModel.text.trim(),
           protocol: _protocol!,
-          contextWindow: int.parse(_contextWindow.text.trim()),
+          contextWindow: kToTokens(_contextWindow.text),
           defaults: defaults!,
           overrides: overrides!,
           enabled: _enabled,
@@ -201,15 +202,17 @@ class _ModelFormState extends State<ModelForm> {
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _contextWindow,
-                  keyboardType: TextInputType.number,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(
                     labelText: '上下文窗口',
-                    helperText: '0 表示未声明',
+                    suffixText: 'k',
+                    helperText: '单位 k(1k = 1000 tokens),0 表示未声明',
                     border: OutlineInputBorder(),
                   ),
                   validator: (v) {
-                    final n = int.tryParse(v?.trim() ?? '');
-                    if (n == null) return '请填写整数';
+                    final n = double.tryParse(v?.trim() ?? '');
+                    if (n == null) return '请填写数字';
                     if (n < 0) return '不能为负数';
                     return null;
                   },

@@ -286,7 +286,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
                     [
                       '账号 ${m.account}',
                       '上游 ${m.nativeModel}',
-                      '窗口 ${m.contextWindow == 0 ? '未声明' : m.contextWindow}',
+                      '窗口 ${m.contextWindow == 0 ? '未声明' : '${tokensToK(m.contextWindow)}k'}',
                       if (m.defaults.isNotEmpty) '默认参数 ${m.defaults.length} 项',
                       if (m.overrides.isNotEmpty) '覆盖参数 ${m.overrides.length} 项',
                     ].join('   '),

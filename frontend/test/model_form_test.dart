@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -140,7 +142,8 @@ void main() {
     await pumpForm(tester, editing: editing);
 
     expect(find.text('kimi-k2-turbo'), findsAtLeastNWidgets(1));
-    expect(find.text('262144'), findsAtLeastNWidgets(1));
+    // 上下文窗口按 k 单位回显(262144 tokens = 262.144k)
+    expect(find.text('262.144'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
     // 编辑态不渲染标识字段(标题已含标识,且不可改)。
@@ -157,6 +160,62 @@ void main() {
     await tester.enterText(find.widgetWithText(TextFormField, '上下文窗口'), 'abc');
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pump();
-    expect(find.text('请填写整数'), findsOneWidget);
+    expect(find.text('请填写数字'), findsOneWidget);
+  });
+
+  testWidgets('context window rejects negative input', (tester) async {
+    await pumpForm(tester);
+    await tester.enterText(find.widgetWithText(TextFormField, '上下文窗口'), '-5');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pump();
+    expect(find.text('不能为负数'), findsOneWidget);
+  });
+
+  testWidgets('context window is submitted in tokens from k input',
+      (tester) async {
+    Map<String, dynamic>? sentBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        sentBody =
+            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showDialog<bool>(
+              context: context,
+              builder: (_) => ModelForm(
+                client: client,
+                accounts: accounts,
+                providers: providers,
+                initialAccount: 'kimi-1',
+              ),
+            ),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, '模型标识'), 'kimi-1/k2');
+    await tester.enterText(
+        find.widgetWithText(TextFormField, '上游模型名'), 'kimi-k2-turbo');
+    // 256k 应以 256000 tokens 提交
+    await tester.enterText(
+        find.widgetWithText(TextFormField, '上下文窗口'), '256');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(sentBody, isNotNull);
+    expect(sentBody!['context_window'], 256000);
   });
 }

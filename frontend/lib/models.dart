@@ -1,6 +1,22 @@
 /// 与 backend 接口对应的数据类型。凭据字段只以脱敏形态出现在客户端。
 library;
 
+/// token 数 → k 单位字符串(不带后缀):1k = 1000 tokens。
+/// 整千给整数(256000 → "256");非整千保留 0.001k 精度并去尾零
+/// (131072 → "131.072"),避免编辑回显时丢精度;0 → "0"(未声明)。
+String tokensToK(int tokens) {
+  if (tokens % 1000 == 0) return '${tokens ~/ 1000}';
+  var s = (tokens / 1000).toStringAsFixed(3);
+  while (s.endsWith('0')) {
+    s = s.substring(0, s.length - 1);
+  }
+  if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  return s;
+}
+
+/// k 单位输入串 → token 数(1k = 1000 tokens,四舍五入到个位)。
+int kToTokens(String kText) => (double.parse(kText.trim()) * 1000).round();
+
 class ProviderSpec {
   const ProviderSpec({
     required this.id,
