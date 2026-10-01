@@ -123,6 +123,9 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/models/{id...}", h.getModel)
 	admin.HandleFunc("PUT /admin/models/{id...}", h.updateModel)
 	admin.HandleFunc("DELETE /admin/models/{id...}", h.deleteModel)
+	// 连通性检测挂独立前缀：模型 id 含 / 必须吃 {id...} 通配，而 Go 路由
+	// 不允许通配段后接 /test 静态段。
+	admin.HandleFunc("POST /admin/model-test/{id...}", h.testModel)
 	admin.HandleFunc("GET /admin/proxy-settings", h.getProxySettings)
 	admin.HandleFunc("PUT /admin/proxy-settings", h.putProxySettings)
 	admin.HandleFunc("GET /admin/logs", h.listLogs)

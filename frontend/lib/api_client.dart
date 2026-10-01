@@ -232,6 +232,17 @@ class ApiClient {
 
   Future<void> deleteModel(String id) => _send('DELETE', '/admin/models/$id');
 
+  /// 检测命名模型到真实上游的连通性。服务端恒回 200：链路/凭据失败是
+  /// 检测结果而非请求错误。超时放宽到 15s（服务端探测上限 10s + 余量）。
+  Future<ModelTestResult> testModel(String id) async {
+    final body = await _send(
+      'POST',
+      '/admin/model-test/$id', // id 含 /，与 deleteModel 同款不编码
+      timeout: const Duration(seconds: 15),
+    );
+    return ModelTestResult.fromJson(body);
+  }
+
   Future<QuotaReport> queryQuota(String account) async {
     final body = await _send('GET', '/admin/accounts/$account/quota');
     return QuotaReport.fromJson(body);

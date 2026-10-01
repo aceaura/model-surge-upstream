@@ -44,6 +44,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
   late Future<(List<UpstreamModel>, List<Account>, List<ProviderSpec>)>
       _future = _load();
   final _toggling = <String>{};
+  final _testing = <String>{};
   final _searchController = TextEditingController();
   String _query = '';
 
@@ -148,6 +149,36 @@ class _AllModelsPageState extends State<AllModelsPage> {
       if (mounted) showError(context, e);
     } finally {
       if (mounted) setState(() => _toggling.remove(model.id));
+    }
+  }
+
+  /// 检测连通性(参考 CC Switch):向真实上游发最小探测请求,
+  /// 链路/凭据/模型名任一不通都会在结果里说明。结果用 snackbar 呈现,
+  /// 行内容不因此抖动。
+  Future<void> _test(UpstreamModel model) async {
+    setState(() => _testing.add(model.id));
+    try {
+      final res = await widget.client.testModel(model.id);
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      if (res.ok) {
+        messenger.showSnackBar(SnackBar(
+          content: Text(
+              '${model.id} 连通正常 · HTTP ${res.statusCode} · ${res.latencyMs} ms'),
+        ));
+      } else {
+        final detail = res.statusCode > 0
+            ? 'HTTP ${res.statusCode} · ${res.latencyMs} ms\n${res.error}'
+            : res.error;
+        messenger.showSnackBar(SnackBar(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          content: Text('${model.id} 检测失败：$detail'),
+        ));
+      }
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _testing.remove(model.id));
     }
   }
 
@@ -322,6 +353,17 @@ class _AllModelsPageState extends State<AllModelsPage> {
                 value: m.enabled,
                 onChanged: (_) => _toggle(m),
               ),
+            if (_testing.contains(m.id))
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else
+              _action(Icons.network_check, '检测连通性', () => _test(m), t),
             _action(Icons.edit_outlined, '编辑',
                 () => _edit(m, accounts, providers), t),
             _action(Icons.copy_outlined, '拷贝',

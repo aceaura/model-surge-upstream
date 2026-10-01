@@ -207,6 +207,27 @@ void main() {
     expect(report.meters[2].unit, 'tokens');
     expect(report.meters[2].amount(report.meters[2].total), '10000.0 token');
   });
+
+  test('testModel hits the multi-segment id path and parses the result',
+      () async {
+    String? gotPath;
+    String? gotMethod;
+    final client = clientReturning(
+      200,
+      '{"ok":false,"status_code":401,"latency_ms":87,"error":"上游返回 HTTP 401"}',
+      inspect: (req) {
+        gotPath = req.url.path;
+        gotMethod = req.method;
+      },
+    );
+    final res = await client.testModel('ds-1/v4');
+    expect(gotMethod, 'POST');
+    expect(gotPath, '/admin/model-test/ds-1/v4'); // id 含 /,不编码
+    expect(res.ok, isFalse);
+    expect(res.statusCode, 401);
+    expect(res.latencyMs, 87);
+    expect(res.error, contains('401'));
+  });
 }
 
 /// HttpExceptionStub 模拟传输层失败。

@@ -444,3 +444,27 @@ class UsageLogRow {
                 DateTime.now(),
       );
 }
+
+/// 模型连通性检测结果。ok 仅在上游回 2xx 时为真;网络级失败时
+/// statusCode 为 0,原因在 error。
+class ModelTestResult {
+  const ModelTestResult({
+    required this.ok,
+    required this.statusCode,
+    required this.latencyMs,
+    required this.error,
+  });
+
+  final bool ok;
+  final int statusCode;
+  final int latencyMs;
+  final String error;
+
+  factory ModelTestResult.fromJson(Map<String, dynamic> json) =>
+      ModelTestResult(
+        ok: json['ok'] as bool? ?? false,
+        statusCode: (json['status_code'] as num?)?.toInt() ?? 0,
+        latencyMs: (json['latency_ms'] as num?)?.toInt() ?? 0,
+        error: json['error'] as String? ?? '',
+      );
+}
