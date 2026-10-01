@@ -3,10 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/confirm_dialog.dart';
-import 'package:msu_admin/ui/dialog_header.dart';
 
 void main() {
-  testWidgets('骨架不变:居中标题头+分隔线,取消为描边钮,确认为红底危险钮',
+  testWidgets('浅红头带:警告图标+深红左对齐标题,取消描边钮,确认红底危险钮',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
       theme: buildAppTheme(),
@@ -15,17 +14,24 @@ void main() {
       ),
     ));
 
-    // 头部骨架仍是 DialogHeader(居中标题+通栏分隔线)。
-    expect(find.byType(DialogHeader), findsOneWidget);
-    expect(find.byType(Divider), findsOneWidget);
+    final t = buildAppTheme().extension<AppTokens>()!;
+
+    // 头带:dangerSoft 底 + 警告三角 + dangerInk 标题,不再用 DialogHeader 分隔线。
+    expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+    expect(find.byType(Divider), findsNothing);
+    final band = tester.widget<Container>(find.ancestor(
+      of: find.byIcon(Icons.warning_amber_rounded),
+      matching: find.byType(Container),
+    ).first);
+    expect(band.color, t.dangerSoft);
+    final title = tester.widget<Text>(find.text('删除会话'));
+    expect(title.style?.color, t.dangerInk);
 
     // 取消=描边钮;确认=FilledButton 且底色为主题 danger。
     expect(find.widgetWithText(OutlinedButton, '取消'), findsOneWidget);
-    final confirm =
-        find.widgetWithText(FilledButton, '删除');
+    final confirm = find.widgetWithText(FilledButton, '删除');
     expect(confirm, findsOneWidget);
     final btn = tester.widget<FilledButton>(confirm);
-    final t = buildAppTheme().extension<AppTokens>()!;
     expect(btn.style?.backgroundColor?.resolve({}), t.danger);
   });
 
