@@ -1252,15 +1252,18 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 
 ### 7.2 协议入口
 
-协议由路径前缀区分，不嗅探请求体。客户端把对应前缀当 base URL 配置：
+协议由路径形状区分，不嗅探请求体。三族端点天然不撞车，因此**三协议共用一个 base URL**：客户端把转发面地址（`http://{host}:{port}`）直接当 base URL 配置，按各自协议的原生路径访问。
 
-| 前缀 | 协议 | 转发端点 | 模型列举端点 |
-|---|---|---|---|
-| `/anthropic` | `anthropic` | `POST /anthropic/v1/messages` 等全部子路径 | `GET /anthropic/v1/models` |
-| `/openai` | `chat_completions` / `responses` | `POST /openai/v1/chat/completions`、`POST /openai/v1/responses` | `GET /openai/v1/models` |
-| `/gemini` | `gemini` | `POST /gemini/v1beta/models/{别名}:{action}` | `GET /gemini/v1beta/models` |
+| 路径 | 协议 | 用途 |
+|---|---|---|
+| `POST /v1/messages`（含 `count_tokens` 等子路径） | `anthropic` | 转发 |
+| `POST /v1/chat/completions` | `chat_completions` | 转发 |
+| `POST /v1/responses` | `responses` | 转发 |
+| `POST /v1beta/models/{别名}:{action}` | `gemini` | 转发 |
+| `GET /v1/models` | `anthropic` / `chat_completions` / `responses` | 模型列举（见 7.3 的分族规则） |
+| `GET /v1beta/models` | `gemini` | 模型列举 |
 
-前缀之后的路径原样拼到解析出的账号 `base_url` 之后（`/anthropic/v1/messages` → `{base_url}/v1/messages`）。openai 前缀只放行上表两个转发端点，其余路径 `404`。
+请求路径原样拼到解析出的账号 `base_url` 之后（`/v1/messages` → `{base_url}/v1/messages`）。上表之外的路径 `404`。
 
 **转发时只改四处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
@@ -1271,7 +1274,9 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 
 ### 7.3 模型列举
 
-三个列举端点都返回**本服务已配置的启用中模型**（同 `/v1/models` 的数据源），只列客户端当前前缀协议可用的条目，外壳是各协议原生形态：anthropic 为 `{"data":[{"id","type":"model","display_name","created_at"}],"has_more":false}`，openai 为 `{"object":"list","data":[{"id","object":"model","created","owned_by"}]}`，gemini 为 `{"models":[{"name":"models/{id}","displayName"}]}`。
+列举端点返回**本服务已配置的启用中模型**（同 `/v1/models` 下发面的数据源），只列客户端当前协议可用的条目，外壳是各协议原生形态：anthropic 为 `{"data":[{"id","type":"model","display_name","created_at"}],"has_more":false}`，openai 为 `{"object":"list","data":[{"id","object":"model","created","owned_by"}]}`，gemini 为 `{"models":[{"name":"models/{id}","displayName"}]}`。
+
+anthropic 与 openai 客户端都打 `GET /v1/models`，按放钥位置分族：`x-api-key`（Anthropic SDK 的原生位置）回 anthropic 形态、只列 `anthropic` 协议模型；其余（Bearer、`?key=`）回 openai 形态、列 `chat_completions` 与 `responses` 协议模型。gemini 走 `GET /v1beta/models`，无撞车。
 
 ### 7.4 错误形态
 

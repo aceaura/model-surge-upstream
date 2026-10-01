@@ -23,7 +23,7 @@ func freePort(t *testing.T) int {
 
 func get(t *testing.T, addr, key string) int {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/openai/v1/models", addr), nil)
+	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/v1/models", addr), nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
 	if err != nil {

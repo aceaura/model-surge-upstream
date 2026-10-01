@@ -101,7 +101,7 @@ func TestAutoCompactRewritesHistoryAndKeepsStream(t *testing.T) {
 	h := NewHandler(testKey, compactResolver(srv.URL, "auto"), sink.add).
 		WithCompactor(compact.NewRunner(compact.DefaultConfig()))
 
-	rec := doRequest(t, h, http.MethodPost, "/anthropic/v1/messages",
+	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
 		map[string]string{"x-api-key": testKey}, longHistory(10))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
@@ -156,7 +156,7 @@ func TestErrorModeRejectsWithNativeShape(t *testing.T) {
 	h := NewHandler(testKey, compactResolver(srv.URL, "error"), sink.add).
 		WithCompactor(compact.NewRunner(compact.DefaultConfig()))
 
-	rec := doRequest(t, h, http.MethodPost, "/anthropic/v1/messages",
+	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
 		map[string]string{"x-api-key": testKey}, longHistory(10))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -193,7 +193,7 @@ func TestPassiveModePassesThrough(t *testing.T) {
 	h := NewHandler(testKey, compactResolver(srv.URL, "passive"), nil).
 		WithCompactor(compact.NewRunner(compact.DefaultConfig()))
 
-	rec := doRequest(t, h, http.MethodPost, "/anthropic/v1/messages",
+	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
 		map[string]string{"x-api-key": testKey}, longHistory(10))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)

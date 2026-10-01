@@ -42,22 +42,21 @@ void main() {
   testWidgets('复制按钮紧跟地址文末,不被顶到行尾右端', (tester) async {
     await pumpPage(tester);
 
+    // 三协议共用一个 base URL,接入地址只剩一行。
     final texts = find.byType(SelectableText);
     final buttons = find.byTooltip('复制地址');
-    expect(texts, findsNWidgets(3));
-    expect(buttons, findsNWidgets(3));
+    expect(texts, findsOneWidget);
+    expect(buttons, findsOneWidget);
 
-    for (var i = 0; i < 3; i++) {
-      final textRect = tester.getRect(texts.at(i));
-      final btnRect = tester.getRect(buttons.at(i));
-      // 松散适配下地址框即文字宽度,按钮左缘应贴着文字右缘
-      // (测试字体下 SelectableText 盒比字形窄约 1em,留 16 容差)。
-      expect(btnRect.left - textRect.right, inInclusiveRange(-1, 16));
-      // 若误用 Expanded,地址框撑满整行,按钮会落在行尾(约 1300+);
-      // 地址本身不足千像素,按钮左缘应远小于行宽。
-      expect(btnRect.left, lessThan(900),
-          reason: '复制按钮应随地址文末,而非被推到行尾右端');
-    }
+    final textRect = tester.getRect(texts.first);
+    final btnRect = tester.getRect(buttons.first);
+    // 松散适配下地址框即文字宽度,按钮左缘应贴着文字右缘
+    // (测试字体下 SelectableText 盒比字形窄约 1em,留 16 容差)。
+    expect(btnRect.left - textRect.right, inInclusiveRange(-1, 16));
+    // 若误用 Expanded,地址框撑满整行,按钮会落在行尾(约 1300+);
+    // 地址本身不足千像素,按钮左缘应远小于行宽。
+    expect(btnRect.left, lessThan(900),
+        reason: '复制按钮应随地址文末,而非被推到行尾右端');
   });
 
   testWidgets('点复制按钮回显所抄地址', (tester) async {
@@ -75,9 +74,9 @@ void main() {
     await tester.tap(find.byTooltip('复制地址').first);
     await tester.pumpAndSettle();
 
-    expect(copied, 'http://127.0.0.1:12344/anthropic');
+    expect(copied, 'http://127.0.0.1:12344');
     expect(
-      find.textContaining('已复制 http://127.0.0.1:12344/anthropic'),
+      find.textContaining('已复制 http://127.0.0.1:12344'),
       findsOneWidget,
     );
 

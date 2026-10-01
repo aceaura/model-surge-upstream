@@ -297,53 +297,44 @@ class _ProxyPageState extends State<ProxyPage> {
         _section(
           context,
           '客户端接入地址',
-          _lanOpen ? '局域网设备使用以下地址访问' : '仅本机可访问',
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final (label, path) in [
-                ('Anthropic 协议', '/anthropic'),
-                ('OpenAI 协议', '/openai'),
-                ('Gemini 协议', '/gemini'),
-              ])
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 5),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 110,
-                        child: Text(
-                          label,
-                          style: TextStyle(fontSize: 12.5, color: t.dim),
-                        ),
-                      ),
-                      // Flexible 松散适配：地址按自身宽度排，复制按钮
-                      // 紧跟其后，而不是被 Expanded 顶到行尾右端。
-                      Flexible(
-                        child: SelectableText(
-                          'http://$_displayHost:$_portText$path',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontFamily: 'monospace',
-                            color: t.ink,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '复制地址',
-                        icon: Icon(Icons.content_copy,
-                            size: 15, color: t.faint),
-                        splashRadius: 16,
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        onPressed: () => _copyEndpoint(
-                            'http://$_displayHost:$_portText$path'),
-                      ),
-                    ],
+          '${_lanOpen ? '局域网设备使用以下地址访问' : '仅本机可访问'};'
+              '三协议共用此地址,客户端按各自原生路径访问'
+              '(/v1/messages、/v1/chat/completions、/v1/responses、/v1beta/…)',
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 5),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 110,
+                  child: Text(
+                    'Base URL',
+                    style: TextStyle(fontSize: 12.5, color: t.dim),
                   ),
                 ),
-            ],
+                // Flexible 松散适配：地址按自身宽度排，复制按钮
+                // 紧跟其后，而不是被 Expanded 顶到行尾右端。
+                Flexible(
+                  child: SelectableText(
+                    'http://$_displayHost:$_portText',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontFamily: 'monospace',
+                      color: t.ink,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '复制地址',
+                  icon: Icon(Icons.content_copy, size: 15, color: t.faint),
+                  splashRadius: 16,
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: () =>
+                      _copyEndpoint('http://$_displayHost:$_portText'),
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 26),

@@ -22,7 +22,7 @@ import (
 // 限制只为挡住误传的大文件，不为裁剪正常流量。
 const bodyLimit = 32 << 20
 
-// family 是路径前缀决定的协议族。不做协议转化：族只用来校验模型的
+// family 是路径形状决定的协议族。不做协议转化：族只用来校验模型的
 // 出站协议与客户端期望一致，以及决定错误响应与模型列举的原生形态。
 type family string
 
@@ -79,7 +79,7 @@ func (h *Handler) WithCompactor(c *compact.Runner) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fam, suffix, ok := splitPrefix(r.URL.Path)
+	fam, ok := familyOf(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -91,13 +91,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 模型列举：客户端启动时发现「我命名的模型」，按族给原生形态。
 	if r.Method == http.MethodGet {
-		switch {
-		case fam == familyAnthropic && suffix == "/v1/models":
-			h.listModels(w, r, fam, provider.ProtocolAnthropic)
-		case fam == familyOpenAI && suffix == "/v1/models":
-			h.listModels(w, r, fam, provider.ProtocolChatCompletions, provider.ProtocolResponses)
-		case fam == familyGemini && suffix == "/v1beta/models":
-			h.listModels(w, r, fam, provider.ProtocolGemini)
+		switch r.URL.Path {
+		case "/v1/models":
+			// anthropic 与 openai 客户端都打 /v1/models:按放钥位置
+			// 分族——x-api-key 是 Anthropic SDK 的原生位置,其余
+			// (Bearer/?key=)按 openai 形态回。
+			if r.Header.Get("x-api-key") != "" {
+				h.listModels(w, r, familyAnthropic, provider.ProtocolAnthropic)
+			} else {
+				h.listModels(w, r, familyOpenAI, provider.ProtocolChatCompletions, provider.ProtocolResponses)
+			}
+		case "/v1beta/models":
+			h.listModels(w, r, familyGemini, provider.ProtocolGemini)
 		default:
 			http.NotFound(w, r)
 		}
@@ -109,40 +114,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fam == familyGemini {
-		h.forwardGemini(w, r, suffix)
+		h.forwardGemini(w, r, r.URL.Path)
 		return
 	}
-	want := provider.ProtocolAnthropic
-	if fam == familyOpenAI {
-		switch suffix {
-		case "/v1/chat/completions":
-			want = provider.ProtocolChatCompletions
-		case "/v1/responses":
-			want = provider.ProtocolResponses
-		default:
-			http.NotFound(w, r)
-			return
-		}
+	var want string
+	switch {
+	case r.URL.Path == "/v1/messages" || strings.HasPrefix(r.URL.Path, "/v1/messages/"):
+		// messages 整棵子树(含 count_tokens)都归 anthropic。
+		want = provider.ProtocolAnthropic
+	case r.URL.Path == "/v1/chat/completions":
+		want = provider.ProtocolChatCompletions
+	case r.URL.Path == "/v1/responses":
+		want = provider.ProtocolResponses
+	default:
+		http.NotFound(w, r)
+		return
 	}
-	h.forwardWithBodyModel(w, r, fam, suffix, want)
+	h.forwardWithBodyModel(w, r, fam, r.URL.Path, want)
 }
 
-// splitPrefix 把路径拆成协议族与上游路径后缀。协议靠前缀区分，
-// 无法也不试图从请求体嗅探。
-func splitPrefix(path string) (family, string, bool) {
-	for _, p := range []struct {
-		fam    family
-		prefix string
-	}{
-		{familyAnthropic, "/anthropic"},
-		{familyOpenAI, "/openai"},
-		{familyGemini, "/gemini"},
-	} {
-		if rest, ok := strings.CutPrefix(path, p.prefix); ok && strings.HasPrefix(rest, "/") {
-			return p.fam, rest, true
-		}
+// familyOf 按路径形状定协议族:三族端点天然不撞车(anthropic 的
+// /v1/messages、openai 的 /v1/chat/completions 与 /v1/responses、
+// gemini 的 /v1beta/...),三协议由此共用一个 base URL,客户端按各自
+// 原生路径直配,不再要 /anthropic /openai /gemini 前缀。唯一共用的
+// GET /v1/models 在列举分支里按认证头位置二次分族。
+func familyOf(path string) (family, bool) {
+	switch {
+	case path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/"):
+		return familyAnthropic, true
+	case path == "/v1/chat/completions", path == "/v1/responses", path == "/v1/models":
+		return familyOpenAI, true
+	case strings.HasPrefix(path, "/v1beta/"):
+		return familyGemini, true
 	}
-	return "", "", false
+	return "", false
 }
 
 // authorized 接受各协议客户端放密钥的原生位置：Bearer（OpenAI）、

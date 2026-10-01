@@ -109,7 +109,7 @@ func TestAnthropicForwardRewritesModelMergesParamsSwapsAuth(t *testing.T) {
 	h, cap, cleanup := newTestHandler(t, "")
 	defer cleanup()
 
-	rec := doRequest(t, h, http.MethodPost, "/anthropic/v1/messages",
+	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
 		map[string]string{
 			"x-api-key":         testKey,
 			"anthropic-version": "2023-06-01",
@@ -160,7 +160,7 @@ func TestProtocolMismatchRejected(t *testing.T) {
 	defer cleanup()
 
 	// my-gpt 是 chat_completions，打 anthropic 入口必须 400，不做转化。
-	rec := doRequest(t, h, http.MethodPost, "/anthropic/v1/messages",
+	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
 		map[string]string{"x-api-key": testKey}, `{"model":"my-gpt","messages":[]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -184,7 +184,7 @@ func TestOpenAIChatCompletionsForward(t *testing.T) {
 	h, cap, cleanup := newTestHandler(t, "")
 	defer cleanup()
 
-	rec := doRequest(t, h, http.MethodPost, "/openai/v1/chat/completions",
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey},
 		`{"model":"my-gpt","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusOK {
@@ -209,7 +209,7 @@ func TestGeminiForwardRewritesPathAndStripsKeyQuery(t *testing.T) {
 	defer cleanup()
 
 	rec := doRequest(t, h, http.MethodPost,
-		"/gemini/v1beta/models/my-gemini:generateContent?key="+testKey+"&alt=json",
+		"/v1beta/models/my-gemini:generateContent?key="+testKey+"&alt=json",
 		nil, `{"contents":[{"parts":[{"text":"hi"}]}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
@@ -231,7 +231,7 @@ func TestUnauthorizedRejected(t *testing.T) {
 		{"missing", ""},
 		{"wrong", "nope"},
 	} {
-		rec := doRequest(t, h, http.MethodPost, "/openai/v1/chat/completions",
+		rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 			map[string]string{"Authorization": "Bearer " + tc.key}, `{"model":"my-gpt"}`)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("%s: status = %d, want 401", tc.name, rec.Code)
@@ -253,8 +253,9 @@ func TestListModelsNativeShapes(t *testing.T) {
 		{ID: "my-gemini", ProviderID: "gemini", Protocol: "gemini", Enabled: true},
 	}}
 
-	// openai 族：chat_completions + responses 都列，禁用的不列。
-	rec := doRequest(t, h, http.MethodGet, "/openai/v1/models",
+	// 三族共用 /v1/models:Bearer 放钥按 openai 形态列
+	// (chat_completions + responses 都列,禁用的不列)。
+	rec := doRequest(t, h, http.MethodGet, "/v1/models",
 		map[string]string{"Authorization": "Bearer " + testKey}, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
@@ -272,8 +273,9 @@ func TestListModelsNativeShapes(t *testing.T) {
 		t.Fatalf("openai list = %+v", oai)
 	}
 
-	// anthropic 族：只列 anthropic 协议的启用模型。
-	rec = doRequest(t, h, http.MethodGet, "/anthropic/v1/models",
+	// 同一路径带 x-api-key(Anthropic SDK 原生放钥位置)则按 anthropic
+	// 形态列,只含 anthropic 协议的启用模型。
+	rec = doRequest(t, h, http.MethodGet, "/v1/models",
 		map[string]string{"x-api-key": testKey}, "")
 	var ant struct {
 		Data []struct {
@@ -290,7 +292,7 @@ func TestListModelsNativeShapes(t *testing.T) {
 	}
 
 	// gemini 族：name 带 models/ 前缀。
-	rec = doRequest(t, h, http.MethodGet, "/gemini/v1beta/models?key="+testKey, nil, "")
+	rec = doRequest(t, h, http.MethodGet, "/v1beta/models?key="+testKey, nil, "")
 	var gem struct {
 		Models []struct {
 			Name string `json:"name"`
@@ -308,7 +310,7 @@ func TestUnknownModelAndUpstreamErrorPassthrough(t *testing.T) {
 	h, _, cleanup := newTestHandler(t, "")
 	defer cleanup()
 
-	rec := doRequest(t, h, http.MethodPost, "/openai/v1/chat/completions",
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey}, `{"model":"ghost"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown model status = %d, want 404", rec.Code)
@@ -326,7 +328,7 @@ func TestUpstreamNon2xxPassesThrough(t *testing.T) {
 	}}
 	h := NewHandler(testKey, resolver, nil)
 
-	rec := doRequest(t, h, http.MethodPost, "/openai/v1/chat/completions",
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey}, `{"model":"my-gpt"}`)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429 passthrough", rec.Code)
