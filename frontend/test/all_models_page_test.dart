@@ -67,6 +67,11 @@ void main() {
     expect(find.byTooltip('编辑'), findsOneWidget);
     expect(find.byTooltip('拷贝'), findsOneWidget);
     expect(find.byTooltip('删除'), findsOneWidget);
+    // 排位锁第三(CC Switch 式):编辑 < 拷贝 < 检测 < 删除。
+    double xOf(String tooltip) => tester.getCenter(find.byTooltip(tooltip)).dx;
+    expect(xOf('编辑') < xOf('拷贝'), isTrue);
+    expect(xOf('拷贝') < xOf('检测连通性'), isTrue);
+    expect(xOf('检测连通性') < xOf('删除'), isTrue);
 
     await tester.tap(btn);
     await tester.pumpAndSettle();

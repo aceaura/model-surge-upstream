@@ -353,6 +353,11 @@ class _AllModelsPageState extends State<AllModelsPage> {
                 value: m.enabled,
                 onChanged: (_) => _toggle(m),
               ),
+            _action(Icons.edit_outlined, '编辑',
+                () => _edit(m, accounts, providers), t),
+            _action(Icons.copy_outlined, '拷贝',
+                () => _copy(m, accounts, providers), t),
+            // 第三位(CC Switch 式排位:编辑/拷贝/检测/删除),检测中换行内 spinner。
             if (_testing.contains(m.id))
               const Padding(
                 padding: EdgeInsets.all(12),
@@ -364,10 +369,6 @@ class _AllModelsPageState extends State<AllModelsPage> {
               )
             else
               _action(Icons.network_check, '检测连通性', () => _test(m), t),
-            _action(Icons.edit_outlined, '编辑',
-                () => _edit(m, accounts, providers), t),
-            _action(Icons.copy_outlined, '拷贝',
-                () => _copy(m, accounts, providers), t),
             _action(Icons.delete_outline, '删除', () => _delete(m), t),
           ],
         ),
