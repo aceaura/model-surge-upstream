@@ -16,7 +16,7 @@ abstract final class AppConst {
 class AppTokens extends ThemeExtension<AppTokens> {
   final Color bg, surface, border, ink, dim, faint;
   final Color primary, primaryInk, primarySoft;
-  final Color success, successSoft, warn, danger, dangerSoft, dangerInk;
+  final Color success, successSoft, warn, warnSoft, warnInk, danger, dangerSoft, dangerInk;
   final Color violet;
 
   const AppTokens({
@@ -32,6 +32,8 @@ class AppTokens extends ThemeExtension<AppTokens> {
     required this.success,
     required this.successSoft,
     required this.warn,
+    required this.warnSoft,
+    required this.warnInk,
     required this.danger,
     required this.dangerSoft,
     required this.dangerInk,
@@ -52,6 +54,8 @@ class AppTokens extends ThemeExtension<AppTokens> {
     success: Color(0xFF1E9E62),
     successSoft: Color(0xFFE4F6EC),
     warn: Color(0xFFC98A0B),
+    warnSoft: Color(0xFFFCF3DF),
+    warnInk: Color(0xFF8F6407),
     danger: Color(0xFFC03535),
     dangerSoft: Color(0xFFFBEAEA),
     dangerInk: Color(0xFFA12B2B),
@@ -72,6 +76,8 @@ class AppTokens extends ThemeExtension<AppTokens> {
     success: Color(0xFF3FBF7F),
     successSoft: Color(0xFF15362B),
     warn: Color(0xFFE0A83C),
+    warnSoft: Color(0xFF3A2F16),
+    warnInk: Color(0xFFEFCB85),
     danger: Color(0xFFE26868),
     dangerSoft: Color(0xFF3D2020),
     dangerInk: Color(0xFFF1AFAF),

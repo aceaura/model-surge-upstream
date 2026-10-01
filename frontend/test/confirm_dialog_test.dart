@@ -3,9 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/confirm_dialog.dart';
+import 'package:msu_admin/ui/dialog_band.dart';
 
 void main() {
-  testWidgets('浅红头带:警告图标+深红左对齐标题,取消描边钮,确认红底危险钮',
+  testWidgets('危险级(默认):红带+警告三角+深红标题,取消描边钮,确认红底钮',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
       theme: buildAppTheme(),
@@ -16,16 +17,13 @@ void main() {
 
     final t = buildAppTheme().extension<AppTokens>()!;
 
-    // 头带:dangerSoft 底 + 警告三角 + dangerInk 标题,不再用 DialogHeader 分隔线。
+    // 头带:dangerSoft 底 + 警告三角 + dangerInk 标题,无分隔线。
+    final band = tester.widget<DialogBand>(find.byType(DialogBand));
+    expect(band.icon, Icons.warning_amber_rounded);
+    expect(band.background, t.dangerSoft);
+    expect(band.foreground, t.dangerInk);
     expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
     expect(find.byType(Divider), findsNothing);
-    final band = tester.widget<Container>(find.ancestor(
-      of: find.byIcon(Icons.warning_amber_rounded),
-      matching: find.byType(Container),
-    ).first);
-    expect(band.color, t.dangerSoft);
-    final title = tester.widget<Text>(find.text('删除会话'));
-    expect(title.style?.color, t.dangerInk);
 
     // 取消=描边钮;确认=FilledButton 且底色为主题 danger。
     expect(find.widgetWithText(OutlinedButton, '取消'), findsOneWidget);
@@ -33,6 +31,31 @@ void main() {
     expect(confirm, findsOneWidget);
     final btn = tester.widget<FilledButton>(confirm);
     expect(btn.style?.backgroundColor?.resolve({}), t.danger);
+  });
+
+  testWidgets('警示级:橙带+圆形叹号+橙底确认钮', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: const Scaffold(
+        body: ConfirmDialog(
+          title: '清空日志',
+          message: '界面上已展示的内容一并消失。',
+          confirmLabel: '清空',
+          severity: ConfirmSeverity.warning,
+        ),
+      ),
+    ));
+
+    final t = buildAppTheme().extension<AppTokens>()!;
+
+    final band = tester.widget<DialogBand>(find.byType(DialogBand));
+    expect(band.icon, Icons.error_outline);
+    expect(band.background, t.warnSoft);
+    expect(band.foreground, t.warnInk);
+
+    final btn = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '清空'));
+    expect(btn.style?.backgroundColor?.resolve({}), t.warn);
   });
 
   testWidgets('取消回传 false,确认回传 true', (tester) async {

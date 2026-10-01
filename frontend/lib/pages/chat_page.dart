@@ -5,7 +5,7 @@ import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/confirm_dialog.dart';
-import '../ui/dialog_header.dart';
+import '../ui/dialog_band.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import '../ui/styled_dropdown.dart';
@@ -175,6 +175,7 @@ class _ChatPageState extends State<ChatPage> {
         title: '清除消息',
         message: '将清除当前会话的全部消息，会话本身保留。',
         confirmLabel: '清除',
+        severity: ConfirmSeverity.warning,
       ),
     );
     if (ok != true) return;
@@ -570,9 +571,19 @@ class _RenameDialogState extends State<_RenameDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
     return AlertDialog(
+      // 常规级(非破坏):与确认弹窗同构的色带头,只换中性配色。
+      clipBehavior: Clip.antiAlias,
       titlePadding: EdgeInsets.zero,
-      title: const DialogHeader(title: '重命名会话'),
+      contentPadding: const EdgeInsets.fromLTRB(22, 16, 22, 4),
+      actionsPadding: const EdgeInsets.fromLTRB(22, 14, 22, 17),
+      title: DialogBand(
+        title: '重命名会话',
+        icon: Icons.edit_outlined,
+        background: t.bg,
+        foreground: t.dim,
+      ),
       content: SizedBox(
         width: 420,
         child: Form(
@@ -591,7 +602,7 @@ class _RenameDialogState extends State<_RenameDialog> {
         ),
       ),
       actions: [
-        TextButton(
+        OutlinedButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('取消')),
         FilledButton(

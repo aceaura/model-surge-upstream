@@ -169,6 +169,7 @@ class _LogsPageState extends State<LogsPage> {
         title: '清空日志',
         message: '将清空服务端缓冲中本次运行的日志，界面上已展示的内容一并消失。',
         confirmLabel: '清空',
+        severity: ConfirmSeverity.warning,
       ),
     );
     if (ok != true) return;
