@@ -112,6 +112,105 @@ func TestBuildRequestSuffixAndShape(t *testing.T) {
 	}
 }
 
+// TestBuildRequestWithImages 锁定四协议的带图 part 形态：图片在前、文本在后，
+// 纯图消息不产出文本 part；无附件消息仍保持字符串 content（见上方基线用例）。
+func TestBuildRequestWithImages(t *testing.T) {
+	img := ImageAttachment{Mime: "image/png", Data: "aGVsbG8="}
+	hist := []Message{
+		{Role: RoleUser, Content: "看这张图", Attachments: []ImageAttachment{img}},
+		{Role: RoleAssistant, Content: "看到了"},
+		{Role: RoleUser, Attachments: []ImageAttachment{img}}, // 纯图
+	}
+	cases := []struct {
+		protocol string
+		probe    func(t *testing.T, body map[string]any)
+	}{
+		{
+			protocol: provider.ProtocolAnthropic,
+			probe: func(t *testing.T, body map[string]any) {
+				msgs := body["messages"].([]map[string]any)
+				parts := msgs[0]["content"].([]map[string]any)
+				if len(parts) != 2 || parts[0]["type"] != "image" || parts[1]["type"] != "text" {
+					t.Fatalf("content = %#v", parts)
+				}
+				src := parts[0]["source"].(map[string]any)
+				if src["type"] != "base64" || src["media_type"] != "image/png" || src["data"] != "aGVsbG8=" {
+					t.Fatalf("source = %#v", src)
+				}
+				// 助手消息无附件，保持字符串。
+				if msgs[1]["content"] != "看到了" {
+					t.Fatalf("assistant content = %#v", msgs[1]["content"])
+				}
+				// 纯图消息只有 image part。
+				if got := msgs[2]["content"].([]map[string]any); len(got) != 1 {
+					t.Fatalf("纯图 content = %#v", got)
+				}
+			},
+		},
+		{
+			protocol: provider.ProtocolChatCompletions,
+			probe: func(t *testing.T, body map[string]any) {
+				msgs := body["messages"].([]map[string]any)
+				parts := msgs[0]["content"].([]map[string]any)
+				if len(parts) != 2 || parts[0]["type"] != "image_url" || parts[1]["type"] != "text" {
+					t.Fatalf("content = %#v", parts)
+				}
+				url := parts[0]["image_url"].(map[string]any)["url"]
+				if url != "data:image/png;base64,aGVsbG8=" {
+					t.Fatalf("image_url = %v", url)
+				}
+			},
+		},
+		{
+			protocol: provider.ProtocolResponses,
+			probe: func(t *testing.T, body map[string]any) {
+				in := body["input"].([]map[string]any)
+				parts := in[0]["content"].([]map[string]any)
+				if len(parts) != 2 || parts[0]["type"] != "input_image" || parts[1]["type"] != "input_text" {
+					t.Fatalf("content = %#v", parts)
+				}
+				if parts[0]["image_url"] != "data:image/png;base64,aGVsbG8=" {
+					t.Fatalf("image_url = %v", parts[0]["image_url"])
+				}
+				// 无附件消息 content 仍是字符串。
+				if in[1]["content"] != "看到了" {
+					t.Fatalf("assistant content = %#v", in[1]["content"])
+				}
+			},
+		},
+		{
+			protocol: provider.ProtocolGemini,
+			probe: func(t *testing.T, body map[string]any) {
+				contents := body["contents"].([]map[string]any)
+				parts := contents[0]["parts"].([]map[string]any)
+				if len(parts) != 2 {
+					t.Fatalf("parts = %#v", parts)
+				}
+				inline := parts[0]["inline_data"].(map[string]any)
+				if inline["mime_type"] != "image/png" || inline["data"] != "aGVsbG8=" {
+					t.Fatalf("inline_data = %#v", inline)
+				}
+				if parts[1]["text"] != "看这张图" {
+					t.Fatalf("text part = %#v", parts[1])
+				}
+				// 纯图消息不产出 text part。
+				if got := contents[2]["parts"].([]map[string]any); len(got) != 1 {
+					t.Fatalf("纯图 parts = %#v", got)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.protocol, func(t *testing.T) {
+			_, body, err := buildRequest(target(tc.protocol), hist)
+			if err != nil {
+				t.Fatalf("buildRequest err = %v", err)
+			}
+			tc.probe(t, body)
+		})
+	}
+}
+
 // TestBuildRequestUnknownProtocol 保证未知协议走领域错误而非 panic。
 func TestBuildRequestUnknownProtocol(t *testing.T) {
 	if _, _, err := buildRequest(target("nope"), history()); err == nil {

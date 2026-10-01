@@ -8,7 +8,9 @@ package chat
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,13 +33,23 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ImageAttachment 是消息内嵌的一张图片。Data 是不带 data: 前缀的 base64；
+// mime 限于 validateImages 白名单。内嵌落库与「无状态整段重放」自洽：
+// 重放构造上游请求时不需要外部取数。
+type ImageAttachment struct {
+	Mime string `json:"mime"`
+	Data string `json:"data"`
+}
+
 // Message 是一条对话消息。Role 取 user / assistant。
+// Attachments 恒非 nil（无图时为 []），助手消息目前不携带附件。
 type Message struct {
-	ID        int64     `json:"id"`
-	SessionID string    `json:"session_id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int64             `json:"id"`
+	SessionID   string            `json:"session_id"`
+	Role        string            `json:"role"`
+	Content     string            `json:"content"`
+	Attachments []ImageAttachment `json:"attachments"`
+	CreatedAt   time.Time         `json:"created_at"`
 }
 
 const (
@@ -49,7 +61,51 @@ const (
 
 	// 手工改名上限：侧栏行宽有限，再长截断后也读不全。
 	maxTitleRunes = 40
+
+	// 单条消息的图片上限与单张解码后大小上限。张数取主流视觉模型的
+	// 常见下限，4 MB 与 Anthropic 单图上限对齐（base64 约 5.3 MB）。
+	maxImagesPerMessage = 4
+	maxImageBytes       = 4 << 20
 )
+
+// imageMimes 取四协议图片类型的交集，放行即可保证各家都能消费。
+var imageMimes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/webp": true,
+	"image/gif":  true,
+}
+
+// validateImages 校验待发消息：文本与图片不可同空（纯图可发）；
+// 图片限张数、限 mime 白名单，base64 须可解码且解码后限大小。
+func validateImages(content string, images []ImageAttachment) error {
+	if content == "" && len(images) == 0 {
+		return apperr.New(apperr.InvalidRequest, "message content is required")
+	}
+	if len(images) > maxImagesPerMessage {
+		return apperr.New(apperr.InvalidRequest,
+			fmt.Sprintf("too many images (max %d)", maxImagesPerMessage))
+	}
+	for i, img := range images {
+		if !imageMimes[img.Mime] {
+			return apperr.New(apperr.InvalidRequest,
+				fmt.Sprintf("image %d has unsupported mime %q", i+1, img.Mime))
+		}
+		raw, err := base64.StdEncoding.DecodeString(img.Data)
+		if err != nil {
+			return apperr.New(apperr.InvalidRequest,
+				fmt.Sprintf("image %d is not valid base64", i+1))
+		}
+		if len(raw) == 0 {
+			return apperr.New(apperr.InvalidRequest, fmt.Sprintf("image %d is empty", i+1))
+		}
+		if len(raw) > maxImageBytes {
+			return apperr.New(apperr.InvalidRequest,
+				fmt.Sprintf("image %d exceeds %d MB", i+1, maxImageBytes>>20))
+		}
+	}
+	return nil
+}
 
 type Repo struct {
 	pool *pgxpool.Pool
@@ -135,7 +191,7 @@ func (r *Repo) DeleteSession(ctx context.Context, id string) error {
 
 func (r *Repo) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, session_id, role, content, created_at FROM chat_messages
+		`SELECT id, session_id, role, content, attachments, created_at FROM chat_messages
 		 WHERE session_id=$1 ORDER BY id ASC`, sessionID)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.StorageError, "list chat messages", err)
@@ -144,8 +200,15 @@ func (r *Repo) ListMessages(ctx context.Context, sessionID string) ([]Message, e
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var atts []byte
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &atts, &m.CreatedAt); err != nil {
 			return nil, apperr.Wrap(apperr.StorageError, "scan chat message", err)
+		}
+		m.Attachments = []ImageAttachment{}
+		if len(atts) > 0 {
+			if err := json.Unmarshal(atts, &m.Attachments); err != nil {
+				return nil, apperr.Wrap(apperr.StorageError, "decode message attachments", err)
+			}
 		}
 		out = append(out, m)
 	}
@@ -163,17 +226,28 @@ func (r *Repo) ClearMessages(ctx context.Context, sessionID string) error {
 }
 
 // append 落一条消息并刷新会话的 updated_at；首条用户消息顺带定标题。
-func (r *Repo) append(ctx context.Context, sessionID, role, content string) (Message, error) {
+// 纯图消息没有文本可截，标题退为「[图片]」避免被置空。
+func (r *Repo) append(ctx context.Context, sessionID, role, content string, attachments []ImageAttachment) (Message, error) {
 	now := time.Now().UTC()
+	if attachments == nil {
+		attachments = []ImageAttachment{}
+	}
+	attsJSON, err := json.Marshal(attachments)
+	if err != nil {
+		return Message{}, apperr.Wrap(apperr.InvalidJSON, "encode message attachments", err)
+	}
 	var id int64
-	err := r.pool.QueryRow(ctx,
-		`INSERT INTO chat_messages (session_id, role, content, created_at)
-		 VALUES ($1,$2,$3,$4) RETURNING id`, sessionID, role, content, now).Scan(&id)
+	err = r.pool.QueryRow(ctx,
+		`INSERT INTO chat_messages (session_id, role, content, attachments, created_at)
+		 VALUES ($1,$2,$3,$4,$5) RETURNING id`, sessionID, role, content, attsJSON, now).Scan(&id)
 	if err != nil {
 		return Message{}, apperr.Wrap(apperr.StorageError, "append chat message", err)
 	}
 	if role == RoleUser {
 		title := truncate(content, titleRunes)
+		if title == "" {
+			title = "[图片]"
+		}
 		_, _ = r.pool.Exec(ctx,
 			`UPDATE chat_sessions SET updated_at=$2,
 				title = CASE WHEN title = '' OR title = '新对话' THEN $3 ELSE title END
@@ -181,7 +255,7 @@ func (r *Repo) append(ctx context.Context, sessionID, role, content string) (Mes
 	} else {
 		_, _ = r.pool.Exec(ctx, `UPDATE chat_sessions SET updated_at=$2 WHERE id=$1`, sessionID, now)
 	}
-	return Message{ID: id, SessionID: sessionID, Role: role, Content: content, CreatedAt: now}, nil
+	return Message{ID: id, SessionID: sessionID, Role: role, Content: content, Attachments: attachments, CreatedAt: now}, nil
 }
 
 // setModel 记录会话最近使用的模型（界面选择器回显）。
@@ -270,10 +344,11 @@ func (s *Service) ClearMessages(ctx context.Context, id string) error {
 }
 
 // Send 追加用户消息 → 带整段历史上游补全 → 追加助手回复。
-// 上游失败时用户消息已落库（对话页可见自己发出去的话），错误原样返回。
-func (s *Service) Send(ctx context.Context, sessionID, modelID, content string) ([]Message, error) {
-	if content == "" {
-		return nil, apperr.New(apperr.InvalidRequest, "message content is required")
+// images 为用户消息内嵌的图片（可为空）。上游失败时用户消息已落库
+// （对话页可见自己发出去的话），错误原样返回。
+func (s *Service) Send(ctx context.Context, sessionID, modelID, content string, images []ImageAttachment) ([]Message, error) {
+	if err := validateImages(content, images); err != nil {
+		return nil, err
 	}
 	if _, err := s.repo.GetSession(ctx, sessionID); err != nil {
 		return nil, err
@@ -286,7 +361,7 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content string) 
 	if err != nil {
 		return nil, err
 	}
-	user, err := s.repo.append(ctx, sessionID, RoleUser, content)
+	user, err := s.repo.append(ctx, sessionID, RoleUser, content, images)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +389,7 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content string) 
 			fmt.Sprintf("session=%s model=%s upstream failed: %v", sessionID, modelID, err))
 		return nil, err
 	}
-	if _, err := s.repo.append(ctx, sessionID, RoleAssistant, reply); err != nil {
+	if _, err := s.repo.append(ctx, sessionID, RoleAssistant, reply, nil); err != nil {
 		return nil, err
 	}
 	if err := s.repo.setModel(ctx, sessionID, modelID); err != nil {

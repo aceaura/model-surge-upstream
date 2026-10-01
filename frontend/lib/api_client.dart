@@ -323,16 +323,22 @@ class ApiClient {
       _send('DELETE', '/admin/chat/sessions/$id/messages');
 
   /// 发送一轮对话：用户消息落库 → 服务端带上游补全 → 返回整段消息。
+  /// images 为内嵌图片附件（base64，纯图消息 content 可为空）。
   /// 超时放宽到 200s：长回复模型的整轮补全远超默认 15s。
   Future<List<ChatMessage>> sendChatMessage(
     String id, {
     required String modelId,
     required String content,
+    List<ChatAttachment> images = const [],
   }) async {
     final body = await _send(
       'POST',
       '/admin/chat/sessions/$id/messages',
-      body: {'model_id': modelId, 'content': content},
+      body: {
+        'model_id': modelId,
+        'content': content,
+        if (images.isNotEmpty) 'images': images.map((e) => e.toJson()).toList(),
+      },
       timeout: const Duration(seconds: 200),
     );
     return (body['messages'] as List<dynamic>? ?? const [])

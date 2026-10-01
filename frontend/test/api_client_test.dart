@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:msu_admin/api_client.dart';
+import 'package:msu_admin/models.dart';
 
 ApiClient clientReturning(
   int status,
@@ -227,6 +228,53 @@ void main() {
     expect(res.statusCode, 401);
     expect(res.latencyMs, 87);
     expect(res.error, contains('401'));
+  });
+
+  test('sendChatMessage encodes images and omits the field when empty',
+      () async {
+    Map<String, dynamic>? withImages;
+    final c1 = clientReturning(200, '{"messages":[]}',
+        inspect: (req) =>
+            withImages = jsonDecode(utf8.decode(req.bodyBytes)));
+    await c1.sendChatMessage('s1',
+        modelId: 'm', content: '看图', images: const [
+          ChatAttachment(mime: 'image/png', data: 'aGVsbG8='),
+        ]);
+    expect(withImages, {
+      'model_id': 'm',
+      'content': '看图',
+      'images': [
+        {'mime': 'image/png', 'data': 'aGVsbG8='},
+      ],
+    });
+
+    // 无图请求体保持旧形态：不带 images 键。
+    Map<String, dynamic>? plain;
+    final c2 = clientReturning(200, '{"messages":[]}',
+        inspect: (req) => plain = jsonDecode(utf8.decode(req.bodyBytes)));
+    await c2.sendChatMessage('s1', modelId: 'm', content: '纯文本');
+    expect(plain, {'model_id': 'm', 'content': '纯文本'});
+  });
+
+  test('ChatMessage parses attachments, defaulting to empty list', () async {
+    final client = clientReturning(200, jsonEncode({
+      'messages': [
+        {
+          'id': 1,
+          'role': 'user',
+          'content': '看图',
+          'attachments': [
+            {'mime': 'image/png', 'data': 'aGVsbG8='},
+          ],
+          'created_at': '2026-10-01T08:00:00Z',
+        },
+        {'id': 2, 'role': 'assistant', 'content': '看到了'},
+      ],
+    }));
+    final msgs = await client.sendChatMessage('s1', modelId: 'm', content: 'x');
+    expect(msgs[0].attachments.single.mime, 'image/png');
+    expect(msgs[0].attachments.single.data, 'aGVsbG8=');
+    expect(msgs[1].attachments, isEmpty, reason: '老响应无 attachments 字段');
   });
 }
 

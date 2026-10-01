@@ -90,13 +90,13 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 		body = map[string]any{
 			"model":      target.NativeModel,
 			"max_tokens": 2048,
-			"messages":   anthropicMessages(history),
+			"messages":   messageList(history, anthropicContent),
 		}
 	case provider.ProtocolChatCompletions:
 		suffix = "/v1/chat/completions"
 		body = map[string]any{
 			"model":    target.NativeModel,
-			"messages": anthropicMessages(history), // 形态与 chat/completions 相同：role+content
+			"messages": messageList(history, chatCompletionsContent), // 骨架同为 role+content，带图 part 形态不同
 		}
 	case provider.ProtocolResponses:
 		suffix = "/v1/responses"
@@ -118,14 +118,61 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 	return suffix, body, nil
 }
 
-// anthropicMessages 生成 [{role, content}] 形态。user/assistant 交替
-// 由对话本身保证（发送一轮即追加两条），不做额外规整。
-func anthropicMessages(history []Message) []map[string]any {
+// messageList 生成 [{role, content}] 形态；content 由 perMessage 决定。
+// user/assistant 交替由对话本身保证（发送一轮即追加两条），不做额外规整。
+func messageList(history []Message, perMessage func(Message) any) []map[string]any {
 	out := make([]map[string]any, 0, len(history))
 	for _, m := range history {
-		out = append(out, map[string]any{"role": m.Role, "content": m.Content})
+		out = append(out, map[string]any{"role": m.Role, "content": perMessage(m)})
 	}
 	return out
+}
+
+// 各协议的 per-message content 构造共享同一条基线：
+// 无附件严格保持字符串形态（现有行为即回归基线）；有附件时产出 part 数组，
+// 图片在前、文本在后，文本为空则不产出文本 part。助手消息不携带附件，
+// 天然不走 part 路径。
+func anthropicContent(m Message) any {
+	if len(m.Attachments) == 0 {
+		return m.Content
+	}
+	parts := make([]map[string]any, 0, len(m.Attachments)+1)
+	for _, img := range m.Attachments {
+		parts = append(parts, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": img.Mime,
+				"data":       img.Data,
+			},
+		})
+	}
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	return parts
+}
+
+func chatCompletionsContent(m Message) any {
+	if len(m.Attachments) == 0 {
+		return m.Content
+	}
+	parts := make([]map[string]any, 0, len(m.Attachments)+1)
+	for _, img := range m.Attachments {
+		parts = append(parts, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": dataURL(img)},
+		})
+	}
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	return parts
+}
+
+// dataURL 把内嵌图片编成 data URL（OpenAI 两族的图片引用形态）。
+func dataURL(img ImageAttachment) string {
+	return "data:" + img.Mime + ";base64," + img.Data
 }
 
 func responsesInput(history []Message) []map[string]any {
@@ -134,13 +181,31 @@ func responsesInput(history []Message) []map[string]any {
 		out = append(out, map[string]any{
 			"type":    "message",
 			"role":    m.Role,
-			"content": m.Content,
+			"content": responsesContent(m),
 		})
 	}
 	return out
 }
 
+func responsesContent(m Message) any {
+	if len(m.Attachments) == 0 {
+		return m.Content
+	}
+	parts := make([]map[string]any, 0, len(m.Attachments)+1)
+	for _, img := range m.Attachments {
+		parts = append(parts, map[string]any{
+			"type":      "input_image",
+			"image_url": dataURL(img),
+		})
+	}
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "input_text", "text": m.Content})
+	}
+	return parts
+}
+
 // geminiContents 的角色名是 user/model，assistant 需改写。
+// 无附件保持单 text part 的现有形态；有附件时 inline_data 在前、文本在后。
 func geminiContents(history []Message) []map[string]any {
 	out := make([]map[string]any, 0, len(history))
 	for _, m := range history {
@@ -148,9 +213,18 @@ func geminiContents(history []Message) []map[string]any {
 		if m.Role == RoleAssistant {
 			role = "model"
 		}
+		parts := make([]map[string]any, 0, len(m.Attachments)+1)
+		for _, img := range m.Attachments {
+			parts = append(parts, map[string]any{
+				"inline_data": map[string]any{"mime_type": img.Mime, "data": img.Data},
+			})
+		}
+		if m.Content != "" || len(parts) == 0 {
+			parts = append(parts, map[string]any{"text": m.Content})
+		}
 		out = append(out, map[string]any{
 			"role":  role,
-			"parts": []map[string]any{{"text": m.Content}},
+			"parts": parts,
 		})
 	}
 	return out

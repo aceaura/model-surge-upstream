@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON chat_messages(session_id);
 
+-- 图片附件：base64 内嵌 JSONB（[{mime,data}]），空数组表示纯文本消息。
+-- 已存在的库补列：CREATE TABLE IF NOT EXISTS 不会改旧表结构。
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]';
+
 -- 用量统计：每次上游请求的四桶 token 明细（输入/输出/缓存读取/缓存写入）。
 -- 转发面与对话面共用，source 区分来源。input_semantics 记录该行的输入语义：
 -- 1=输入含缓存（OpenAI 两族/Gemini），2=输入已是净输入（Anthropic）；

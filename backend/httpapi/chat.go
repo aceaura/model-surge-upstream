@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/chat"
 )
 
 func (h handler) listChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -65,9 +66,13 @@ func (h handler) clearChatMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handler) sendChatMessage(w http.ResponseWriter, r *http.Request) {
+	// 图片以 base64 内嵌进 body，放宽到 32 MB 兜底；
+	// 业务级张数/大小/mime 校验在 chat.validateImages。
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
 	var in struct {
-		ModelID string `json:"model_id"`
-		Content string `json:"content"`
+		ModelID string                 `json:"model_id"`
+		Content string                 `json:"content"`
+		Images  []chat.ImageAttachment `json:"images"`
 	}
 	if ok := decodeBody(w, r, &in); !ok {
 		return
@@ -76,7 +81,7 @@ func (h handler) sendChatMessage(w http.ResponseWriter, r *http.Request) {
 		writeCode(w, apperr.InvalidRequest, "model_id is required")
 		return
 	}
-	msgs, err := h.Chat.Send(r.Context(), r.PathValue("id"), in.ModelID, in.Content)
+	msgs, err := h.Chat.Send(r.Context(), r.PathValue("id"), in.ModelID, in.Content, in.Images)
 	if err != nil {
 		writeError(w, err)
 		return

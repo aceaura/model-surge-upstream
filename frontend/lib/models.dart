@@ -301,24 +301,45 @@ class ChatSession {
       );
 }
 
-/// 一条对话消息。role 取 user / assistant。
+/// 消息内嵌的一张图片：mime 限 png/jpeg/webp/gif，
+/// data 是不带 data: 前缀的 base64（服务端内嵌落库，随消息内联返回）。
+class ChatAttachment {
+  const ChatAttachment({required this.mime, required this.data});
+
+  final String mime;
+  final String data;
+
+  factory ChatAttachment.fromJson(Map<String, dynamic> json) => ChatAttachment(
+        mime: json['mime'] as String? ?? '',
+        data: json['data'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {'mime': mime, 'data': data};
+}
+
+/// 一条对话消息。role 取 user / assistant。attachments 无图时为空列表。
 class ChatMessage {
   const ChatMessage({
     required this.id,
     required this.role,
     required this.content,
+    this.attachments = const [],
     required this.createdAt,
   });
 
   final int id;
   final String role;
   final String content;
+  final List<ChatAttachment> attachments;
   final DateTime createdAt;
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
         id: json['id'] as int? ?? 0,
         role: json['role'] as String? ?? '',
         content: json['content'] as String? ?? '',
+        attachments: (json['attachments'] as List<dynamic>? ?? const [])
+            .map((e) => ChatAttachment.fromJson(e as Map<String, dynamic>))
+            .toList(),
         createdAt:
             DateTime.tryParse(json['created_at'] as String? ?? '') ??
                 DateTime.now(),

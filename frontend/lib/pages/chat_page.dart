@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api_client.dart';
+import '../attachments/image_source.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../ui/confirm_dialog.dart';
@@ -12,11 +15,16 @@ import '../ui/styled_dropdown.dart';
 
 /// 对话页：左侧会话列表（新对话/切换/删除），右侧消息流 + 模型选择 + 输入框。
 /// 补全走服务端：按所选模型的出站协议透传上游，整段历史落库可回看。
+/// 输入区支持图片附件：回形针选图或 Ctrl+V 粘贴截图，随消息内嵌上行。
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key, required this.client, this.onOpenSettings});
+  ChatPage({super.key, required this.client, this.onOpenSettings, ImageSource? imageSource})
+      : imageSource = imageSource ?? SystemImageSource();
 
   final ApiClient client;
   final VoidCallback? onOpenSettings;
+
+  /// 取图途径：生产用系统实现，widget 测试注入 fake。
+  final ImageSource imageSource;
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -30,6 +38,7 @@ class _ChatPageState extends State<ChatPage> {
   List<ChatSession> _sessions = [];
   List<ChatMessage> _messages = [];
   List<UpstreamModel> _models = [];
+  List<PendingImage> _pending = [];
   String? _sessionId;
   String? _modelId;
   bool _loadingSessions = true;
@@ -52,10 +61,21 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// Enter 发送、Shift+Enter 换行：与常见聊天客户端一致。
+  /// Ctrl+V 先问剪贴板有没有图：有图收为附件，无图回落文本粘贴。
   KeyEventResult _onInputKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent ||
-        (event.logicalKey != LogicalKeyboardKey.enter &&
-            event.logicalKey != LogicalKeyboardKey.numpadEnter)) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.keyV) {
+      final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+      final ctrl = pressed.contains(LogicalKeyboardKey.controlLeft) ||
+          pressed.contains(LogicalKeyboardKey.controlRight);
+      if (ctrl) {
+        _pasteClipboard();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.enter &&
+        event.logicalKey != LogicalKeyboardKey.numpadEnter) {
       return KeyEventResult.ignored;
     }
     final pressed = HardwareKeyboard.instance.logicalKeysPressed;
@@ -65,6 +85,65 @@ class _ChatPageState extends State<ChatPage> {
     _send();
     return KeyEventResult.handled;
   }
+
+  /// 粘贴：读图是异步的，先吞掉事件；剪贴板无图时手动补文本粘贴。
+  Future<void> _pasteClipboard() async {
+    try {
+      final img = await widget.imageSource.readClipboard();
+      if (img != null) {
+        if (mounted) _addPending([img]);
+        return;
+      }
+    } catch (_) {
+      // 读图插件失败不阻断文本粘贴。
+    }
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (!mounted || text == null || text.isEmpty) return;
+    final sel = _input.selection;
+    final start = sel.isValid && sel.start >= 0 ? sel.start : _input.text.length;
+    final end = sel.isValid && sel.end >= 0 ? sel.end : _input.text.length;
+    _input.value = TextEditingValue(
+      text: _input.text.replaceRange(start, end, text),
+      selection: TextSelection.collapsed(offset: start + text.length),
+    );
+  }
+
+  Future<void> _pickImages() async {
+    try {
+      final imgs = await widget.imageSource.pickFiles();
+      if (mounted) _addPending(imgs);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  /// 前端先拦一道超限（与服务端 validateImages 同规则），
+  /// 避免把注定失败的请求发出去。
+  void _addPending(List<PendingImage> imgs) {
+    if (imgs.isEmpty) return;
+    final room = maxPendingImages - _pending.length;
+    final accepted = <PendingImage>[];
+    var rejected = 0;
+    for (final img in imgs) {
+      if (img.bytes.isEmpty ||
+          img.bytes.length > maxImageBytes ||
+          accepted.length >= room) {
+        rejected++;
+        continue;
+      }
+      accepted.add(img);
+    }
+    if (accepted.isNotEmpty) {
+      setState(() => _pending = [..._pending, ...accepted]);
+    }
+    if (rejected > 0) {
+      showError(context,
+          '已忽略 $rejected 张图片：最多 $maxPendingImages 张、单张不超过 4 MB');
+    }
+  }
+
+  void _removePending(int i) => setState(() => _pending.removeAt(i));
 
   Future<void> _load() async {
     setState(() {
@@ -211,7 +290,8 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _send() async {
     final text = _input.text.trim();
-    if (text.isEmpty || _sending) return;
+    // 纯图可发：文本与附件不可同空（与服务端 validateImages 同规则）。
+    if ((text.isEmpty && _pending.isEmpty) || _sending) return;
     final model = _modelId;
     if (model == null) {
       showError(context, '没有可用模型：先到模型页启用一个模型');
@@ -232,13 +312,22 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
     }
+    final pending = List<PendingImage>.of(_pending);
     setState(() {
       _sending = true;
       _input.clear();
+      _pending = [];
     });
     try {
-      final msgs = await widget.client.sendChatMessage(id,
-          modelId: model, content: text);
+      final msgs = await widget.client.sendChatMessage(
+        id,
+        modelId: model,
+        content: text,
+        images: [
+          for (final p in pending)
+            ChatAttachment(mime: p.mime, data: base64Encode(p.bytes)),
+        ],
+      );
       if (!mounted) return;
       final sessions = await widget.client.listChatSessions();
       if (!mounted) return;
@@ -251,7 +340,10 @@ class _ChatPageState extends State<ChatPage> {
       _inputFocus.requestFocus();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _sending = false);
+      setState(() {
+        _sending = false;
+        _pending = pending;
+      });
       showError(context, e);
       // 用户消息已落库：失败也重拉消息与会话，让发出去的话和自动标题
       // 同步上屏，避免界面上「看不到自己发了什么」。
@@ -262,7 +354,7 @@ class _ChatPageState extends State<ChatPage> {
       } catch (_) {
         // 会话列表刷新失败不叠加第二个错误提示。
       }
-      // 输入还回去：失败不该让用户重打一遍。
+      // 输入与附件还回去：失败不该让用户重打一遍、重贴一遍。
       _input.text = text;
       _input.selection =
           TextSelection.collapsed(offset: _input.text.length);
@@ -386,14 +478,26 @@ class _ChatPageState extends State<ChatPage> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: ListView(
-            controller: _scroll,
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
-            children: [
-              for (final m in _messages) _bubble(t, m),
-              if (_sending) _thinking(t),
-            ],
-          ),
+          child: _messages.isEmpty && !_sending
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.forum_outlined, size: 40, color: t.faint),
+                      const SizedBox(height: 12),
+                      Text('向当前模型提问，支持 Ctrl+V 粘贴截图',
+                          style: TextStyle(fontSize: 13, color: t.faint)),
+                    ],
+                  ),
+                )
+              : ListView(
+                  controller: _scroll,
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+                  children: [
+                    for (final m in _messages) _bubble(t, m),
+                    if (_sending) _thinking(t),
+                  ],
+                ),
         ),
         _inputBar(t),
       ],
@@ -402,6 +506,19 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _bubble(AppTokens t, ChatMessage m) {
     final isUser = m.role == 'user';
+    // 助手回复按 ``` 围块切出代码段；用户气泡只渲染图片+纯文本。
+    final body = isUser
+        ? [
+            if (m.attachments.isNotEmpty) _messageImages(t, m),
+            if (m.content.isNotEmpty) _plainText(t, m.content, isUser: true),
+          ]
+        : [
+            for (final seg in _splitSegments(m.content))
+              if (seg.lang == null)
+                _plainText(t, seg.text, isUser: false)
+              else
+                _codeBlock(t, seg),
+          ];
     final bubble = Container(
       margin: const EdgeInsets.only(bottom: 14),
       constraints: const BoxConstraints(maxWidth: 620),
@@ -416,18 +533,146 @@ class _ChatPageState extends State<ChatPage> {
           bottomRight: Radius.circular(isUser ? 4 : 12),
         ),
       ),
-      child: SelectableText(
-        m.content,
-        style: TextStyle(
-          fontSize: 13.5,
-          height: 1.6,
-          color: isUser ? t.primaryInk : t.ink,
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: body,
       ),
     );
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: bubble,
+    );
+  }
+
+  Widget _plainText(AppTokens t, String text, {required bool isUser}) {
+    return SelectableText(
+      text,
+      style: TextStyle(
+        fontSize: 13.5,
+        height: 1.6,
+        color: isUser ? t.primaryInk : t.ink,
+      ),
+    );
+  }
+
+  /// 用户消息里的图片：圆角限宽，点击弹原图预览。
+  Widget _messageImages(AppTokens t, ChatMessage m) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: m.content.isEmpty ? 0 : 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [for (final a in m.attachments) _attachmentView(t, a)],
+      ),
+    );
+  }
+
+  Widget _attachmentView(AppTokens t, ChatAttachment a) {
+    final bytes = _decodeImage(a.data);
+    if (bytes == null) {
+      return Container(
+        width: 120,
+        height: 60,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: t.bg,
+          border: Border.all(color: t.border),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text('图片已损坏', style: TextStyle(fontSize: 11, color: t.faint)),
+      );
+    }
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => _previewImage(bytes),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 300, maxHeight: 220),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.memory(bytes, fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _previewImage(Uint8List bytes) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 900, maxHeight: 680),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(bytes, fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 代码块：t.bg 底 + 描边 + radiusCtrl 圆角，头行语言标签 + 复制钮。
+  Widget _codeBlock(AppTokens t, _Segment seg) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: t.bg,
+        border: Border.all(color: t.border),
+        borderRadius: BorderRadius.circular(AppConst.radiusCtrl),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 4, 6, 4),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: t.border)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    seg.lang!.isEmpty ? 'code' : seg.lang!,
+                    style: TextStyle(fontSize: 11, color: t.faint),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '复制',
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: seg.text));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('已复制代码')),
+                    );
+                  },
+                  icon: Icon(Icons.copy_all_rounded, size: 13, color: t.faint),
+                  splashRadius: 13,
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 22, minHeight: 22),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: SelectableText(
+              seg.text,
+              style: TextStyle(
+                fontFamily: AppConst.fontMono,
+                fontSize: 12.5,
+                height: 1.55,
+                color: t.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -464,8 +709,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _inputBar(AppTokens t) {
-    // KiroaaS 式输入卡：圆角描边容器内，模型选择收成左上小胶囊，
-    // 输入框去边框贴底，发送键为圆形图标钮。
+    // 方案A 输入卡：缩略图 strip（有附件时）→ 无边框输入框 →
+    // 底部工具行（模型胶囊 + 回形针 + 圆形发送钮同排）。
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
       child: Container(
@@ -479,49 +724,86 @@ class _ChatPageState extends State<ChatPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: SizedBox(
-                width: 220,
-                child: StyledDropdown(
-                  value: _modelId,
-                  options: _models.map((m) => m.id).toList(),
-                  showValue: _modelId != null,
-                  dropUp: true,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    filled: true,
-                    fillColor: t.bg,
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                  onChanged: (v) => setState(() => _modelId = v),
+            if (_pending.isNotEmpty) ...[
+              SizedBox(
+                height: 62,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.only(top: 6),
+                  children: [
+                    for (var i = 0; i < _pending.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: _PendingThumb(
+                          t: t,
+                          image: _pending[i],
+                          onRemove: () => _removePending(i),
+                        ),
+                      ),
+                  ],
                 ),
               ),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: _input,
+              focusNode: _inputFocus,
+              minLines: 1,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                isCollapsed: true,
+                hintText: '输入消息… Enter 发送，Shift+Enter 换行',
+              ),
             ),
-            const SizedBox(height: 6),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _input,
-                    focusNode: _inputFocus,
-                    minLines: 1,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.newline,
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      isCollapsed: true,
-                      hintText: '输入消息… Enter 发送，Shift+Enter 换行',
+            if (_pending.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 0, 0),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, size: 12, color: t.faint),
+                    const SizedBox(width: 4),
+                    Text(
+                      '图片需模型支持视觉输入，单张不超过 4 MB，最多 $maxPendingImages 张',
+                      style: TextStyle(fontSize: 11, color: t.faint),
                     ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                SizedBox(
+                  width: 200,
+                  child: StyledDropdown(
+                    value: _modelId,
+                    options: _models.map((m) => m.id).toList(),
+                    showValue: _modelId != null,
+                    dropUp: true,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      filled: true,
+                      fillColor: t.bg,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    onChanged: (v) => setState(() => _modelId = v),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const Spacer(),
+                IconButton(
+                  tooltip: '添加图片（也可 Ctrl+V 粘贴截图）',
+                  onPressed: _sending ? null : _pickImages,
+                  icon: Icon(Icons.attach_file_rounded, size: 18, color: t.dim),
+                  splashRadius: 17,
+                  visualDensity: VisualDensity.compact,
+                ),
+                const SizedBox(width: 4),
                 BusyButton(
                   busy: _sending,
                   onPressed: _send,
@@ -536,6 +818,113 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 解码内嵌图片；坏数据返回 null，气泡侧渲染占位而非炸页面。
+Uint8List? _decodeImage(String data) {
+  try {
+    final bytes = base64Decode(data);
+    return bytes.isEmpty ? null : bytes;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 助手回复的分段结果：lang 为 null 是纯文本段，否则是代码段。
+class _Segment {
+  const _Segment.text(this.text) : lang = null;
+  const _Segment.code(this.lang, this.text);
+
+  final String? lang;
+  final String text;
+}
+
+/// 简易 ``` 围块分段器：覆盖「读代码回复」的绝大部分收益，
+/// 不引 markdown 依赖，样式全走 token。未闭合的围块也按代码段收尾。
+List<_Segment> _splitSegments(String content) {
+  final re = RegExp(r'```(\w*)[ \t]*\r?\n([\s\S]*?)(?:```|$)');
+  final out = <_Segment>[];
+  var pos = 0;
+  for (final m in re.allMatches(content)) {
+    final head = content.substring(pos, m.start);
+    if (head.trim().isNotEmpty) out.add(_Segment.text(head.trim()));
+    out.add(_Segment.code(m.group(1) ?? '', (m.group(2) ?? '').trimRight()));
+    pos = m.end;
+  }
+  final tail = content.substring(pos);
+  if (tail.trim().isNotEmpty) out.add(_Segment.text(tail.trim()));
+  if (out.isEmpty) out.add(_Segment.text(content));
+  return out;
+}
+
+/// 待发图片缩略图：56×56 圆角描边，悬停显现右上移除钮
+/// （Opacity+IgnorePointer 手法同 _SessionRow：不占位、不跳高）。
+class _PendingThumb extends StatefulWidget {
+  const _PendingThumb({
+    required this.t,
+    required this.image,
+    required this.onRemove,
+  });
+
+  final AppTokens t;
+  final PendingImage image;
+  final VoidCallback onRemove;
+
+  @override
+  State<_PendingThumb> createState() => _PendingThumbState();
+}
+
+class _PendingThumbState extends State<_PendingThumb> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.t;
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              border: Border.all(color: t.border),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: Image.memory(widget.image.bytes, fit: BoxFit.cover),
+            ),
+          ),
+          Positioned(
+            top: -6,
+            right: -6,
+            child: Opacity(
+              opacity: _hovered ? 1 : 0,
+              child: IgnorePointer(
+                ignoring: !_hovered,
+                child: GestureDetector(
+                  onTap: widget.onRemove,
+                  child: Container(
+                    width: 17,
+                    height: 17,
+                    decoration: BoxDecoration(
+                      color: t.ink,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: t.surface, width: 2),
+                    ),
+                    child: Icon(Icons.close, size: 10, color: t.surface),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
