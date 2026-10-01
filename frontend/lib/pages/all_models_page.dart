@@ -29,6 +29,7 @@ class AllModelsPage extends StatefulWidget {
     required this.onOpenSettings,
     this.searchSeed,
     this.onOpenUsage,
+    this.active = false,
   });
 
   final ApiClient client;
@@ -39,6 +40,10 @@ class AllModelsPage extends StatefulWidget {
 
   /// 点「统计」时通知主壳跳到用量页,并以该模型标识作为过滤器。
   final void Function(UpstreamModel model)? onOpenUsage;
+
+  /// 是否正处于前台(由主壳按当前导航传入)。页在 IndexedStack 里常驻,
+  /// 别处的改动(删账号级联删模型等)不会触发本页重建,重新激活时刷新。
+  final bool active;
 
   @override
   State<AllModelsPage> createState() => _AllModelsPageState();
@@ -59,6 +64,14 @@ class _AllModelsPageState extends State<AllModelsPage> {
   void initState() {
     super.initState();
     widget.searchSeed?.addListener(_onSearchSeed);
+  }
+
+  @override
+  void didUpdateWidget(AllModelsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 重新激活(false→true)时刷新:别处的改动(删账号级联删模型等)
+    // 不会触发常驻页重建,不刷新会在列表里看到已删模型。
+    if (!oldWidget.active && widget.active) _reload();
   }
 
   @override
@@ -85,7 +98,11 @@ class _AllModelsPageState extends State<AllModelsPage> {
     return (models, accounts, providers);
   }
 
-  void _reload() => setState(() => _future = _load());
+  // 块体而非 => 箭头:setState 断言回调不得返回 Future,箭头写法会把
+  // 赋值表达式的 Future 带回去,debug 下每次 _reload 都触发断言。
+  void _reload() => setState(() {
+        _future = _load();
+      });
 
   /// 卡片尾部的小号操作按钮:18 图标 + 弱色(与账号页一致)。
   Widget _action(

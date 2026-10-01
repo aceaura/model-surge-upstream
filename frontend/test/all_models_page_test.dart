@@ -115,4 +115,56 @@ void main() {
     expect(find.textContaining('检测失败'), findsOneWidget);
     expect(find.textContaining('HTTP 401'), findsOneWidget);
   });
+
+  testWidgets('重新激活(active false→true)重新拉取列表,切页回来能看到别处的删改',
+      (tester) async {
+    // 页在 IndexedStack 里常驻:删账号级联删模型后切回模型页,
+    // 必须重拉列表,否则已删模型还挂在列表里。
+    var modelsCalls = 0;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final path = request.url.path;
+        if (path == '/admin/models' && request.method == 'GET') {
+          modelsCalls++;
+        }
+        final Map<String, dynamic> payload;
+        if (path == '/admin/models') {
+          payload = {'models': <dynamic>[]};
+        } else if (path == '/admin/accounts') {
+          payload = {'accounts': <dynamic>[]};
+        } else if (path == '/admin/providers') {
+          payload = {'providers': <dynamic>[]};
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    Widget host(bool active) => MaterialApp(
+          theme: buildAppTheme(),
+          home: Scaffold(
+            body: AllModelsPage(
+                client: client, onOpenSettings: () {}, active: active),
+          ),
+        );
+
+    await tester.pumpWidget(host(false));
+    await tester.pumpAndSettle();
+    expect(modelsCalls, 1); // 首载一次
+
+    await tester.pumpWidget(host(false));
+    await tester.pumpAndSettle();
+    expect(modelsCalls, 1); // 保持后台不重拉
+
+    await tester.pumpWidget(host(true));
+    await tester.pumpAndSettle();
+    expect(modelsCalls, 2); // 激活沿重拉一次
+  });
 }

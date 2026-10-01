@@ -163,6 +163,9 @@ class _AdminShellState extends State<AdminShell> {
           onOpenSettings: _openSettings,
           searchSeed: _modelsSearchSeed,
           onOpenUsage: _openModelUsage,
+          // IndexedStack 常驻:切回本页时按 active 沿刷新一次,
+          // 否则别处改动(删账号级联删模型)在列表里看不到。
+          active: _page == 'models',
         ),
       ),
       _NavItem(
