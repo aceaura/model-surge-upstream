@@ -60,8 +60,8 @@ class _ModelFormState extends State<ModelForm> {
   late final TextEditingController _overrides = TextEditingController(
       text: prettyJson(_source?.overrides ?? const {}));
 
-  // 上下文压缩:模式三选一(passive 被动元数据/error 回错让客户端压缩/
-  // auto 代理自动压缩);阈值按百分比录入(85 = 窗口的 85%),提交时换回比例
+  // 上下文压缩策略:模式三选一(passive 元数据/error 客户端压缩/
+  // auto 上游压缩);阈值按百分比录入(85 = 窗口的 85%),提交时换回比例
   late String _compactMode =
       (_source?.compact['mode'] as String?) ?? 'passive';
   late final TextEditingController _compactThreshold = TextEditingController(
@@ -305,16 +305,16 @@ class _ModelFormState extends State<ModelForm> {
             FormRow2(
               LabeledField(
                 key: const ValueKey('model-compact-mode-field'),
-                label: '上下文压缩',
+                label: '上下文压缩策略',
                 child: StyledDropdownFormField(
                   key: const ValueKey('model-compact-mode'),
                   value: _compactMode,
                   decoration: const InputDecoration(border: OutlineInputBorder()),
                   options: const ['passive', 'error', 'auto'],
                   labelOf: (m) => switch (m) {
-                    'error' => '返回错误（客户端自行压缩）',
-                    'auto' => '代理自动压缩',
-                    _ => '被动元数据（只记录不生效）',
+                    'error' => '客户端压缩',
+                    'auto' => '上游压缩',
+                    _ => '元数据',
                   },
                   onChanged: (v) => setState(() => _compactMode = v!),
                 ),
