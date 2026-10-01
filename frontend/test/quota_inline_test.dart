@@ -88,11 +88,10 @@ void main() {
     expect(find.byIcon(Icons.refresh), findsOneWidget);
     expect(find.byIcon(Icons.schedule), findsOneWidget);
 
-    // 刷新钮与时间文案拉开(CC Switch 时间行 gap-2 + p-1 的口径),
-    // 不贴住状态文字。
+    // 刷新钮贴住时间文案,中间不留空隙。
     final timeRight = tester.getRect(find.text('刚刚')).right;
     final refreshLeft = tester.getRect(find.byIcon(Icons.refresh)).left;
-    expect(refreshLeft - timeRight, greaterThanOrEqualTo(12));
+    expect(refreshLeft - timeRight, lessThanOrEqualTo(1));
 
     // 整块右对齐(CC Switch items-end):时间行右沿与计量行右沿齐平。
     final refreshRowRight = tester.getRect(find.byType(InkWell)).right;
