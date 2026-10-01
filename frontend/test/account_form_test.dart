@@ -136,12 +136,34 @@ void main() {
     expect(fieldText(tester, 'account-name'), 'ds-1-copy');
     expect(fieldText(tester, 'account-base-url'), 'https://ds.example.com',
         reason: '已存覆盖值直接预填');
-    expect(find.textContaining('原密钥不可见（sk-d***efgh），需重新填入'),
-        findsOneWidget);
+    expect(find.textContaining('原密钥不可见（************），需重新填入'),
+        findsOneWidget,
+        reason: '默认全星号,不泄露掩码里的任何字符');
     expect(find.byType(SwitchListTile), findsNothing,
         reason: '启停由列表行开关控制,表单不再展示');
     expect(find.text('创建'), findsOneWidget,
         reason: 'copy is a create, not an edit');
+  });
+
+  testWidgets('edit masks key hint behind asterisks until eye tapped',
+      (tester) async {
+    await pumpForm(tester, editing: account);
+
+    expect(find.textContaining('留空保留原密钥（当前 ************）'),
+        findsOneWidget);
+    expect(find.textContaining('sk-d***efgh'), findsNothing,
+        reason: '未点眼睛前掩码字符一个都不露');
+
+    await tester.tap(find.byTooltip('显示'));
+    await tester.pump();
+    expect(find.textContaining('留空保留原密钥（当前 sk-d***efgh）'),
+        findsOneWidget);
+    expect(find.textContaining('************'), findsNothing);
+
+    await tester.tap(find.byTooltip('隐藏'));
+    await tester.pump();
+    expect(find.textContaining('留空保留原密钥（当前 ************）'),
+        findsOneWidget);
   });
 
   testWidgets('copy falls back to provider default when no override',
