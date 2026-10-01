@@ -218,7 +218,6 @@ class _UsagePageState extends State<UsagePage> {
           // 页头右侧过滤器,仿 CC Switch 使用统计:来源/模型/自动刷新/区间。
           trailing: [
             _filterSelect(
-              t,
               label: _source.isEmpty ? '全部来源' : (_source == 'chat' ? '对话' : '转发'),
               items: const [
                 ('', '全部来源'),
@@ -234,7 +233,6 @@ class _UsagePageState extends State<UsagePage> {
             ),
             const SizedBox(width: 8),
             _filterSelect(
-              t,
               label: _model.isEmpty ? '全部模型' : _model,
               width: 132,
               items: [
@@ -250,7 +248,6 @@ class _UsagePageState extends State<UsagePage> {
             ),
             const SizedBox(width: 8),
             _filterSelect(
-              t,
               icon: Icons.refresh,
               label: _refreshSec <= 0 ? '关闭' : '${_refreshSec}s',
               items: [
@@ -262,7 +259,6 @@ class _UsagePageState extends State<UsagePage> {
             ),
             const SizedBox(width: 8),
             _filterSelect(
-              t,
               icon: Icons.calendar_month_outlined,
               label: _rangeLabels[_range]!,
               items: [
@@ -310,8 +306,7 @@ class _UsagePageState extends State<UsagePage> {
   }
 
   /// 页头下拉过滤器：圆角描边触发器 + 弹出菜单，形态对齐 CC Switch 的 Select。
-  Widget _filterSelect(
-    AppTokens t, {
+  Widget _filterSelect({
     required String label,
     required List<(String, String)> items,
     required String value,
@@ -319,63 +314,13 @@ class _UsagePageState extends State<UsagePage> {
     IconData? icon,
     double width = 104,
   }) {
-    return PopupMenuButton<String>(
-      tooltip: '',
-      padding: EdgeInsets.zero,
-      color: t.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      elevation: 3,
-      offset: const Offset(0, 4),
+    return _FilterSelect(
+      label: label,
+      items: items,
+      value: value,
       onSelected: onSelected,
-      itemBuilder: (context) => [
-        for (final (v, text) in items)
-          PopupMenuItem<String>(
-            value: v,
-            height: 34,
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    text,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: v == value ? FontWeight.w600 : FontWeight.w400,
-                      color: v == value ? t.primaryInk : t.ink,
-                    ),
-                  ),
-                ),
-                if (v == value) Icon(Icons.check, size: 14, color: t.primary),
-              ],
-            ),
-          ),
-      ],
-      child: Container(
-        width: width,
-        height: 34,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        decoration: BoxDecoration(
-          color: t.surface,
-          border: Border.all(color: t.border),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 14, color: t.dim),
-              const SizedBox(width: 6),
-            ],
-            Expanded(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12.5, color: t.ink),
-              ),
-            ),
-            Icon(Icons.expand_more, size: 16, color: t.faint),
-          ],
-        ),
-      ),
+      icon: icon,
+      width: width,
     );
   }
 
@@ -957,4 +902,202 @@ class _TrendPainter extends CustomPainter {
   @override
   bool shouldRepaint(_TrendPainter old) =>
       old.buckets != buckets || old.granularity != granularity;
+}
+
+/// 页头过滤器下拉：描边小按钮触发器，菜单用 Overlay 落在触发器正下方、
+/// 左右缘与触发器对齐(与 StyledDropdown 同形态,仿 CC Switch Select),
+/// 选中项带 primarySoft 圆角色块 + 主色 check,点外部或选中后收起。
+class _FilterSelect extends StatefulWidget {
+  const _FilterSelect({
+    required this.label,
+    required this.items,
+    required this.value,
+    required this.onSelected,
+    this.icon,
+    this.width = 104,
+  });
+
+  final String label;
+  final List<(String, String)> items;
+  final String value;
+  final ValueChanged<String> onSelected;
+  final IconData? icon;
+  final double width;
+
+  @override
+  State<_FilterSelect> createState() => _FilterSelectState();
+}
+
+class _FilterSelectState extends State<_FilterSelect> {
+  final LayerLink _link = LayerLink();
+  final GlobalKey _triggerKey = GlobalKey();
+  OverlayEntry? _entry;
+
+  bool get _open => _entry != null;
+
+  void _toggle() => _open ? _close() : _show();
+
+  void _show() {
+    final box = _triggerKey.currentContext!.findRenderObject() as RenderBox;
+    final t = context.tokens;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    _entry = OverlayEntry(
+      builder: (_) => Stack(children: [
+        // 透明屏障:点外部收菜单
+        Positioned.fill(
+          child: GestureDetector(
+            onTap: _close,
+            behavior: HitTestBehavior.translucent,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        CompositedTransformFollower(
+          link: _link,
+          showWhenUnlinked: false,
+          // 菜单顶缘贴触发器底缘下方 4px,左右缘同宽对齐
+          offset: Offset(0, box.size.height + 4),
+          child: Align(
+            alignment: Alignment.topLeft,
+            // 底色画在 Material 上,InkWell 的 hover 墨水才有附着层
+            child: Container(
+              width: box.size.width,
+              constraints: const BoxConstraints(maxHeight: 320),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: dark ? t.border : const Color(0xFFE3E7EE)),
+                boxShadow: [
+                  BoxShadow(
+                    color: dark
+                        ? Colors.black54
+                        : const Color.fromRGBO(20, 30, 60, .16),
+                    blurRadius: 24,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Material(
+                color: t.surface,
+                borderRadius: BorderRadius.circular(10),
+                clipBehavior: Clip.antiAlias,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (final (v, text) in widget.items) _item(t, v, text),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    );
+    Overlay.of(context).insert(_entry!);
+    setState(() {}); // 触发器聚焦描边随菜单开合切换
+  }
+
+  Widget _item(AppTokens t, String v, String text) {
+    final sel = v == widget.value;
+    // 上下各 2px 空隙:相邻选中/悬停色块不互贴
+    return SizedBox(
+      height: 34,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: InkResponse(
+          borderRadius: BorderRadius.circular(6),
+          highlightShape: BoxShape.rectangle,
+          hoverColor: t.primarySoft,
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          onTap: () {
+            _close();
+            widget.onSelected(v);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: sel
+                ? BoxDecoration(
+                    color: t.primarySoft, borderRadius: BorderRadius.circular(6))
+                : null,
+            child: Row(children: [
+              Expanded(
+                child: Text(
+                  text,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
+                    color: sel ? t.primaryInk : t.ink,
+                  ),
+                ),
+              ),
+              if (sel) Icon(Icons.check, size: 14, color: t.primary),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _close() {
+    if (_entry == null) return;
+    _entry!.remove();
+    _entry = null;
+    setState(() {}); // 触发器描边随菜单开合还原
+  }
+
+  @override
+  void dispose() {
+    _entry?.remove();
+    _entry = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return CompositedTransformTarget(
+      link: _link,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          key: _triggerKey,
+          behavior: HitTestBehavior.opaque,
+          onTap: _toggle,
+          child: Container(
+            width: widget.width,
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: t.surface,
+              // 打开时描边转主色,与输入框聚焦态同语义
+              border: Border.all(color: _open ? t.primary : t.border),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                if (widget.icon != null) ...[
+                  Icon(widget.icon, size: 14, color: t.dim),
+                  const SizedBox(width: 6),
+                ],
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12.5, color: t.ink),
+                  ),
+                ),
+                Icon(Icons.expand_more, size: 16, color: t.faint),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
