@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
-import '../ui/dialog_header.dart';
+import '../ui/confirm_dialog.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import '../ui/styled_dropdown.dart';
@@ -165,18 +165,10 @@ class _LogsPageState extends State<LogsPage> {
   Future<void> _clear() async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        titlePadding: EdgeInsets.zero,
-        title: const DialogHeader(title: '清空日志'),
-        content: const Text('将清空服务端缓冲中本次运行的日志，界面上已展示的内容一并消失。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('清空')),
-        ],
+      builder: (ctx) => const ConfirmDialog(
+        title: '清空日志',
+        message: '将清空服务端缓冲中本次运行的日志，界面上已展示的内容一并消失。',
+        confirmLabel: '清空',
       ),
     );
     if (ok != true) return;

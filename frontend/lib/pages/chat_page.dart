@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../ui/confirm_dialog.dart';
 import '../ui/dialog_header.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
@@ -143,18 +144,9 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _deleteSession(ChatSession s) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        titlePadding: EdgeInsets.zero,
-        title: const DialogHeader(title: '删除会话'),
-        content: Text('将删除「${s.title}」及其全部消息，不可恢复。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除')),
-        ],
+      builder: (ctx) => ConfirmDialog(
+        title: '删除会话',
+        message: '将删除「${s.title}」及其全部消息，不可恢复。',
       ),
     );
     if (ok != true) return;
@@ -179,18 +171,10 @@ class _ChatPageState extends State<ChatPage> {
     if (id == null) return;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        titlePadding: EdgeInsets.zero,
-        title: const DialogHeader(title: '清除消息'),
-        content: const Text('将清除当前会话的全部消息，会话本身保留。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('清除')),
-        ],
+      builder: (ctx) => const ConfirmDialog(
+        title: '清除消息',
+        message: '将清除当前会话的全部消息，会话本身保留。',
+        confirmLabel: '清除',
       ),
     );
     if (ok != true) return;

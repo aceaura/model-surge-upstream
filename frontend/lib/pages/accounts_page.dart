@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../api_client.dart';
 import '../models.dart';
 import '../theme.dart';
-import '../ui/dialog_header.dart';
+import '../ui/confirm_dialog.dart';
 import '../ui/feedback.dart';
 import '../ui/hover_card.dart';
 import '../ui/page_header.dart';
@@ -120,22 +120,12 @@ class _AccountsPageState extends State<AccountsPage> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        titlePadding: EdgeInsets.zero,
-        title: DialogHeader(title: '删除账号 ${account.name}？'),
-        content: Text(modelCount == 0
+      builder: (context) => ConfirmDialog(
+        title: '删除账号 ${account.name}？',
+        message: modelCount == 0
             ? '该账号下没有模型，删除后不可恢复。'
-            : '该操作将级联删除其下全部 $modelCount 个模型，删除后不可恢复。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确认删除'),
-          ),
-        ],
+            : '该操作将级联删除其下全部 $modelCount 个模型，删除后不可恢复。',
+        confirmLabel: '确认删除',
       ),
     );
     if (confirmed != true) return;
