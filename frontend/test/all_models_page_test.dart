@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:msu_admin/api_client.dart';
+import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/all_models_page.dart';
 import 'package:msu_admin/theme.dart';
 
@@ -44,14 +45,19 @@ ApiClient fakeClient(Map<String, dynamic> testResult) => ApiClient(
       }),
     );
 
-Future<void> pumpPage(WidgetTester tester, Map<String, dynamic> testResult) async {
+Future<void> pumpPage(WidgetTester tester, Map<String, dynamic> testResult,
+    {void Function(UpstreamModel)? onOpenUsage}) async {
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
     home: Scaffold(
-      body: AllModelsPage(client: fakeClient(testResult), onOpenSettings: () {}),
+      body: AllModelsPage(
+        client: fakeClient(testResult),
+        onOpenSettings: () {},
+        onOpenUsage: onOpenUsage,
+      ),
     ),
   ));
   await tester.pumpAndSettle();
@@ -77,6 +83,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('ds-1/v4 连通正常 · HTTP 200 · 123 ms'),
         findsOneWidget);
+  });
+
+  testWidgets('第四位统计按钮:排位锁在检测与删除之间,点击上抛模型', (tester) async {
+    UpstreamModel? opened;
+    await pumpPage(tester, {'ok': true, 'status_code': 200, 'latency_ms': 1},
+        onOpenUsage: (m) => opened = m);
+
+    expect(find.byTooltip('统计'), findsOneWidget);
+    // 排位(CC Switch 式):编辑 < 拷贝 < 检测 < 统计 < 删除。
+    double xOf(String tooltip) => tester.getCenter(find.byTooltip(tooltip)).dx;
+    expect(xOf('编辑') < xOf('拷贝'), isTrue);
+    expect(xOf('拷贝') < xOf('检测连通性'), isTrue);
+    expect(xOf('检测连通性') < xOf('统计'), isTrue);
+    expect(xOf('统计') < xOf('删除'), isTrue);
+
+    await tester.tap(find.byTooltip('统计'));
+    expect(opened?.id, 'ds-1/v4');
   });
 
   testWidgets('检测失败 snackbar 带状态码与上游说明', (tester) async {

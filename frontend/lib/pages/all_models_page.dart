@@ -28,6 +28,7 @@ class AllModelsPage extends StatefulWidget {
     required this.client,
     required this.onOpenSettings,
     this.searchSeed,
+    this.onOpenUsage,
   });
 
   final ApiClient client;
@@ -35,6 +36,9 @@ class AllModelsPage extends StatefulWidget {
 
   /// 外部下发的搜索词种子(账号页「模型」按钮跳转时携带账号名)。
   final ValueNotifier<SearchSeed?>? searchSeed;
+
+  /// 点「统计」时通知主壳跳到用量页,并以该模型标识作为过滤器。
+  final void Function(UpstreamModel model)? onOpenUsage;
 
   @override
   State<AllModelsPage> createState() => _AllModelsPageState();
@@ -357,7 +361,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
                 () => _edit(m, accounts, providers), t),
             _action(Icons.copy_outlined, '拷贝',
                 () => _copy(m, accounts, providers), t),
-            // 第三位(CC Switch 式排位:编辑/拷贝/检测/删除),检测中换行内 spinner。
+            // 排位仿 CC Switch(编辑/拷贝/检测/统计/删除),检测中换行内 spinner。
             if (_testing.contains(m.id))
               const Padding(
                 padding: EdgeInsets.all(12),
@@ -369,6 +373,8 @@ class _AllModelsPageState extends State<AllModelsPage> {
               )
             else
               _action(Icons.network_check, '检测连通性', () => _test(m), t),
+            if (widget.onOpenUsage != null)
+              _action(Icons.bar_chart, '统计', () => widget.onOpenUsage!(m), t),
             _action(Icons.delete_outline, '删除', () => _delete(m), t),
           ],
         ),

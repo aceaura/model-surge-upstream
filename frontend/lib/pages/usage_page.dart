@@ -7,16 +7,21 @@ import '../models.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
+import 'all_models_page.dart' show SearchSeed;
 
 /// 用量统计页：四桶 token（新增输入/输出/缓存创建/缓存命中）的总指标、
 /// 按小时或按天的趋势、以及请求日志/账号/模型三个维度的明细。
 /// 口径与 CC Switch 使用统计对齐：输入为扣缓存后的净输入，
 /// 真实消耗 = 净输入 + 输出 + 缓存创建 + 缓存命中。
 class UsagePage extends StatefulWidget {
-  const UsagePage({super.key, required this.client, this.onOpenSettings});
+  const UsagePage(
+      {super.key, required this.client, this.onOpenSettings, this.modelSeed});
 
   final ApiClient client;
   final VoidCallback? onOpenSettings;
+
+  /// 外部下发的模型过滤种子(模型页「统计」按钮跳转时携带模型标识)。
+  final ValueNotifier<SearchSeed?>? modelSeed;
 
   @override
   State<UsagePage> createState() => _UsagePageState();
@@ -63,6 +68,7 @@ class _UsagePageState extends State<UsagePage> {
   @override
   void initState() {
     super.initState();
+    widget.modelSeed?.addListener(_onModelSeed);
     _loadModelOptions();
     _load();
     _restartTimer();
@@ -70,8 +76,24 @@ class _UsagePageState extends State<UsagePage> {
 
   @override
   void dispose() {
+    widget.modelSeed?.removeListener(_onModelSeed);
     _timer?.cancel();
     super.dispose();
+  }
+
+  /// 种子到达:模型过滤器锁定为该模型并立即按之重载。
+  /// 模型可能已被删除而不在选项清单里,此时把标识补进选项,
+  /// 保证过滤器标签能显示、筛选仍然生效。
+  void _onModelSeed() {
+    final seed = widget.modelSeed?.value;
+    if (seed == null) return;
+    setState(() {
+      _model = seed.text;
+      if (!_modelOptions.contains(seed.text)) {
+        _modelOptions = [..._modelOptions, seed.text];
+      }
+    });
+    _load();
   }
 
   /// 模型下拉的选项：配置里的命名模型清单。失败不阻断页面。

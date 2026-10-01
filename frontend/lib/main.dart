@@ -72,6 +72,9 @@ class _AdminShellState extends State<AdminShell> {
   /// 账号页点「模型」时下发给模型总览页的搜索词种子(账号名)。
   final _modelsSearchSeed = ValueNotifier<SearchSeed?>(null);
 
+  /// 模型页点「统计」时下发给用量页的模型过滤种子(模型标识)。
+  final _usageModelSeed = ValueNotifier<SearchSeed?>(null);
+
   @override
   void initState() {
     super.initState();
@@ -111,9 +114,16 @@ class _AdminShellState extends State<AdminShell> {
     setState(() => _page = 'models');
   }
 
+  /// 模型页点「统计」:切到用量页,并以模型标识作为过滤器。
+  void _openModelUsage(UpstreamModel model) {
+    _usageModelSeed.value = SearchSeed(model.id);
+    setState(() => _page = 'usage');
+  }
+
   @override
   void dispose() {
     _modelsSearchSeed.dispose();
+    _usageModelSeed.dispose();
     _client?.close();
     super.dispose();
   }
@@ -152,6 +162,7 @@ class _AdminShellState extends State<AdminShell> {
           client: client,
           onOpenSettings: _openSettings,
           searchSeed: _modelsSearchSeed,
+          onOpenUsage: _openModelUsage,
         ),
       ),
       _NavItem(
@@ -170,7 +181,11 @@ class _AdminShellState extends State<AdminShell> {
         'usage',
         Icons.insights_outlined,
         '用量',
-        () => UsagePage(client: client, onOpenSettings: _openSettings),
+        () => UsagePage(
+          client: client,
+          onOpenSettings: _openSettings,
+          modelSeed: _usageModelSeed,
+        ),
       ),
       _NavItem(
         'logs',

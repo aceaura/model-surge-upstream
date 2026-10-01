@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:msu_admin/api_client.dart';
+import 'package:msu_admin/pages/all_models_page.dart' show SearchSeed;
 import 'package:msu_admin/pages/usage_page.dart';
 import 'package:msu_admin/theme.dart';
 
@@ -14,8 +15,9 @@ import 'package:msu_admin/theme.dart';
 ///
 /// 接口全部打桩:页面加载只依赖 models/summary/trend/logs 四个端点,
 /// 返回空集合即可把页面渲染出来。
-ApiClient _stubClient() {
+ApiClient _stubClient({void Function(Uri uri)? onRequest}) {
   final mock = MockClient((req) async {
+    onRequest?.call(req.url);
     final path = req.url.path;
     Object body = const {};
     if (path.endsWith('/admin/models')) {
@@ -36,10 +38,12 @@ ApiClient _stubClient() {
       baseUrl: 'http://stub', adminKey: 'k', httpClient: mock);
 }
 
-Future<void> _pumpUsage(WidgetTester tester) async {
+Future<void> _pumpUsage(WidgetTester tester,
+    {ApiClient? client, ValueNotifier<SearchSeed?>? modelSeed}) async {
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
-    home: Scaffold(body: UsagePage(client: _stubClient())),
+    home: Scaffold(
+        body: UsagePage(client: client ?? _stubClient(), modelSeed: modelSeed)),
   ));
   await tester.pumpAndSettle();
 }
@@ -113,6 +117,31 @@ void main() {
     await tester.pump();
     expect(find.text('近 7 天'), findsNothing);
     expect(find.text('当天'), findsOneWidget);
+
+    await _unmount(tester);
+  });
+
+  testWidgets('模型种子到达:过滤器锁定该模型,数据请求带 model 参数',
+      (tester) async {
+    final seen = <Uri>[];
+    final seed = ValueNotifier<SearchSeed?>(null);
+    addTearDown(seed.dispose);
+    await _pumpUsage(tester,
+        client: _stubClient(onRequest: seen.add), modelSeed: seed);
+
+    seed.value = const SearchSeed('ds-1/v4');
+    await tester.pumpAndSettle();
+
+    // 过滤器触发器显示模型标识(模型不在选项清单也会被补入)。
+    expect(find.text('ds-1/v4'), findsOneWidget);
+    // 摘要/趋势/日志三类请求都带 model 过滤参数。
+    final filtered = seen
+        .where((u) =>
+            u.queryParameters['model'] == 'ds-1/v4' &&
+            u.path.startsWith('/admin/usage/'))
+        .map((u) => u.path)
+        .toSet();
+    expect(filtered, containsAll(['/admin/usage/summary', '/admin/usage/trend', '/admin/usage/logs']));
 
     await _unmount(tester);
   });
