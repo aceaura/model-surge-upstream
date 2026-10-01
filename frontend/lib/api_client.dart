@@ -247,6 +247,18 @@ class ApiClient {
     return ModelTestResult.fromJson(body);
   }
 
+  /// 检测账号生效请求地址的可达性。服务端恒回 200：不可达是检测结果
+  /// 而非请求错误。注意 ok 口径与 testModel 不同——拿到任意 HTTP 响应
+  /// 即 ok（可达 ≠ 凭据正确；CC Switch 同款语义）。超时同 testModel。
+  Future<ModelTestResult> testAccount(String name) async {
+    final body = await _send(
+      'POST',
+      '/admin/account-test/$name', // name 可含 /，与 testModel 同款不编码
+      timeout: const Duration(seconds: 15),
+    );
+    return ModelTestResult.fromJson(body);
+  }
+
   Future<QuotaReport> queryQuota(String account) async {
     final body = await _send('GET', '/admin/accounts/$account/quota');
     return QuotaReport.fromJson(body);

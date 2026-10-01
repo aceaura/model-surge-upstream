@@ -230,6 +230,27 @@ void main() {
     expect(res.error, contains('401'));
   });
 
+  test('testAccount hits the account-test path and parses the result',
+      () async {
+    String? gotPath;
+    String? gotMethod;
+    final client = clientReturning(
+      200,
+      '{"ok":true,"status_code":403,"latency_ms":41}',
+      inspect: (req) {
+        gotPath = req.url.path;
+        gotMethod = req.method;
+      },
+    );
+    final res = await client.testAccount('team/a');
+    expect(gotMethod, 'POST');
+    expect(gotPath, '/admin/account-test/team/a'); // name 含 /,不编码
+    // 账号级口径:任意 HTTP 状态即 ok(可达 ≠ 凭据正确)。
+    expect(res.ok, isTrue);
+    expect(res.statusCode, 403);
+    expect(res.latencyMs, 41);
+  });
+
   test('sendChatMessage encodes images and omits the field when empty',
       () async {
     Map<String, dynamic>? withImages;

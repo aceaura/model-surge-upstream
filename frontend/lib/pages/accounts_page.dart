@@ -34,6 +34,7 @@ class AccountsPage extends StatefulWidget {
 class _AccountsPageState extends State<AccountsPage> {
   late Future<(List<Account>, List<ProviderSpec>)> _future = _load();
   final _toggling = <String>{};
+  final _testing = <String>{};
   String _query = '';
 
   /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
@@ -143,6 +144,33 @@ class _AccountsPageState extends State<AccountsPage> {
   }
 
   void _openModels(Account account) => widget.onOpenModels(account);
+
+  /// 检测连通性(参考 CC Switch stream_check):GET 生效请求地址,拿到任意
+  /// HTTP 响应即「可达」——可达 ≠ 凭据正确,凭据与模型名的验证在模型页
+  /// 的模型级检测。结果用 snackbar 呈现,行内容不因此抖动。
+  Future<void> _test(Account account) async {
+    setState(() => _testing.add(account.name));
+    try {
+      final res = await widget.client.testAccount(account.name);
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      if (res.ok) {
+        messenger.showSnackBar(SnackBar(
+          content: Text(
+              '账号 ${account.name} 可达 · HTTP ${res.statusCode} · ${res.latencyMs} ms'),
+        ));
+      } else {
+        messenger.showSnackBar(SnackBar(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          content: Text('账号 ${account.name} 检测失败：${res.error}'),
+        ));
+      }
+    } catch (e) {
+      if (mounted) showError(context, e);
+    } finally {
+      if (mounted) setState(() => _testing.remove(account.name));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -286,12 +314,25 @@ class _AccountsPageState extends State<AccountsPage> {
                                     value: a.enabled,
                                     onChanged: (_) => _toggle(a),
                                   ),
-                                // 操作顺序仿 CC Switch(去掉其第 4 个
-                                // 用量图标):编辑、拷贝、模型、删除
+                                // 操作顺序仿 CC Switch:编辑、拷贝、检测、
+                                // 删除;「模型」是 msu 独有按钮,顺延到第四
                                 _action(Icons.edit_outlined, '编辑',
                                     () => _edit(a, providers), t),
                                 _action(Icons.copy_outlined, '拷贝',
                                     () => _copy(a, providers), t),
+                                if (_testing.contains(a.name))
+                                  const Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    ),
+                                  )
+                                else
+                                  _action(Icons.network_check, '检测连通性',
+                                      () => _test(a), t),
                                 _action(Icons.list_alt, '模型',
                                     () => _openModels(a), t),
                                 _action(Icons.delete_outline, '删除',

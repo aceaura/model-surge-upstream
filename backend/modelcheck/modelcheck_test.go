@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
@@ -109,5 +110,81 @@ func TestCheckUnknownProtocol(t *testing.T) {
 	res := Check(context.Background(), target("weird", "http://127.0.0.1:1"))
 	if res.OK || res.Error == "" {
 		t.Errorf("result = %+v, want protocol error", res)
+	}
+}
+
+// Reachability：拿到任意 HTTP 状态（含 401/403/404/5xx）即可达
+// （CC Switch 同款判据，与 Check 的非 2xx 判失败刻意不同）。
+func TestReachabilityAnyHTTPStatusOK(t *testing.T) {
+	for _, status := range []int{200, 401, 403, 404, 500} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+
+			res := Reachability(context.Background(), srv.URL)
+			if !res.OK || res.StatusCode != status || res.Error != "" {
+				t.Errorf("result = %+v, want ok with status %d", res, status)
+			}
+		})
+	}
+}
+
+// Reachability 网络级失败：连接被拒 → ok=false、status=0、error 说明原因。
+func TestReachabilityNetworkFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.Close() // 立即关掉，端口即不可达
+
+	res := Reachability(context.Background(), srv.URL)
+	if res.OK || res.StatusCode != 0 || res.Error == "" {
+		t.Errorf("result = %+v, want network failure shape", res)
+	}
+}
+
+// Reachability 空 baseURL：不发请求直接失败。
+func TestReachabilityEmptyBaseURL(t *testing.T) {
+	for _, u := range []string{"", "  "} {
+		res := Reachability(context.Background(), u)
+		if res.OK || res.Error == "" {
+			t.Errorf("baseURL %q: result = %+v, want error", u, res)
+		}
+	}
+}
+
+// Reachability 的时延是 TTFB：响应头到达即停表，不等 body。
+// 上游先 Flush 响应头、300ms 后才写 body，LatencyMS 必须明显小于 300。
+func TestReachabilityLatencyIsTTFB(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte("slow body"))
+	}))
+	defer srv.Close()
+
+	res := Reachability(context.Background(), srv.URL)
+	if !res.OK {
+		t.Fatalf("result = %+v, want ok", res)
+	}
+	if res.LatencyMS >= 300 {
+		t.Errorf("latency = %d ms, want TTFB (< 300ms body write)", res.LatencyMS)
+	}
+}
+
+// Reachability 不带鉴权头：可达性不验凭据（CC Switch 同款）。
+func TestReachabilitySendsNoAuthHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	Reachability(context.Background(), srv.URL)
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want empty", gotAuth)
 	}
 }

@@ -472,8 +472,9 @@ class UsageLogRow {
       );
 }
 
-/// 模型连通性检测结果。ok 仅在上游回 2xx 时为真;网络级失败时
-/// statusCode 为 0,原因在 error。
+/// 模型/账号连通性检测共用的结果结构。ok 口径由检测级别决定:模型级仅
+/// 上游回 2xx 为真;账号级拿到任意 HTTP 响应即为真(statusCode 仍带回供
+/// 展示,可达 ≠ 凭据正确)。网络级失败时 statusCode 为 0,原因在 error。
 class ModelTestResult {
   const ModelTestResult({
     required this.ok,

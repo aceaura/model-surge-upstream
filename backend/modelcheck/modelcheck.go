@@ -4,6 +4,12 @@
 // 说明链路可达，但非 2xx 仍判失败并带上状态码与上游说明，因为模型级检测
 // 的价值正在于验证凭据与模型名。检测只读：不合并 defaults/overrides、
 // 不进用量统计、不看模型与账号的启用状态（未启用也该能先测通）。
+//
+// 本包含两级刻意不同的判据，勿统一：
+//   - Check（模型级）：非 2xx 判失败——回答「能不能用」（凭据+模型名）。
+//   - Reachability（账号级）：拿到任意 HTTP 响应（含 401/403/404/5xx）即
+//     可达——回答「能不能到」。对齐 CC Switch stream_check 的「可达 ≠
+//     配置正确」：账号级不验鉴权，凭据对错归模型级管。
 package modelcheck
 
 import (
@@ -31,8 +37,9 @@ const bodyLimit = 1 << 20
 // snippetLen 是错误信息里附带的上游响应截断长度。
 const snippetLen = 300
 
-// Result 是一次连通性检测的结果。Ok 仅在拿到 2xx 响应时为真；
-// 网络级失败时 StatusCode 为 0，Error 说明原因。
+// Result 是一次连通性检测的结果。OK 的判定口径由检测函数决定：
+// Check 仅在拿到 2xx 时为真；Reachability 拿到任意 HTTP 响应即为真
+// （StatusCode 仍带回供展示）。网络级失败时 StatusCode 为 0，Error 说明原因。
 type Result struct {
 	OK         bool   `json:"ok"`
 	StatusCode int    `json:"status_code"`
@@ -83,6 +90,40 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 			Error:      fmt.Sprintf("上游返回 HTTP %d：%s", resp.StatusCode, snippet(raw)),
 		}
 	}
+	return Result{OK: true, StatusCode: resp.StatusCode, LatencyMS: latency.Milliseconds()}
+}
+
+// Reachability 检测账号生效 base_url 的可达性（CC Switch stream_check 同款
+// 语义）：GET base_url，不带鉴权头也不带账号自定义头、不看启用状态。收到
+// 任意 HTTP 响应（含 401/403/404/5xx）即「可达」（OK=true）；仅 DNS/拒连/
+// TLS/超时等网络级错误判失败。可达 ≠ 配置正确——凭据与模型名的验证是
+// 模型级 Check 的职责。
+//
+// 时延是 TTFB：Do 返回（响应头到达）即停表，不读 body——与 Check 读完
+// body 再停表不同，那里要读 snippet 做错误说明，这里不需要。
+func Reachability(ctx context.Context, baseURL string) Result {
+	url := strings.TrimSpace(baseURL)
+	if url == "" {
+		return Result{Error: "base_url 为空"}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		// 非法 URL 视为检测失败，不是请求错误（与 Check 的构造失败口径一致）。
+		return Result{Error: apperr.Wrap(apperr.UpstreamUnavailable, "build reachability request", err).Error()}
+	}
+
+	start := time.Now()
+	resp, err := (&http.Client{}).Do(req)
+	latency := time.Since(start)
+	if err != nil {
+		// 网络级失败：DNS、拒连、TLS、超时都落到这里（CC Switch 同款判据）。
+		return Result{LatencyMS: latency.Milliseconds(),
+			Error: "上游不可达：" + err.Error()}
+	}
+	defer resp.Body.Close()
 	return Result{OK: true, StatusCode: resp.StatusCode, LatencyMS: latency.Milliseconds()}
 }
 
