@@ -192,6 +192,48 @@ void main() {
         reason: 'copy is a create, not an edit');
   });
 
+  testWidgets('form groups fields into three collapsible sections',
+      (tester) async {
+    final editing = UpstreamModel.fromJson(const {
+      'id': 'kimi-1/k2',
+      'account': 'kimi-1',
+      'native_model': 'kimi-k2-turbo',
+      'protocol': 'anthropic',
+      'context_window': 262144,
+      'defaults': {'temperature': 0.6},
+      'overrides': <String, dynamic>{},
+      'enabled': true,
+    });
+    await pumpForm(tester, editing: editing);
+
+    expect(find.text('基本信息'), findsOneWidget);
+    expect(find.text('上下文限制'), findsOneWidget);
+    expect(find.text('附加参数'), findsOneWidget);
+    expect(find.text('kimi-1 · anthropic · kimi-k2-turbo'), findsOneWidget,
+        reason: '收起也能靠副标题辨认基本信息');
+    expect(find.text('窗口 262.144k · 元数据'), findsOneWidget);
+    expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1),
+        reason: '已配参数时附加参数分栏默认展开');
+
+    // 折叠再展开,已填内容不丢(分栏只裁剪不卸载)。
+    await tester.tap(find.text('基本信息'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('基本信息'));
+    await tester.pumpAndSettle();
+    expect(find.text('kimi-k2-turbo'), findsAtLeastNWidgets(1));
+  });
+
+  testWidgets('params section expands on demand for empty config',
+      (tester) async {
+    await pumpForm(tester);
+
+    expect(find.text('附加参数'), findsOneWidget);
+    await tester.tap(find.text('附加参数'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('model-defaults')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-overrides')), findsOneWidget);
+  });
+
   testWidgets('context window rejects non-numeric input', (tester) async {
     await pumpForm(tester);
     await tester.enterText(find.byKey(const ValueKey('model-context')), 'abc');

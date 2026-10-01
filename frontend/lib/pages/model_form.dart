@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../ui/collapsible_section.dart';
 import '../ui/feedback.dart';
 import '../ui/form_page.dart';
 import '../ui/json_field.dart';
@@ -212,180 +213,254 @@ class _ModelFormState extends State<ModelForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 账号与协议联动,并排成组(CC Switch 式双列)
-            FormRow2(
-              LabeledField(
-                key: const ValueKey('model-account-field'),
-                label: '账号',
-                child: StyledDropdownFormField(
-                  key: const ValueKey('model-account'),
-                  value: _account,
-                  decoration: const InputDecoration(border: OutlineInputBorder()),
-                  options: [for (final a in widget.accounts) a.name],
-                  labelOf: (name) {
-                    final a = widget.accounts
-                        .where((a) => a.name == name)
-                        .firstOrNull;
-                    return a == null ? name : '$name (${a.providerId})';
-                  },
-                  onChanged: _onAccountChanged,
-                ),
-              ),
-              LabeledField(
-                key: const ValueKey('model-protocol-field'),
-                label: '协议',
-                child: StyledDropdownFormField(
-                  key: ValueKey('protocol-$_account'),
-                  value: _protocol,
-                  decoration: const InputDecoration(border: OutlineInputBorder()),
-                  options: _protocols,
-                  onChanged: (v) => setState(() => _protocol = v),
-                  validator: (v) => v == null ? '请选择协议' : null,
-                ),
+            _basicSection(),
+            const SizedBox(height: 26),
+            _contextSection(),
+            const SizedBox(height: 26),
+            _paramsSection(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 基本信息(账号/协议/模型标识/上游模型名)──
+
+  String get _basicSubtitle {
+    final parts = [
+      _account,
+      _protocol ?? '',
+      _nativeModel.text.trim(),
+    ].where((s) => s.isNotEmpty).toList();
+    return parts.isEmpty ? '账号、协议与上游模型' : parts.join(' · ');
+  }
+
+  Widget _basicSection() {
+    return CollapsibleSection(
+      icon: Icons.smart_toy_outlined,
+      title: '基本信息',
+      subtitle: _basicSubtitle,
+      // 主信息默认展开,收起时靠副标题辨认当前配置。
+      initiallyExpanded: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 账号与协议联动,并排成组(CC Switch 式双列)
+          FormRow2(
+            LabeledField(
+              key: const ValueKey('model-account-field'),
+              label: '账号',
+              child: StyledDropdownFormField(
+                key: const ValueKey('model-account'),
+                value: _account,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                options: [for (final a in widget.accounts) a.name],
+                labelOf: (name) {
+                  final a = widget.accounts
+                      .where((a) => a.name == name)
+                      .firstOrNull;
+                  return a == null ? name : '$name (${a.providerId})';
+                },
+                onChanged: _onAccountChanged,
               ),
             ),
-            // 编辑模式下模型标识不可改,直接不渲染该字段(标题已含标识)
-            if (!_isEdit) ...[
-              const SizedBox(height: 20),
-              LabeledField(
-                label: '模型标识',
-                child: TextFormField(
-                  key: const ValueKey('model-id'),
-                  controller: _id,
-                  decoration: const InputDecoration(
-                    hintText: 'kimi-1/k2',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? '模型标识不能为空'
-                      : null,
-                ),
+            LabeledField(
+              key: const ValueKey('model-protocol-field'),
+              label: '协议',
+              child: StyledDropdownFormField(
+                key: ValueKey('protocol-$_account'),
+                value: _protocol,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                options: _protocols,
+                onChanged: (v) => setState(() => _protocol = v),
+                validator: (v) => v == null ? '请选择协议' : null,
               ),
-            ],
+            ),
+          ),
+          // 编辑模式下模型标识不可改,直接不渲染该字段(标题已含标识)
+          if (!_isEdit) ...[
+            const SizedBox(height: 20),
+            LabeledField(
+              label: '模型标识',
+              child: TextFormField(
+                key: const ValueKey('model-id'),
+                controller: _id,
+                decoration: const InputDecoration(
+                  hintText: 'kimi-1/k2',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? '模型标识不能为空'
+                    : null,
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          LabeledField(
+            label: '上游模型名',
+            child: TextFormField(
+              key: const ValueKey('model-native'),
+              controller: _nativeModel,
+              decoration: const InputDecoration(
+                hintText: 'kimi-k2-turbo',
+                border: OutlineInputBorder(),
+              ),
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? '上游模型名不能为空'
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 上下文限制(窗口/压缩策略/触发阈值/保留轮数)──
+
+  String get _contextSubtitle {
+    final window = _contextWindow.text.trim();
+    final mode = switch (_compactMode) {
+      'error' => '客户端压缩',
+      'auto' => '上游压缩',
+      _ => '元数据',
+    };
+    final w = window.isEmpty || window == '0' ? '窗口未声明' : '窗口 ${window}k';
+    return '$w · $mode';
+  }
+
+  Widget _contextSection() {
+    return CollapsibleSection(
+      icon: Icons.compress_outlined,
+      title: '上下文限制',
+      subtitle: _contextSubtitle,
+      initiallyExpanded: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FormRow2(
+            LabeledField(
+              label: '上下文窗口',
+              hint: '单位 k(1k = 1000 tokens),0 表示未声明',
+              child: TextFormField(
+                key: const ValueKey('model-context'),
+                controller: _contextWindow,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  suffixText: 'k',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  final n = double.tryParse(v?.trim() ?? '');
+                  if (n == null) return '请填写数字';
+                  if (n < 0) return '不能为负数';
+                  return null;
+                },
+              ),
+            ),
+            // 上下文压缩:模式下拉常驻;阈值对 error/auto 生效;
+            // 保留轮数仅 auto 使用
+            LabeledField(
+              key: const ValueKey('model-compact-mode-field'),
+              label: '上下文压缩策略',
+              child: StyledDropdownFormField(
+                key: const ValueKey('model-compact-mode'),
+                value: _compactMode,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                options: const ['passive', 'error', 'auto'],
+                labelOf: (m) => switch (m) {
+                  'error' => '客户端压缩',
+                  'auto' => '上游压缩',
+                  _ => '元数据',
+                },
+                onChanged: (v) => setState(() => _compactMode = v!),
+              ),
+            ),
+          ),
+          if (_compactMode != 'passive') ...[
             const SizedBox(height: 20),
             FormRow2(
               LabeledField(
-                label: '上游模型名',
+                key: const ValueKey('model-compact-threshold-field'),
+                label: '触发阈值',
+                hint: '估算输入超过窗口此比例时触发',
                 child: TextFormField(
-                  key: const ValueKey('model-native'),
-                  controller: _nativeModel,
-                  decoration: const InputDecoration(
-                    hintText: 'kimi-k2-turbo',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? '上游模型名不能为空'
-                      : null,
-                ),
-              ),
-              LabeledField(
-                label: '上下文窗口',
-                hint: '单位 k(1k = 1000 tokens),0 表示未声明',
-                child: TextFormField(
-                  key: const ValueKey('model-context'),
-                  controller: _contextWindow,
+                  key: const ValueKey('model-compact-threshold'),
+                  controller: _compactThreshold,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(
-                    suffixText: 'k',
+                    suffixText: '%',
                     border: OutlineInputBorder(),
                   ),
                   validator: (v) {
                     final n = double.tryParse(v?.trim() ?? '');
                     if (n == null) return '请填写数字';
-                    if (n < 0) return '不能为负数';
+                    if (n <= 0 || n > 100) return '须在 1–100 之间';
                     return null;
                   },
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            // 上下文压缩:模式下拉常驻;阈值对 error/auto 生效;
-            // 保留轮数仅 auto 使用
-            FormRow2(
-              LabeledField(
-                key: const ValueKey('model-compact-mode-field'),
-                label: '上下文压缩策略',
-                child: StyledDropdownFormField(
-                  key: const ValueKey('model-compact-mode'),
-                  value: _compactMode,
-                  decoration: const InputDecoration(border: OutlineInputBorder()),
-                  options: const ['passive', 'error', 'auto'],
-                  labelOf: (m) => switch (m) {
-                    'error' => '客户端压缩',
-                    'auto' => '上游压缩',
-                    _ => '元数据',
-                  },
-                  onChanged: (v) => setState(() => _compactMode = v!),
-                ),
-              ),
-              _compactMode != 'passive'
+              _compactMode == 'auto'
                   ? LabeledField(
-                      key: const ValueKey('model-compact-threshold-field'),
-                      label: '触发阈值',
-                      hint: '估算输入超过窗口此比例时触发',
+                      key: const ValueKey('model-compact-keep-field'),
+                      label: '保留最近轮数',
+                      hint: '压缩后原样保留的最近对话轮数',
                       child: TextFormField(
-                        key: const ValueKey('model-compact-threshold'),
-                        controller: _compactThreshold,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
+                        key: const ValueKey('model-compact-keep'),
+                        controller: _compactKeepTurns,
+                        keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
-                          suffixText: '%',
                           border: OutlineInputBorder(),
                         ),
                         validator: (v) {
-                          final n = double.tryParse(v?.trim() ?? '');
-                          if (n == null) return '请填写数字';
-                          if (n <= 0 || n > 100) return '须在 1–100 之间';
+                          final n = int.tryParse(v?.trim() ?? '');
+                          if (n == null) return '请填写整数';
+                          if (n < 1) return '至少保留 1 轮';
                           return null;
                         },
                       ),
                     )
                   : const SizedBox.shrink(),
             ),
-            if (_compactMode == 'auto') ...[
-              const SizedBox(height: 20),
-              FormRow2(
-                LabeledField(
-                  key: const ValueKey('model-compact-keep-field'),
-                  label: '保留最近轮数',
-                  hint: '压缩后原样保留的最近对话轮数',
-                  child: TextFormField(
-                    key: const ValueKey('model-compact-keep'),
-                    controller: _compactKeepTurns,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (v) {
-                      final n = int.tryParse(v?.trim() ?? '');
-                      if (n == null) return '请填写整数';
-                      if (n < 1) return '至少保留 1 轮';
-                      return null;
-                    },
-                  ),
-                ),
-                const SizedBox.shrink(),
-              ),
-            ],
-            const SizedBox(height: 26),
-            JsonField(
-              key: const ValueKey('model-defaults'),
-              label: '默认参数',
-              helper: '调用方未提供该键时生效',
-              controller: _defaults,
-              onValidityChanged: (ok) => setState(() => _defaultsValid = ok),
-            ),
-            const SizedBox(height: 22),
-            JsonField(
-              key: const ValueKey('model-overrides'),
-              label: '覆盖参数',
-              helper: '强制值，优先级最高',
-              controller: _overrides,
-              onValidityChanged: (ok) => setState(() => _overridesValid = ok),
-            ),
           ],
-        ),
+        ],
+      ),
+    );
+  }
+
+  // ── 附加参数(默认/覆盖 JSON)──
+
+  bool get _hasParams =>
+      (_source?.defaults.isNotEmpty ?? false) ||
+      (_source?.overrides.isNotEmpty ?? false);
+
+  Widget _paramsSection() {
+    return CollapsibleSection(
+      icon: Icons.data_object_outlined,
+      title: '附加参数',
+      subtitle: '默认参数 · 覆盖参数（JSON）',
+      // 已配参数时默认展开,新建空配置默认收起。
+      initiallyExpanded: _hasParams,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          JsonField(
+            key: const ValueKey('model-defaults'),
+            label: '默认参数',
+            helper: '调用方未提供该键时生效',
+            controller: _defaults,
+            onValidityChanged: (ok) => setState(() => _defaultsValid = ok),
+          ),
+          const SizedBox(height: 22),
+          JsonField(
+            key: const ValueKey('model-overrides'),
+            label: '覆盖参数',
+            helper: '强制值，优先级最高',
+            controller: _overrides,
+            onValidityChanged: (ok) => setState(() => _overridesValid = ok),
+          ),
+        ],
       ),
     );
   }
