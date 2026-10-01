@@ -66,14 +66,15 @@ class _QuotaInlineState extends State<QuotaInline> {
     _autoTimer = Timer.periodic(Duration(minutes: m), (_) => _query());
   }
 
-  Future<void> _query() async {
+  Future<void> _query({bool force = false}) async {
     if (_busy) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final report = await widget.client.queryQuota(widget.accountName);
+      final report =
+          await widget.client.queryQuota(widget.accountName, force: force);
       if (!mounted) return;
       setState(() => _report = report);
     } catch (e) {
@@ -134,7 +135,9 @@ class _QuotaInlineState extends State<QuotaInline> {
           )
         else
           InkWell(
-            onTap: _query,
+            // 手动刷新绕过服务端缓存强制重查,否则 TTL 内点刷新
+            // 只是看着时间戳在变,额度还是旧值。
+            onTap: () => _query(force: true),
             borderRadius: BorderRadius.circular(8),
             child: Icon(Icons.refresh, size: 12, color: t.faint),
           ),
@@ -190,7 +193,7 @@ class _QuotaInlineState extends State<QuotaInline> {
   Widget _tappable(Widget child) => MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
-          onTap: _busy ? null : _query,
+          onTap: _busy ? null : () => _query(force: true),
           child: Tooltip(message: '点击重新查询额度', child: child),
         ),
       );

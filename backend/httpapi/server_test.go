@@ -617,6 +617,26 @@ func TestQuotaOnAdminPlane(t *testing.T) {
 	}
 }
 
+func TestQuotaRefreshParamDropsCache(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "GET", "/admin/accounts/kimi-1/quota?refresh=1", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("quota refresh = %d: %s", rec.Code, rec.Body)
+	}
+	if len(f.quota.forgot) == 0 || f.quota.forgot[len(f.quota.forgot)-1] != "kimi-1" {
+		t.Errorf("refresh=1 should drop the cached report, forgot = %v", f.quota.forgot)
+	}
+
+	f.quota.forgot = nil
+	rec = f.do(t, "GET", "/admin/accounts/kimi-1/quota", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("quota = %d: %s", rec.Code, rec.Body)
+	}
+	if len(f.quota.forgot) != 0 {
+		t.Errorf("plain query must keep the cache, forgot = %v", f.quota.forgot)
+	}
+}
+
 func TestQuotaTestScript(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts/kimi-1/quota-test", adminKey,

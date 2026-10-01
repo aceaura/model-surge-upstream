@@ -39,7 +39,13 @@ func (h handler) deliveryModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handler) quota(w http.ResponseWriter, r *http.Request) {
-	report, err := h.Quota.Query(r.Context(), r.PathValue("name"))
+	name := r.PathValue("name")
+	// refresh=1 是管理面行内刷新钮的强制重查:先丢进程内缓存再查,
+	// 否则 TTL(默认 60s)内点刷新拿到的还是旧报告,只是时间戳看着在变。
+	if r.URL.Query().Get("refresh") == "1" {
+		h.Quota.Forget(name)
+	}
+	report, err := h.Quota.Query(r.Context(), name)
 	if err != nil {
 		writeError(w, err)
 		return

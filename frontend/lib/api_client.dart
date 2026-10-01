@@ -264,8 +264,11 @@ class ApiClient {
     return ModelTestResult.fromJson(body);
   }
 
-  Future<QuotaReport> queryQuota(String account) async {
-    final body = await _send('GET', '/admin/accounts/$account/quota');
+  /// force=true 让服务端丢弃进程内额度缓存再查(行内刷新钮手动重查);
+  /// 默认走缓存,自动轮询与首次加载不必每次都打上游。
+  Future<QuotaReport> queryQuota(String account, {bool force = false}) async {
+    final body = await _send(
+        'GET', '/admin/accounts/$account/quota${force ? '?refresh=1' : ''}');
     return QuotaReport.fromJson(body);
   }
 

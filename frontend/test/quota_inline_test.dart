@@ -193,6 +193,47 @@ void main() {
     expect(calls, 2, reason: '到间隔自动重查');
   });
 
+  testWidgets('refresh icon forces a cache-bypassing re-query', (tester) async {
+    final urls = <String>[];
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        urls.add(req.url.toString());
+        return http.Response(
+            jsonEncode({
+              'account': 'ds-1',
+              'queryable': true,
+              'meters': [
+                {'kind': 'usage', 'unit': 'percent', 'used': 10},
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: QuotaInline(
+          client: client,
+          accountName: 'ds-1',
+          queryable: true,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(urls, hasLength(1), reason: '挂载即查一次');
+    expect(urls.single, isNot(contains('refresh=1')),
+        reason: '首次加载走服务端缓存,不必强制打上游');
+
+    await tester.tap(find.byIcon(Icons.refresh));
+    await tester.pumpAndSettle();
+    expect(urls, hasLength(2), reason: '点刷新钮重新请求额度');
+    expect(urls.last, contains('refresh=1'),
+        reason: '手动刷新必须绕过服务端缓存,否则 TTL 内只刷新时间戳');
+  });
+
   testWidgets('upstream failure offers a retry hint', (tester) async {
     await pumpInline(tester, queryable: true, status: 502, body: {
       'error': {
