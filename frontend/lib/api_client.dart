@@ -140,6 +140,7 @@ class ApiClient {
     required String apiKey,
     String? baseUrl,
     Map<String, String>? headers,
+    Map<String, dynamic>? quotaScript,
     bool enabled = true,
   }) async {
     final body = await _send('POST', '/admin/accounts', body: {
@@ -148,18 +149,21 @@ class ApiClient {
       'api_key': apiKey,
       'base_url': ?baseUrl,
       'headers': ?headers,
+      'quota_script': ?quotaScript,
       'enabled': enabled,
     });
     return Account.fromJson(body['account'] as Map<String, dynamic>);
   }
 
   /// apiKey 为空表示保留服务端已存的凭据。
+  /// quotaScript 为 null 表示保留原脚本配置;传空 Map 表示清除。
   Future<Account> updateAccount({
     required String name,
     String? providerId,
     String? apiKey,
     String? baseUrl,
     Map<String, String>? headers,
+    Map<String, dynamic>? quotaScript,
     required bool enabled,
   }) async {
     final body = await _send('PUT', '/admin/accounts/$name', body: {
@@ -167,6 +171,7 @@ class ApiClient {
       if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
       'base_url': ?baseUrl,
       'headers': ?headers,
+      'quota_script': ?quotaScript,
       'enabled': enabled,
     });
     return Account.fromJson(body['account'] as Map<String, dynamic>);
@@ -262,6 +267,27 @@ class ApiClient {
   Future<QuotaReport> queryQuota(String account) async {
     final body = await _send('GET', '/admin/accounts/$account/quota');
     return QuotaReport.fromJson(body);
+  }
+
+  /// 用账号内置凭据试跑一段未落库的额度脚本(保存前验证代码与渠道
+  /// 端点)。服务端恒回 200:脚本/上游失败是试跑结果(ok=false+error)
+  /// 而非请求错误。超时放宽到 130s(脚本超时上限 120s + 余量)。
+  Future<(bool, String, QuotaReport?)> testQuotaScript(
+    String name, {
+    required String code,
+    int timeoutSeconds = 0,
+  }) async {
+    final body = await _send(
+      'POST',
+      '/admin/accounts/$name/quota-test',
+      body: {'code': code, 'timeout_seconds': timeoutSeconds},
+      timeout: const Duration(seconds: 130),
+    );
+    final ok = body['ok'] as bool? ?? false;
+    final error = body['error'] as String? ?? '';
+    final raw = body['report'];
+    final report = raw is Map<String, dynamic> ? QuotaReport.fromJson(raw) : null;
+    return (ok, error, report);
   }
 
   Future<ProxySettings> getProxySettings() async {

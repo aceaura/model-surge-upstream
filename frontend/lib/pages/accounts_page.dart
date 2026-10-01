@@ -294,12 +294,16 @@ class _AccountsPageState extends State<AccountsPage> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                // 行内额度摘要(CC Switch 式):提供商声明了
-                                // 额度接口才出现,加载后自动查询一次
+                                // 行内额度摘要(CC Switch 式):提供商声明了额度
+                                // 接口或账号启用了额度脚本才出现,加载后自动
+                                // 查询一次;脚本配了自动间隔则按间隔自刷
                                 QuotaInline(
                                   client: widget.client,
                                   accountName: a.name,
-                                  queryable: spec?.quotaQueryable ?? false,
+                                  queryable: (spec?.quotaQueryable ?? false) ||
+                                      (a.quotaScript?.active ?? false),
+                                  autoIntervalMinutes:
+                                      a.quotaScript?.autoIntervalMinutes ?? 0,
                                 ),
                                 const SizedBox(width: 8),
                                 if (_toggling.contains(a.name))

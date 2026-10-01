@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../ui/collapsible_section.dart';
 import '../ui/feedback.dart';
 import '../ui/form_page.dart';
 import '../ui/header_editor.dart';
@@ -59,16 +60,38 @@ class _AccountFormState extends State<AccountForm> {
   late final bool _enabled =
       widget.editing?.enabled ?? widget.copyFrom?.enabled ?? true;
 
+  // ── 额度脚本(仿 CC Switch usage_script)──
+  late bool _scriptEnabled = _initialScript?.enabled ?? false;
+  late final TextEditingController _scriptCode =
+      TextEditingController(text: _initialScript?.code ?? '');
+  late final TextEditingController _scriptTimeout = TextEditingController(
+      text: (_initialScript?.timeoutSeconds ?? 0) > 0
+          ? '${_initialScript!.timeoutSeconds}'
+          : '');
+  late final TextEditingController _scriptInterval = TextEditingController(
+      text: (_initialScript?.autoIntervalMinutes ?? 0) > 0
+          ? '${_initialScript!.autoIntervalMinutes}'
+          : '');
+  bool _testingScript = false;
+  String? _scriptTestResult;
+  bool? _scriptTestOk;
+
   bool _revealKey = false;
   bool _busy = false;
 
   bool get _isEdit => widget.editing != null;
+
+  QuotaScript? get _initialScript =>
+      widget.editing?.quotaScript ?? widget.copyFrom?.quotaScript;
 
   @override
   void dispose() {
     _name.dispose();
     _apiKey.dispose();
     _baseUrl.dispose();
+    _scriptCode.dispose();
+    _scriptTimeout.dispose();
+    _scriptInterval.dispose();
     super.dispose();
   }
 
@@ -102,6 +125,57 @@ class _AccountFormState extends State<AccountForm> {
     });
   }
 
+  /// 额度脚本提交载荷:null=不动服务端配置,空 Map=显式清除。
+  /// 停用且代码清空视为"不要脚本";其余状态按表单值全量提交。
+  Map<String, dynamic>? _quotaScriptPayload() {
+    final code = _scriptCode.text.trim();
+    if (!_scriptEnabled && code.isEmpty) {
+      return _initialScript == null ? null : <String, dynamic>{};
+    }
+    return QuotaScript(
+      enabled: _scriptEnabled,
+      code: code,
+      timeoutSeconds: int.tryParse(_scriptTimeout.text.trim()) ?? 0,
+      autoIntervalMinutes: int.tryParse(_scriptInterval.text.trim()) ?? 0,
+    ).toJson();
+  }
+
+  /// 试跑当前编辑器里的脚本(凭据取自已存账号,故仅编辑态可用)。
+  Future<void> _testScript() async {
+    setState(() {
+      _testingScript = true;
+      _scriptTestResult = null;
+      _scriptTestOk = null;
+    });
+    try {
+      final (ok, error, report) = await widget.client.testQuotaScript(
+        widget.editing!.name,
+        code: _scriptCode.text.trim(),
+        timeoutSeconds: int.tryParse(_scriptTimeout.text.trim()) ?? 0,
+      );
+      if (!mounted) return;
+      setState(() {
+        _scriptTestOk = ok;
+        if (ok) {
+          final meters = report?.meters ?? const <QuotaMeter>[];
+          _scriptTestResult = meters.isEmpty
+              ? '试跑成功,但未提取到计量项'
+              : '试跑成功:${meters.map((m) => m.title).join(' / ')}';
+        } else {
+          _scriptTestResult = '试跑失败:$error';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _scriptTestOk = false;
+        _scriptTestResult = '试跑请求失败:$e';
+      });
+    } finally {
+      if (mounted) setState(() => _testingScript = false);
+    }
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _busy = true);
@@ -109,6 +183,7 @@ class _AccountFormState extends State<AccountForm> {
       // 与提供商默认一致即视为不覆盖,保持"跟随提供商"语义
       final url = _baseUrl.text.trim();
       final baseUrl = url == (_spec?.baseUrl ?? '') ? '' : url;
+      final quotaScript = _quotaScriptPayload();
       if (_isEdit) {
         await widget.client.updateAccount(
           name: widget.editing!.name,
@@ -116,6 +191,7 @@ class _AccountFormState extends State<AccountForm> {
           apiKey: _apiKey.text.trim(),
           baseUrl: baseUrl,
           headers: _headers,
+          quotaScript: quotaScript,
           enabled: _enabled,
         );
       } else {
@@ -125,6 +201,7 @@ class _AccountFormState extends State<AccountForm> {
           apiKey: _apiKey.text.trim(),
           baseUrl: baseUrl,
           headers: _headers,
+          quotaScript: quotaScript,
           enabled: _enabled,
         );
       }
@@ -248,9 +325,248 @@ class _AccountFormState extends State<AccountForm> {
               initial: _headers,
               onChanged: (h) => _headers = h,
             ),
+            const SizedBox(height: 26),
+            _quotaScriptSection(),
           ],
         ),
       ),
     );
+  }
+
+  // ── 额度脚本区(仿 CC Switch 脚本弹窗,收进可折叠分栏)──
+
+  /// 预设模板。变量只支持 {{apiKey}}/{{baseUrl}}(后端执行前替换);
+  /// CC Switch 的 {{accessToken}}/{{userId}} 在本服务无对应物,New API
+  /// 模板已改写为用 apiKey 并去掉 New-Api-User 头。
+  static const _scriptTemplates = <String, String>{
+    '空白': '''({
+  request: {
+    url: "",
+    method: "GET",
+    headers: {}
+  },
+  extractor: function(response) {
+    return {
+      remaining: 0,
+      unit: "USD"
+    };
+  }
+})''',
+    '通用余额': '''({
+  request: {
+    url: "{{baseUrl}}/user/balance",
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer {{apiKey}}"
+    }
+  },
+  extractor: function(response) {
+    return {
+      isValid: response.is_active || true,
+      remaining: response.balance,
+      unit: "USD"
+    };
+  }
+})''',
+    'New API': '''({
+  request: {
+    url: "{{baseUrl}}/api/user/self",
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{apiKey}}"
+    }
+  },
+  extractor: function(response) {
+    if (response.success && response.data) {
+      return {
+        planName: response.data.group,
+        remaining: response.data.quota / 500000,
+        used: response.data.used_quota / 500000,
+        total: (response.data.quota + response.data.used_quota) / 500000,
+        unit: "USD"
+      };
+    }
+    return {
+      isValid: false,
+      invalidMessage: response.message || "查询失败"
+    };
+  }
+})''',
+  };
+
+  String get _scriptSubtitle {
+    if (_scriptEnabled && _scriptCode.text.trim().isNotEmpty) {
+      return '已启用 · 接管该账号的额度查询';
+    }
+    if (_scriptCode.text.trim().isNotEmpty) return '已编写未启用';
+    return '按渠道定制额度查询代码,未配置时走提供商内置声明';
+  }
+
+  Widget _quotaScriptSection() {
+    final theme = Theme.of(context);
+    return CollapsibleSection(
+      icon: Icons.code,
+      title: '额度脚本',
+      subtitle: _scriptSubtitle,
+      initiallyExpanded:
+          _scriptEnabled || _scriptCode.text.trim().isNotEmpty,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Switch(
+                key: const ValueKey('quota-script-enabled'),
+                value: _scriptEnabled,
+                onChanged: (v) => setState(() => _scriptEnabled = v),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '启用后由脚本接管该账号的额度查询;停用自动回落提供商内置声明',
+                  style: TextStyle(fontSize: 12.5),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              const Text('脚本代码', style: TextStyle(fontSize: 13)),
+              const Spacer(),
+              PopupMenuButton<String>(
+                key: const ValueKey('quota-script-template'),
+                tooltip: '插入预设模板',
+                itemBuilder: (context) => [
+                  for (final name in _scriptTemplates.keys)
+                    PopupMenuItem(value: name, child: Text(name)),
+                ],
+                onSelected: (name) => setState(() {
+                  _scriptCode.text = _scriptTemplates[name]!;
+                  _scriptTestResult = null;
+                  _scriptTestOk = null;
+                }),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.article_outlined, size: 15),
+                      SizedBox(width: 4),
+                      Text('模板', style: TextStyle(fontSize: 12.5)),
+                      Icon(Icons.arrow_drop_down, size: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          TextFormField(
+            key: const ValueKey('quota-script-code'),
+            controller: _scriptCode,
+            maxLines: 12,
+            minLines: 6,
+            style: const TextStyle(
+              fontSize: 12,
+              fontFamily: 'Consolas',
+              fontFamilyFallback: ['monospace'],
+              height: 1.45,
+            ),
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              hintText: '({ request: {...}, extractor: function(response) {...} })',
+              hintStyle: TextStyle(
+                fontSize: 12,
+                color: theme.hintColor,
+                fontFamily: 'Consolas',
+                fontFamilyFallback: const ['monospace'],
+              ),
+            ),
+            onChanged: (_) => setState(() {
+              _scriptTestResult = null;
+              _scriptTestOk = null;
+            }),
+            validator: (v) => _scriptEnabled && (v == null || v.trim().isEmpty)
+                ? '启用脚本时代码不能为空'
+                : null,
+          ),
+          const SizedBox(height: 14),
+          FormRow2(
+            TextFormField(
+              key: const ValueKey('quota-script-timeout'),
+              controller: _scriptTimeout,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '超时(秒)',
+                hintText: '默认 10,上限 120',
+                border: OutlineInputBorder(),
+              ),
+              validator: _intRangeValidator(0, 120),
+            ),
+            TextFormField(
+              key: const ValueKey('quota-script-interval'),
+              controller: _scriptInterval,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '自动查询间隔(分钟)',
+                hintText: '0 表示不自动刷新',
+                border: OutlineInputBorder(),
+              ),
+              validator: _intRangeValidator(0, 1440),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('quota-script-test'),
+                onPressed: (_isEdit && !_testingScript) ? _testScript : null,
+                icon: _testingScript
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.play_arrow_outlined, size: 16),
+                label: Text(_testingScript ? '试跑中…' : '试跑脚本'),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _isEdit ? '用该账号已存凭据试跑,不影响已存配置' : '保存账号后才能试跑',
+                  style: TextStyle(fontSize: 12, color: theme.hintColor),
+                ),
+              ),
+            ],
+          ),
+          if (_scriptTestResult != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              key: const ValueKey('quota-script-test-result'),
+              _scriptTestResult!,
+              style: TextStyle(
+                fontSize: 12,
+                color: _scriptTestOk == true
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.error,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// 可留空(走默认)的整数范围校验。
+  static String? Function(String?) _intRangeValidator(int min, int max) {
+    return (v) {
+      final t = v?.trim() ?? '';
+      if (t.isEmpty) return null;
+      final n = int.tryParse(t);
+      if (n == null || n < min || n > max) return '需为 $min-$max 的整数';
+      return null;
+    };
   }
 }

@@ -21,6 +21,7 @@ Future<void> pumpInline(
   required bool queryable,
   int status = 200,
   Map<String, dynamic> body = const {},
+  int autoIntervalMinutes = 0,
 }) async {
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
@@ -29,6 +30,7 @@ Future<void> pumpInline(
         client: fakeClient(status, body),
         accountName: 'ds-1',
         queryable: queryable,
+        autoIntervalMinutes: autoIntervalMinutes,
       ),
     ),
   ));
@@ -69,6 +71,91 @@ void main() {
     });
 
     expect(find.text('已用 42.0 USD'), findsOneWidget);
+  });
+
+  testWidgets('first line shows relative query time and refresh icon',
+      (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'account': 'ds-1',
+      'queryable': true,
+      'at': DateTime.now().toUtc().toIso8601String(),
+      'meters': [
+        {'kind': 'usage', 'unit': 'currency', 'currency': 'USD', 'used': 1},
+      ],
+    });
+
+    expect(find.text('刚刚'), findsOneWidget);
+    expect(find.byIcon(Icons.refresh), findsOneWidget);
+    expect(find.byIcon(Icons.schedule), findsOneWidget);
+  });
+
+  testWidgets('percent meter shows bold used figure and reset countdown',
+      (tester) async {
+    final resetAt = DateTime.now().add(const Duration(hours: 3, minutes: 8));
+    await pumpInline(tester, queryable: true, body: {
+      'account': 'ds-1',
+      'queryable': true,
+      'meters': [
+        {
+          'kind': 'usage',
+          'unit': 'percent',
+          'label': '5小时',
+          'used': 64,
+          'reset_at': resetAt.toUtc().toIso8601String(),
+        },
+      ],
+    });
+
+    // 构建到断言之间有时间流逝,倒计时期望值按同一公式现场算
+    final d = resetAt.difference(DateTime.now());
+    final cd = '${d.inHours}h${d.inMinutes % 60}m';
+    final line = '5小时: 64%  ⏱$cd';
+    expect(find.text(line), findsOneWidget);
+    final rich = tester.widget<Text>(find.text(line));
+    final spans = (rich.textSpan! as TextSpan).children!;
+    final bold = spans
+        .whereType<TextSpan>()
+        .firstWhere((s) => s.text == '64%');
+    expect(bold.style?.fontWeight, FontWeight.w700,
+        reason: '百分比数字是 CC Switch 同款视觉锚点');
+  });
+
+  testWidgets('auto interval re-queries on schedule', (tester) async {
+    var calls = 0;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((_) async {
+        calls++;
+        return http.Response(
+            jsonEncode({
+              'account': 'ds-1',
+              'queryable': true,
+              'meters': [
+                {'kind': 'usage', 'unit': 'percent', 'used': 10},
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: QuotaInline(
+          client: client,
+          accountName: 'ds-1',
+          queryable: true,
+          autoIntervalMinutes: 1,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(calls, 1, reason: '挂载即查一次');
+
+    await tester.pump(const Duration(minutes: 1, seconds: 1));
+    await tester.pumpAndSettle();
+    expect(calls, 2, reason: '到间隔自动重查');
   });
 
   testWidgets('upstream failure offers a retry hint', (tester) async {

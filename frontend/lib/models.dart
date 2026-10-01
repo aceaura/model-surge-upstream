@@ -68,6 +68,40 @@ class ProviderSpec {
   }
 }
 
+/// 账号级额度查询脚本(仿 CC Switch usage_script):enabled+code 生效,
+/// 其余两项为 0 时走后端默认(超时 10s,不自动刷新)。
+class QuotaScript {
+  const QuotaScript({
+    required this.enabled,
+    required this.code,
+    this.timeoutSeconds = 0,
+    this.autoIntervalMinutes = 0,
+  });
+
+  final bool enabled;
+  final String code;
+  final int timeoutSeconds;
+  final int autoIntervalMinutes;
+
+  /// 与后端 Active 同口径:启用且代码非空才真正接管额度查询。
+  bool get active => enabled && code.isNotEmpty;
+
+  factory QuotaScript.fromJson(Map<String, dynamic> json) => QuotaScript(
+        enabled: json['enabled'] as bool? ?? false,
+        code: json['code'] as String? ?? '',
+        timeoutSeconds: (json['timeout_seconds'] as num?)?.toInt() ?? 0,
+        autoIntervalMinutes:
+            (json['auto_interval_minutes'] as num?)?.toInt() ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        'code': code,
+        'timeout_seconds': timeoutSeconds,
+        'auto_interval_minutes': autoIntervalMinutes,
+      };
+}
+
 class Account {
   const Account({
     required this.name,
@@ -76,6 +110,7 @@ class Account {
     required this.baseUrl,
     required this.headers,
     required this.enabled,
+    this.quotaScript,
   });
 
   final String name;
@@ -87,9 +122,13 @@ class Account {
   final Map<String, String> headers;
   final bool enabled;
 
+  /// 额度脚本配置;null 表示未配置(服务端空脚本不回传)。
+  final QuotaScript? quotaScript;
+
   factory Account.fromJson(Map<String, dynamic> json) {
     final credential = json['credential'] as Map<String, dynamic>? ?? const {};
     final headers = json['headers'] as Map<String, dynamic>? ?? const {};
+    final script = json['quota_script'] as Map<String, dynamic>?;
     return Account(
       name: json['name'] as String,
       providerId: json['provider_id'] as String? ?? '',
@@ -97,6 +136,7 @@ class Account {
       baseUrl: json['base_url'] as String? ?? '',
       headers: headers.map((k, v) => MapEntry(k, '$v')),
       enabled: json['enabled'] as bool? ?? false,
+      quotaScript: script == null ? null : QuotaScript.fromJson(script),
     );
   }
 }
@@ -153,6 +193,7 @@ class QuotaMeter {
     this.used,
     this.reset,
     this.resetAt,
+    this.extra,
   });
 
   final String kind;
@@ -165,6 +206,9 @@ class QuotaMeter {
   final String? reset;
   final DateTime? resetAt;
 
+  /// 脚本提取器附带的自由文本(套餐说明、到期日等),原样透传。
+  final String? extra;
+
   factory QuotaMeter.fromJson(Map<String, dynamic> json) => QuotaMeter(
         kind: json['kind'] as String? ?? '',
         unit: json['unit'] as String? ?? '',
@@ -175,6 +219,7 @@ class QuotaMeter {
         used: (json['used'] as num?)?.toDouble(),
         reset: json['reset'] as String?,
         resetAt: DateTime.tryParse(json['reset_at'] as String? ?? ''),
+        extra: json['extra'] as String?,
       );
 
   static const _kindNames = {
@@ -188,6 +233,7 @@ class QuotaMeter {
     'requests': '请求数',
     'tokens': 'token',
     'credits': '点数',
+    'percent': '%',
   };
 
   String get title {
@@ -200,11 +246,17 @@ class QuotaMeter {
 
   String amount(double? value) {
     if (value == null) return '上游未提供';
+    // 百分比紧贴数字(64%),其余单位空一格(12.34 CNY)
+    if (unit == 'percent') return '${_trimNum(value)}%';
     final suffix = unit == 'currency'
         ? (currency ?? '')
         : (_unitNames[unit] ?? unit);
     return suffix.isEmpty ? '$value' : '$value $suffix';
   }
+
+  /// 整数不显小数点(64 → "64",64.5 → "64.5")。
+  static String _trimNum(double v) =>
+      v == v.roundToDouble() ? '${v.round()}' : '$v';
 }
 
 class QuotaReport {
@@ -212,11 +264,15 @@ class QuotaReport {
     required this.account,
     required this.queryable,
     required this.meters,
+    this.at,
   });
 
   final String account;
   final bool queryable;
   final List<QuotaMeter> meters;
+
+  /// 服务端查询时刻(行内"N 分钟前"的基准);老数据缺省为 null。
+  final DateTime? at;
 
   factory QuotaReport.fromJson(Map<String, dynamic> json) => QuotaReport(
         account: json['account'] as String? ?? '',
@@ -225,6 +281,7 @@ class QuotaReport {
             .whereType<Map<String, dynamic>>()
             .map(QuotaMeter.fromJson)
             .toList(growable: false),
+        at: DateTime.tryParse(json['at'] as String? ?? ''),
       );
 }
 

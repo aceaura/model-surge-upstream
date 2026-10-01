@@ -48,6 +48,21 @@ final accountNoOverride = Account.fromJson(const {
   'enabled': true,
 });
 
+/// 带额度脚本的账号:脚本区预填与清除语义的样本。
+final accountWithScript = Account.fromJson(const {
+  'name': 'ds-3',
+  'provider_id': 'deepseek',
+  'credential': {'kind': 'api_key', 'api_key': 'sk-s***t'},
+  'base_url': '',
+  'enabled': true,
+  'quota_script': {
+    'enabled': true,
+    'code': '({request: {url: "{{baseUrl}}/x"}, extractor: function(r) { return {remaining: r.b, unit: "USD"}; }})',
+    'timeout_seconds': 15,
+    'auto_interval_minutes': 5,
+  },
+});
+
 ApiClient stubClient() => ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
       adminKey: 'adm',
@@ -78,6 +93,7 @@ ApiClient recordingClient(List<String> captured) => ApiClient(
 Future<void> pumpForm(
   WidgetTester tester, {
   Account? copyFrom,
+  Account? editing,
   ApiClient? client,
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
@@ -89,8 +105,19 @@ Future<void> pumpForm(
         client: client ?? stubClient(),
         providers: providers,
         onDone: (_) {},
+        editing: editing,
         copyFrom: copyFrom),
   ));
+  await tester.pumpAndSettle();
+}
+
+/// 额度脚本区默认折叠,展开并滚入视野。
+Future<void> expandScriptSection(WidgetTester tester) async {
+  final header = find.text('额度脚本');
+  await tester.ensureVisible(header);
+  await tester.tap(header);
+  await tester.pumpAndSettle();
+  await tester.ensureVisible(find.byKey(const ValueKey('quota-script-code')));
   await tester.pumpAndSettle();
 }
 
@@ -209,5 +236,146 @@ void main() {
 
     expect(captured, isEmpty, reason: '校验失败不发请求');
     expect(find.text('需以 http:// 或 https:// 开头'), findsOneWidget);
+  });
+
+  testWidgets('copy prefills quota script and create submits it',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        copyFrom: accountWithScript, client: recordingClient(captured));
+
+    // 启用中的脚本让分栏初始展开,代码与数值直接回显
+    expect(find.byKey(const ValueKey('quota-script-code')), findsOneWidget);
+    expect(fieldText(tester, 'quota-script-code'),
+        accountWithScript.quotaScript!.code);
+    expect(fieldText(tester, 'quota-script-timeout'), '15');
+    expect(fieldText(tester, 'quota-script-interval'), '5');
+    expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('quota-script-enabled')))
+            .value,
+        isTrue);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('account-name')));
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    final script = body['quota_script'] as Map<String, dynamic>;
+    expect(script['enabled'], isTrue);
+    expect(script['code'], accountWithScript.quotaScript!.code);
+    expect(script['timeout_seconds'], 15);
+    expect(script['auto_interval_minutes'], 5);
+  });
+
+  testWidgets('create without touching script section omits the key',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body.containsKey('quota_script'), isFalse,
+        reason: '没配脚本就不发该字段,服务端保持未配置');
+  });
+
+  testWidgets('edit clearing the script sends an explicit empty object',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        editing: accountWithScript, client: recordingClient(captured));
+
+    // 初始展开(脚本启用中):关掉开关并清空代码=不要脚本了
+    await tester.tap(find.byKey(const ValueKey('quota-script-enabled')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('quota-script-code')), '');
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['quota_script'], isA<Map<String, dynamic>>().having(
+        (m) => m.isEmpty, 'isEmpty', isTrue),
+        reason: '原来有配置时清空要显式发空对象,服务端才清除而不是保留');
+  });
+
+  testWidgets('enabled script with empty code fails validation',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        editing: accountWithScript, client: recordingClient(captured));
+
+    await tester.enterText(find.byKey(const ValueKey('quota-script-code')), '');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    expect(captured, isEmpty, reason: '校验失败不发请求');
+    expect(find.text('启用脚本时代码不能为空'), findsOneWidget);
+  });
+
+  testWidgets('test button hits quota-test endpoint and shows result',
+      (tester) async {
+    String? hitPath;
+    String? hitBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        hitPath = req.url.path;
+        hitBody = req.body;
+        return http.Response(
+            jsonEncode({
+              'ok': true,
+              'report': {
+                'account': 'ds-3',
+                'queryable': true,
+                'meters': [
+                  {
+                    'kind': 'balance',
+                    'unit': 'currency',
+                    'currency': 'USD',
+                    'remaining': 9.5,
+                  },
+                ],
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    await pumpForm(tester, editing: accountWithScript, client: client);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('quota-script-test')));
+    await tester.tap(find.byKey(const ValueKey('quota-script-test')));
+    await tester.pumpAndSettle();
+
+    expect(hitPath, '/admin/accounts/ds-3/quota-test');
+    expect(
+        (jsonDecode(hitBody!) as Map<String, dynamic>)['code'],
+        accountWithScript.quotaScript!.code);
+    expect(find.textContaining('试跑成功'), findsOneWidget);
+  });
+
+  testWidgets('create mode disables the test button', (tester) async {
+    await pumpForm(tester);
+    await expandScriptSection(tester);
+
+    final button = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, '试跑脚本'));
+    expect(button.onPressed, isNull,
+        reason: '试跑凭据取自已存账号,新建态不可试跑');
+    expect(find.text('保存账号后才能试跑'), findsOneWidget);
   });
 }
