@@ -317,7 +317,7 @@ class _AccountsPageState extends State<AccountsPage> {
                                   autoIntervalMinutes:
                                       a.quotaScript?.autoIntervalMinutes ?? 0,
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 16),
                                 if (_toggling.contains(a.name))
                                   const SizedBox(
                                     width: 24,

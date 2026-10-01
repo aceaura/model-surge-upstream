@@ -335,66 +335,6 @@ class _AccountFormState extends State<AccountForm> {
 
   // ── 额度脚本区(仿 CC Switch 脚本弹窗,收进可折叠分栏)──
 
-  /// 预设模板。变量只支持 {{apiKey}}/{{baseUrl}}(后端执行前替换);
-  /// CC Switch 的 {{accessToken}}/{{userId}} 在本服务无对应物,New API
-  /// 模板已改写为用 apiKey 并去掉 New-Api-User 头。
-  static const _scriptTemplates = <String, String>{
-    '空白': '''({
-  request: {
-    url: "",
-    method: "GET",
-    headers: {}
-  },
-  extractor: function(response) {
-    return {
-      remaining: 0,
-      unit: "USD"
-    };
-  }
-})''',
-    '通用余额': '''({
-  request: {
-    url: "{{baseUrl}}/user/balance",
-    method: "GET",
-    headers: {
-      "Authorization": "Bearer {{apiKey}}"
-    }
-  },
-  extractor: function(response) {
-    return {
-      isValid: response.is_active || true,
-      remaining: response.balance,
-      unit: "USD"
-    };
-  }
-})''',
-    'New API': '''({
-  request: {
-    url: "{{baseUrl}}/api/user/self",
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer {{apiKey}}"
-    }
-  },
-  extractor: function(response) {
-    if (response.success && response.data) {
-      return {
-        planName: response.data.group,
-        remaining: response.data.quota / 500000,
-        used: response.data.used_quota / 500000,
-        total: (response.data.quota + response.data.used_quota) / 500000,
-        unit: "USD"
-      };
-    }
-    return {
-      isValid: false,
-      invalidMessage: response.message || "查询失败"
-    };
-  }
-})''',
-  };
-
   String get _scriptSubtitle {
     if (_scriptEnabled && _scriptCode.text.trim().isNotEmpty) {
       return '已启用 · 接管该账号的额度查询';
@@ -431,36 +371,9 @@ class _AccountFormState extends State<AccountForm> {
             ],
           ),
           const SizedBox(height: 14),
-          Row(
-            children: [
-              const Text('脚本代码', style: TextStyle(fontSize: 13)),
-              const Spacer(),
-              PopupMenuButton<String>(
-                key: const ValueKey('quota-script-template'),
-                tooltip: '插入预设模板',
-                itemBuilder: (context) => [
-                  for (final name in _scriptTemplates.keys)
-                    PopupMenuItem(value: name, child: Text(name)),
-                ],
-                onSelected: (name) => setState(() {
-                  _scriptCode.text = _scriptTemplates[name]!;
-                  _scriptTestResult = null;
-                  _scriptTestOk = null;
-                }),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.article_outlined, size: 15),
-                      SizedBox(width: 4),
-                      Text('模板', style: TextStyle(fontSize: 12.5)),
-                      Icon(Icons.arrow_drop_down, size: 16),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text('脚本代码', style: TextStyle(fontSize: 13)),
           ),
           const SizedBox(height: 6),
           TextFormField(
