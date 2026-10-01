@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../theme.dart';
 import 'form_page.dart';
 
 class HeaderEditor extends StatefulWidget {
@@ -35,6 +36,7 @@ class _HeaderEditorState extends State<HeaderEditor> {
 
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
     return FormSection(
       title: '自定义请求头',
       desc: '随每次请求发往上游，用于租户标识等附加头',
@@ -44,56 +46,66 @@ class _HeaderEditorState extends State<HeaderEditor> {
         visualDensity: VisualDensity.compact,
         onPressed: () => setState(() => _pairs.add(_Pair())),
       ),
-      child: Column(
-        children: [
-          for (var i = 0; i < _pairs.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+      // 新增的键值行收进圆角描边盒,不散落在分区说明下方裸排。
+      child: _pairs.isEmpty
+          ? const SizedBox.shrink()
+          : Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: t.border),
+                borderRadius: BorderRadius.circular(AppConst.radiusCard),
+              ),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+              child: Column(
                 children: [
-                  Expanded(
-                    child: TextFormField(
-                      initialValue: _pairs[i].key,
-                      decoration: const InputDecoration(
-                        labelText: '名',
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                  for (var i = 0; i < _pairs.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              initialValue: _pairs[i].key,
+                              decoration: const InputDecoration(
+                                labelText: '名',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              onChanged: (v) {
+                                _pairs[i].key = v;
+                                _emit();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: TextFormField(
+                              initialValue: _pairs[i].value,
+                              decoration: const InputDecoration(
+                                labelText: '值',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              onChanged: (v) {
+                                _pairs[i].value = v;
+                                _emit();
+                              },
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: '删除',
+                            icon: const Icon(Icons.remove_circle_outline),
+                            onPressed: () {
+                              setState(() => _pairs.removeAt(i));
+                              _emit();
+                            },
+                          ),
+                        ],
                       ),
-                      onChanged: (v) {
-                        _pairs[i].key = v;
-                        _emit();
-                      },
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 2,
-                    child: TextFormField(
-                      initialValue: _pairs[i].value,
-                      decoration: const InputDecoration(
-                        labelText: '值',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: (v) {
-                        _pairs[i].value = v;
-                        _emit();
-                      },
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '删除',
-                    icon: const Icon(Icons.remove_circle_outline),
-                    onPressed: () {
-                      setState(() => _pairs.removeAt(i));
-                      _emit();
-                    },
-                  ),
                 ],
               ),
             ),
-        ],
-      ),
     );
   }
 }
