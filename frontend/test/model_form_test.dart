@@ -15,7 +15,7 @@ final providers = [
     'id': 'kimi',
     'display_name': 'Moonshot Kimi',
     'website': 'https://platform.moonshot.cn',
-    'base_url': 'https://api.moonshot.cn/coding',
+    'base_url': 'https://api.kimi.com/coding',
     'protocols': ['anthropic', 'chat_completions'],
     'auth': 'anthropic_key',
     'credential': 'api_key',

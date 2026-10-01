@@ -64,7 +64,7 @@ func TestGet(t *testing.T) {
 	if !ok {
 		t.Fatal("kimi should be registered")
 	}
-	if s.BaseURL != "https://api.moonshot.cn/coding" {
+	if s.BaseURL != "https://api.kimi.com/coding" {
 		t.Errorf("kimi base_url = %q", s.BaseURL)
 	}
 	if _, ok := Get("nope"); ok {

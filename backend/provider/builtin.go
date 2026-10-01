@@ -36,7 +36,9 @@ func init() {
 		ID:          "kimi",
 		DisplayName: "Moonshot Kimi",
 		Website:     "https://platform.moonshot.cn",
-		BaseURL:     "https://api.moonshot.cn/coding",
+		// Kimi For Coding 订阅端点在 api.kimi.com;api.moonshot.cn 没有
+		// /coding 路由(恒 404 url.not_found),/anthropic 只认平台密钥。
+		BaseURL:     "https://api.kimi.com/coding",
 		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions},
 		Auth:        AuthAnthropicKey,
 		Credential:  CredAPIKey,

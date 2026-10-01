@@ -213,7 +213,7 @@ Authorization: Bearer <密钥>
 | `anthropic` | `https://api.anthropic.com` | `anthropic` | `anthropic_key` | — | `/v1/models` |
 | `openai` | `https://api.openai.com` | `chat_completions`, `responses` | `bearer` | — | `/v1/models` |
 | `gemini` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
-| `kimi` | `https://api.moonshot.cn/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
+| `kimi` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
 | `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
 | `deepseek` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | `{path: "/user/balance", method: "GET", kind: "balance", unit: "currency", reset: "prepaid"}` | `/models` |
 
