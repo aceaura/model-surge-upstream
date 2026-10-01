@@ -39,80 +39,79 @@ class _HeaderEditorState extends State<HeaderEditor> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final hasPairs = _pairs.isNotEmpty;
     return FormSection(
       title: '自定义请求头',
-      // 有键值行时说明文字收进描边盒顶部;空列表没有盒,说明留在盒外。
-      desc: hasPairs ? null : _desc,
       trailing: IconButton(
         tooltip: '添加',
         icon: const Icon(Icons.add, size: 18),
         visualDensity: VisualDensity.compact,
         onPressed: () => setState(() => _pairs.add(_Pair())),
       ),
-      // 新增的键值行收进圆角描边盒,不散落在分区说明下方裸排。
-      child: !hasPairs
-          ? const SizedBox.shrink()
-          : Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: t.border),
-                borderRadius: BorderRadius.circular(AppConst.radiusCard),
-              ),
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(_desc, style: TextStyle(fontSize: 12, color: t.faint)),
-                  const SizedBox(height: 10),
-                  for (var i = 0; i < _pairs.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextFormField(
-                              initialValue: _pairs[i].key,
-                              decoration: const InputDecoration(
-                                labelText: '名',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              onChanged: (v) {
-                                _pairs[i].key = v;
-                                _emit();
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            flex: 2,
-                            child: TextFormField(
-                              initialValue: _pairs[i].value,
-                              decoration: const InputDecoration(
-                                labelText: '值',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              onChanged: (v) {
-                                _pairs[i].value = v;
-                                _emit();
-                              },
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: '删除',
-                            icon: const Icon(Icons.remove_circle_outline),
-                            onPressed: () {
-                              setState(() => _pairs.removeAt(i));
-                              _emit();
-                            },
-                          ),
-                        ],
+      // 描边盒常驻:说明文字固定在盒内顶部,键值行追加在其下;
+      // 空列表时盒内只有说明,不再盒内盒外两副面孔。
+      child: Container(
+        // 空列表时盒内只有短说明,也要撑满整行宽度。
+        width: double.infinity,
+        decoration: BoxDecoration(
+          border: Border.all(color: t.border),
+          borderRadius: BorderRadius.circular(AppConst.radiusCard),
+        ),
+        // 有行时末行自带 8px 底距,盒底只补 4;空盒则上下对称。
+        padding: EdgeInsets.fromLTRB(12, 12, 12, _pairs.isEmpty ? 12 : 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_desc, style: TextStyle(fontSize: 12, color: t.faint)),
+            if (_pairs.isNotEmpty) const SizedBox(height: 10),
+            for (var i = 0; i < _pairs.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        initialValue: _pairs[i].key,
+                        decoration: const InputDecoration(
+                          labelText: '名',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        onChanged: (v) {
+                          _pairs[i].key = v;
+                          _emit();
+                        },
                       ),
                     ),
-                ],
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: TextFormField(
+                        initialValue: _pairs[i].value,
+                        decoration: const InputDecoration(
+                          labelText: '值',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        onChanged: (v) {
+                          _pairs[i].value = v;
+                          _emit();
+                        },
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '删除',
+                      icon: const Icon(Icons.remove_circle_outline),
+                      onPressed: () {
+                        setState(() => _pairs.removeAt(i));
+                        _emit();
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ),
+          ],
+        ),
+      ),
     );
   }
 }
