@@ -147,10 +147,16 @@ class _BackButton extends StatelessWidget {
 /// label 在框上的字段(CC Switch 式):深色加粗 label + 下方全宽控件,
 /// 与 FormSection/JsonField 的分区标题同一字号色深,整幅表单标签一致。
 class LabeledField extends StatelessWidget {
-  const LabeledField({super.key, required this.label, required this.child});
+  const LabeledField(
+      {super.key, required this.label, required this.child, this.hint});
 
   final String label;
   final Widget child;
+
+  /// 字段下方的小字说明:左对齐暗色,与 FormSection desc 同风格。
+  /// 不用 InputDecoration.helperText——它随输入框内容内边距缩进,
+  /// 视觉上像框内文字而非字段说明。
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
@@ -166,6 +172,11 @@ class LabeledField extends StatelessWidget {
           ),
         ),
         child,
+        if (hint != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(hint!, style: TextStyle(fontSize: 12, color: t.faint)),
+          ),
       ],
     );
   }

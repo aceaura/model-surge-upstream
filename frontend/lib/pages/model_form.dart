@@ -280,6 +280,7 @@ class _ModelFormState extends State<ModelForm> {
               ),
               LabeledField(
                 label: '上下文窗口',
+                hint: '单位 k(1k = 1000 tokens),0 表示未声明',
                 child: TextFormField(
                   key: const ValueKey('model-context'),
                   controller: _contextWindow,
@@ -287,7 +288,6 @@ class _ModelFormState extends State<ModelForm> {
                       const TextInputType.numberWithOptions(decimal: true),
                   decoration: const InputDecoration(
                     suffixText: 'k',
-                    helperText: '单位 k(1k = 1000 tokens),0 表示未声明',
                     border: OutlineInputBorder(),
                   ),
                   validator: (v) {
@@ -323,6 +323,7 @@ class _ModelFormState extends State<ModelForm> {
                   ? LabeledField(
                       key: const ValueKey('model-compact-threshold-field'),
                       label: '触发阈值',
+                      hint: '估算输入超过窗口此比例时触发',
                       child: TextFormField(
                         key: const ValueKey('model-compact-threshold'),
                         controller: _compactThreshold,
@@ -330,7 +331,6 @@ class _ModelFormState extends State<ModelForm> {
                             decimal: true),
                         decoration: const InputDecoration(
                           suffixText: '%',
-                          helperText: '估算输入超过窗口此比例时触发',
                           border: OutlineInputBorder(),
                         ),
                         validator: (v) {
@@ -349,12 +349,12 @@ class _ModelFormState extends State<ModelForm> {
                 LabeledField(
                   key: const ValueKey('model-compact-keep-field'),
                   label: '保留最近轮数',
+                  hint: '压缩后原样保留的最近对话轮数',
                   child: TextFormField(
                     key: const ValueKey('model-compact-keep'),
                     controller: _compactKeepTurns,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
-                      helperText: '压缩后原样保留的最近对话轮数',
                       border: OutlineInputBorder(),
                     ),
                     validator: (v) {

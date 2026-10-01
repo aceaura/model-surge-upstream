@@ -194,11 +194,11 @@ class _AccountFormState extends State<AccountForm> {
             const SizedBox(height: 20),
             LabeledField(
               label: '请求地址',
+              hint: '默认跟随提供商；修改后仅本账号生效',
               child: TextFormField(
                 key: const ValueKey('account-base-url'),
                 controller: _baseUrl,
                 decoration: const InputDecoration(
-                  helperText: '默认跟随提供商；修改后仅本账号生效',
                   border: OutlineInputBorder(),
                 ),
                 validator: (v) {
