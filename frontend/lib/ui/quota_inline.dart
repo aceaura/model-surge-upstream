@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 
@@ -104,28 +105,29 @@ class _QuotaInlineState extends State<QuotaInline> {
       mainAxisSize: MainAxisSize.min,
       children: [
         _timeRow(t, report.at ?? DateTime.now()),
-        const SizedBox(height: 1),
+        const SizedBox(height: 2),
         _tappable(Text.rich(
           TextSpan(children: _meterSpans(t, report.meters)),
-          style: TextStyle(fontSize: 12, color: t.dim),
+          style: TextStyle(fontSize: 12, color: t.dim, height: 1.2),
         )),
       ],
     );
   }
 
-  /// 第一行:🕐 相对时间 + 行内刷新钮(查询中换成小 spinner)。
+  /// 第一行:🕐 相对时间 + 行内刷新钮(查询中换成小 spinner),
+  /// CC Switch 口径是 10px 浅灰小字。
   Widget _timeRow(AppTokens t, DateTime at) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(Icons.schedule, size: 11, color: t.faint),
+        Icon(Icons.schedule, size: 10, color: t.faint),
         const SizedBox(width: 3),
-        Text(_relative(at), style: TextStyle(fontSize: 11, color: t.faint)),
+        Text(_relative(at), style: TextStyle(fontSize: 10, color: t.faint)),
         const SizedBox(width: 4),
         if (_busy)
           SizedBox(
-            width: 11,
-            height: 11,
+            width: 10,
+            height: 10,
             child: CircularProgressIndicator(strokeWidth: 1.5, color: t.faint),
           )
         else
@@ -141,24 +143,35 @@ class _QuotaInlineState extends State<QuotaInline> {
     );
   }
 
-  /// 第二行计量摘要。percent 计量给「标签: 已用% ⏱倒计时」,
-  /// 百分比数字加粗(CC Switch 同款视觉锚点);其余沿用余额/已用口径。
+  /// 第二行计量摘要(CC Switch TierBadge 同款摆放):「标签:」浅灰 +
+  /// 已用%按水位着色加粗(<70 绿 / 70-89 橙 / ≥90 红)+ 🕐倒计时
+  /// 10px 浅灰;两条计量之间 8px 间隔。其余单位沿用余额/已用口径。
   List<InlineSpan> _meterSpans(AppTokens t, List<QuotaMeter> meters) {
     final spans = <InlineSpan>[];
-    const gap = WidgetSpan(child: SizedBox(width: 12));
+    const gap = WidgetSpan(child: SizedBox(width: 8));
     for (final (i, m) in meters.take(2).indexed) {
       if (i > 0) spans.add(gap);
       if (m.unit == 'percent' && m.used != null) {
-        spans.add(TextSpan(text: '${m.label?.isNotEmpty == true ? m.label : '额度'}: '));
+        spans.add(TextSpan(
+            text: '${m.label?.isNotEmpty == true ? m.label : '额度'}:'));
         spans.add(TextSpan(
           text: m.amount(m.used),
-          style: TextStyle(fontWeight: FontWeight.w700, color: t.ink),
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            color: _utilColor(t, m.used!),
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
         ));
         final resetAt = m.resetAt;
         if (resetAt != null) {
+          spans.add(const WidgetSpan(child: SizedBox(width: 3)));
+          spans.add(WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: Icon(Icons.schedule, size: 10, color: t.faint),
+          ));
           spans.add(TextSpan(
-            text: '  ⏱${_countdown(resetAt)}',
-            style: TextStyle(fontSize: 11, color: t.faint),
+            text: _countdown(resetAt),
+            style: TextStyle(fontSize: 10, color: t.faint),
           ));
         }
       } else {
@@ -166,6 +179,13 @@ class _QuotaInlineState extends State<QuotaInline> {
       }
     }
     return spans;
+  }
+
+  /// CC Switch utilizationColor 同款水位配色。
+  static Color _utilColor(AppTokens t, double pct) {
+    if (pct >= 90) return t.danger;
+    if (pct >= 70) return t.warn;
+    return t.success;
   }
 
   Widget _tappable(Widget child) => MouseRegion(

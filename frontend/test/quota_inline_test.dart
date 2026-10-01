@@ -89,7 +89,7 @@ void main() {
     expect(find.byIcon(Icons.schedule), findsOneWidget);
   });
 
-  testWidgets('percent meter shows bold used figure and reset countdown',
+  testWidgets('percent meter shows bold colored figure and reset countdown',
       (tester) async {
     final resetAt = DateTime.now().add(const Duration(hours: 3, minutes: 8));
     await pumpInline(tester, queryable: true, body: {
@@ -109,15 +109,40 @@ void main() {
     // 构建到断言之间有时间流逝,倒计时期望值按同一公式现场算
     final d = resetAt.difference(DateTime.now());
     final cd = '${d.inHours}h${d.inMinutes % 60}m';
-    final line = '5小时: 64%  ⏱$cd';
-    expect(find.text(line), findsOneWidget);
-    final rich = tester.widget<Text>(find.text(line));
+    final line = find.textContaining('5小时:');
+    expect(line, findsOneWidget);
+    final rich = tester.widget<Text>(line);
     final spans = (rich.textSpan! as TextSpan).children!;
-    final bold = spans
-        .whereType<TextSpan>()
-        .firstWhere((s) => s.text == '64%');
-    expect(bold.style?.fontWeight, FontWeight.w700,
+    final bold =
+        spans.whereType<TextSpan>().firstWhere((s) => s.text == '64%');
+    expect(bold.style?.fontWeight, FontWeight.w600,
         reason: '百分比数字是 CC Switch 同款视觉锚点');
+    final tokens = Theme.of(tester.element(line)).extension<AppTokens>()!;
+    expect(bold.style?.color, tokens.success, reason: '64% < 70 水位为绿');
+    expect(spans.whereType<TextSpan>().any((s) => s.text == cd), isTrue,
+        reason: '倒计时紧随时钟图标,无 ⏱ 字符');
+    expect(find.byIcon(Icons.schedule), findsNWidgets(2),
+        reason: '时间行与倒计时各一个时钟图标');
+  });
+
+  testWidgets('percent color follows utilization thresholds', (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'account': 'ds-1',
+      'queryable': true,
+      'meters': [
+        {'kind': 'usage', 'unit': 'percent', 'label': '5小时', 'used': 75},
+        {'kind': 'usage', 'unit': 'percent', 'label': '7天', 'used': 95},
+      ],
+    });
+
+    final line = find.textContaining('5小时:');
+    final rich = tester.widget<Text>(line);
+    final spans = (rich.textSpan! as TextSpan).children!;
+    final tokens = Theme.of(tester.element(line)).extension<AppTokens>()!;
+    TextSpan spanOf(String text) =>
+        spans.whereType<TextSpan>().firstWhere((s) => s.text == text);
+    expect(spanOf('75%').style?.color, tokens.warn, reason: '70-89 水位为橙');
+    expect(spanOf('95%').style?.color, tokens.danger, reason: '≥90 水位为红');
   });
 
   testWidgets('auto interval re-queries on schedule', (tester) async {
