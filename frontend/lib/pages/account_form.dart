@@ -297,16 +297,16 @@ class _AccountFormState extends State<AccountForm> {
                 controller: _apiKey,
                 obscureText: !_revealKey,
                 decoration: InputDecoration(
-                  // 掩码也含前 4 后 4,默认全星号不泄露任何字符,
-                  // 点眼睛后才亮出部分掩码帮助辨认是哪把钥。
+                  // 默认纯星号不泄露任何字符,点眼睛才亮部分
+                  // 掩码帮助辨认;完整密钥后端从不下发。
                   hintText: _isEdit
                       ? _revealKey
-                          ? '留空保留原密钥（当前 ${widget.editing!.maskedApiKey}）'
-                          : '留空保留原密钥（当前 ************）'
+                          ? widget.editing!.maskedApiKey
+                          : '************'
                       : widget.copyFrom != null
                           ? _revealKey
-                              ? '原密钥不可见（${widget.copyFrom!.maskedApiKey}），需重新填入'
-                              : '原密钥不可见（************），需重新填入'
+                              ? widget.copyFrom!.maskedApiKey
+                              : '************'
                           : null,
                   border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
