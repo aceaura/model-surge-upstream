@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `name, provider_id, credential, base_url, headers, enabled, created_at, updated_at`
+const columns = `name, provider_id, credential, base_url, headers, quota_script, enabled, created_at, updated_at`
 
 type Repo struct {
 	pool  *pgxpool.Pool
@@ -29,14 +29,16 @@ func NewRepo(pool *pgxpool.Pool, c *cache.Cache) *Repo {
 	return &Repo{pool: pool, cache: c}
 }
 
-// Input 是创建与更新的入参。Update 时 Credential 为零值表示保留原凭据。
+// Input 是创建与更新的入参。Update 时 Credential 为零值表示保留原凭据，
+// QuotaScript 为 nil 表示保留原脚本；要清除脚本传零值 QuotaScript 指针。
 type Input struct {
-	Name       string
-	ProviderID string
-	Credential credential.Credential
-	BaseURL    string
-	Headers    map[string]string
-	Enabled    bool
+	Name        string
+	ProviderID  string
+	Credential  credential.Credential
+	BaseURL     string
+	Headers     map[string]string
+	QuotaScript *QuotaScript
+	Enabled     bool
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
@@ -47,14 +49,14 @@ func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
 	now := time.Now().UTC()
 	acc.CreatedAt, acc.UpdatedAt = now, now
 
-	credRaw, headersRaw, err := encode(acc)
+	credRaw, headersRaw, scriptRaw, err := encode(acc)
 	if err != nil {
 		return Account{}, err
 	}
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO accounts (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, acc.Enabled, acc.CreatedAt, acc.UpdatedAt)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, scriptRaw, acc.Enabled, acc.CreatedAt, acc.UpdatedAt)
 		return mapWriteErr(err, "account", acc.Name)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.AccountKey(acc.Name), acc, persist); err != nil {
@@ -110,6 +112,9 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 	if in.Credential.Kind == "" {
 		in.Credential = existing.Credential
 	}
+	if in.QuotaScript == nil {
+		in.QuotaScript = existing.QuotaScript
+	}
 	acc, err := validate(in)
 	if err != nil {
 		return Account{}, err
@@ -117,15 +122,15 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 	acc.CreatedAt = existing.CreatedAt
 	acc.UpdatedAt = time.Now().UTC()
 
-	credRaw, headersRaw, err := encode(acc)
+	credRaw, headersRaw, scriptRaw, err := encode(acc)
 	if err != nil {
 		return Account{}, err
 	}
 	persist := func() error {
 		tag, err := r.pool.Exec(ctx, `UPDATE accounts SET
-			provider_id=$2, credential=$3, base_url=$4, headers=$5, enabled=$6, updated_at=$7
+			provider_id=$2, credential=$3, base_url=$4, headers=$5, quota_script=$6, enabled=$7, updated_at=$8
 			WHERE name=$1`,
-			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, acc.Enabled, acc.UpdatedAt)
+			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, scriptRaw, acc.Enabled, acc.UpdatedAt)
 		if err != nil {
 			return apperr.Wrap(apperr.StorageError, "update account", err)
 		}
@@ -217,24 +222,45 @@ func validate(in Input) (Account, error) {
 	if headers == nil {
 		headers = map[string]string{}
 	}
+	if in.QuotaScript != nil {
+		s := *in.QuotaScript
+		s.Code = strings.TrimSpace(s.Code)
+		if s.Enabled && s.Code == "" {
+			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script is enabled but code is empty")
+		}
+		if s.TimeoutSeconds < 0 || s.TimeoutSeconds > 120 {
+			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script timeout_seconds must be between 0 and 120")
+		}
+		if s.AutoIntervalMinutes < 0 || s.AutoIntervalMinutes > 1440 {
+			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script auto_interval_minutes must be between 0 and 1440")
+		}
+		in.QuotaScript = &s
+	}
 	return Account{
-		Name:       name,
-		ProviderID: in.ProviderID,
-		Credential: in.Credential,
-		BaseURL:    base,
-		Headers:    headers,
-		Enabled:    in.Enabled,
+		Name:        name,
+		ProviderID:  in.ProviderID,
+		Credential:  in.Credential,
+		BaseURL:     base,
+		Headers:     headers,
+		QuotaScript: in.QuotaScript,
+		Enabled:     in.Enabled,
 	}, nil
 }
 
-func encode(a Account) (credRaw, headersRaw []byte, err error) {
+func encode(a Account) (credRaw, headersRaw, scriptRaw []byte, err error) {
 	if credRaw, err = a.Credential.Encode(); err != nil {
-		return nil, nil, apperr.Wrap(apperr.InvalidCredential, "encode credential", err)
+		return nil, nil, nil, apperr.Wrap(apperr.InvalidCredential, "encode credential", err)
 	}
 	if headersRaw, err = json.Marshal(a.Headers); err != nil {
-		return nil, nil, apperr.Wrap(apperr.InvalidJSON, "encode headers", err)
+		return nil, nil, nil, apperr.Wrap(apperr.InvalidJSON, "encode headers", err)
 	}
-	return credRaw, headersRaw, nil
+	// 未配置脚本落 '{}',与列默认值同形,读取侧统一按空脚本处理。
+	if a.QuotaScript == nil {
+		scriptRaw = []byte(`{}`)
+	} else if scriptRaw, err = json.Marshal(a.QuotaScript); err != nil {
+		return nil, nil, nil, apperr.Wrap(apperr.InvalidJSON, "encode quota_script", err)
+	}
+	return credRaw, headersRaw, scriptRaw, nil
 }
 
 type scanner interface {
@@ -246,8 +272,9 @@ func scan(s scanner) (Account, error) {
 		a          Account
 		credRaw    []byte
 		headersRaw []byte
+		scriptRaw  []byte
 	)
-	if err := s.Scan(&a.Name, &a.ProviderID, &credRaw, &a.BaseURL, &headersRaw, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := s.Scan(&a.Name, &a.ProviderID, &credRaw, &a.BaseURL, &headersRaw, &scriptRaw, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return Account{}, err
 	}
 	cred, err := credential.Decode(credRaw)
@@ -260,6 +287,14 @@ func scan(s scanner) (Account, error) {
 	}
 	if a.Headers == nil {
 		a.Headers = map[string]string{}
+	}
+	var script QuotaScript
+	if err := json.Unmarshal(scriptRaw, &script); err != nil {
+		return Account{}, fmt.Errorf("account %q quota_script: %w", a.Name, err)
+	}
+	// 空脚本(未启用且无代码)不保留指针,读取形态与未配置一致。
+	if script.Enabled || script.Code != "" {
+		a.QuotaScript = &script
 	}
 	return a, nil
 }

@@ -40,6 +40,8 @@ type Meter struct {
 	// ResetAt 下次重置的绝对时刻，上游给了才有。周期配额与速率窗口下
 	// 这比静态的 Reset 规律更有用。
 	ResetAt *time.Time `json:"reset_at,omitempty"`
+	// Extra 脚本提取器附带的自由文本(套餐说明、到期日等),原样透传。
+	Extra string `json:"extra,omitempty"`
 }
 
 type Report struct {
@@ -93,6 +95,16 @@ func (q *Quota) Query(ctx context.Context, accountName string) (Report, error) {
 	if !ok {
 		return Report{}, apperr.New(apperr.InvalidProvider,
 			fmt.Sprintf("account %q references unknown provider %q", acc.Name, acc.ProviderID))
+	}
+	// 账号级脚本优先于内置声明:显式配置的定制查询盖住通用路径,
+	// 内置未声明额度接口的渠道也由此获得查询能力。
+	if acc.QuotaScript.Active() {
+		report, err := RunScript(ctx, spec, acc, acc.QuotaScript.Code, acc.QuotaScript.TimeoutSeconds)
+		if err != nil {
+			return Report{}, err
+		}
+		q.store(accountName, report)
+		return report, nil
 	}
 	if spec.Quota == nil {
 		// 不可查询是一种正常答案，不是错误。
@@ -279,6 +291,11 @@ func numberOf(v any) (float64, bool) {
 	switch t := v.(type) {
 	case float64:
 		return t, true
+	// goja 把 JS 整数导出为 int64,脚本路径依赖这两个分支。
+	case int64:
+		return float64(t), true
+	case int:
+		return float64(t), true
 	case json.Number:
 		f, err := t.Float64()
 		return f, err == nil
@@ -289,6 +306,21 @@ func numberOf(v any) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// TestScript 用账号内置凭据试跑一段未落库的脚本,供管理面表单的
+// 「测试」按钮在保存前验证代码与渠道端点。结果不进缓存。
+func (q *Quota) TestScript(ctx context.Context, accountName, code string, timeoutSeconds int) (Report, error) {
+	acc, err := q.accounts.Get(ctx, accountName)
+	if err != nil {
+		return Report{}, err
+	}
+	spec, ok := acc.Spec()
+	if !ok {
+		return Report{}, apperr.New(apperr.InvalidProvider,
+			fmt.Sprintf("account %q references unknown provider %q", acc.Name, acc.ProviderID))
+	}
+	return RunScript(ctx, spec, acc, code, timeoutSeconds)
 }
 
 func (q *Quota) lookup(name string) (Report, bool) {

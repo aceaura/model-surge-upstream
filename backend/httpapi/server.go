@@ -41,6 +41,7 @@ type Resolver interface {
 
 type Quota interface {
 	Query(ctx context.Context, accountName string) (quota.Report, error)
+	TestScript(ctx context.Context, accountName, code string, timeoutSeconds int) (quota.Report, error)
 	Forget(name string)
 }
 
@@ -117,6 +118,7 @@ func NewServer(d Deps) http.Handler {
 	// 额度与上游模型清单同时挂在管理面：桌面客户端只持管理密钥，
 	// 不该为查这两项再配下发密钥。
 	admin.HandleFunc("GET /admin/accounts/{name}/quota", h.quota)
+	admin.HandleFunc("POST /admin/accounts/{name}/quota-test", h.testQuotaScript)
 	admin.HandleFunc("GET /admin/accounts/{name}/upstream-models", h.upstreamModels)
 	admin.HandleFunc("GET /admin/models", h.listModels)
 	admin.HandleFunc("POST /admin/models", h.createModel)
@@ -126,6 +128,8 @@ func NewServer(d Deps) http.Handler {
 	// 连通性检测挂独立前缀：模型 id 含 / 必须吃 {id...} 通配，而 Go 路由
 	// 不允许通配段后接 /test 静态段。
 	admin.HandleFunc("POST /admin/model-test/{id...}", h.testModel)
+	// 账号检测同理：账号 name 无字符集约束、可含 /，挂独立前缀吃通配。
+	admin.HandleFunc("POST /admin/account-test/{name...}", h.testAccount)
 	admin.HandleFunc("GET /admin/proxy-settings", h.getProxySettings)
 	admin.HandleFunc("PUT /admin/proxy-settings", h.putProxySettings)
 	admin.HandleFunc("GET /admin/logs", h.listLogs)

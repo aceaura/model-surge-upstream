@@ -157,13 +157,23 @@ func (s *stubModels) Delete(_ context.Context, id string) error {
 }
 
 type stubQuota struct {
-	report quota.Report
-	err    error
-	forgot []string
+	report   quota.Report
+	err      error
+	testCode string
+	testErr  error
+	forgot   []string
 }
 
 func (s *stubQuota) Query(context.Context, string) (quota.Report, error) {
 	return s.report, s.err
+}
+
+func (s *stubQuota) TestScript(_ context.Context, _ string, code string, _ int) (quota.Report, error) {
+	s.testCode = code
+	if s.testErr != nil {
+		return quota.Report{}, s.testErr
+	}
+	return quota.Report{Account: "kimi-1", Queryable: true, Meters: []quota.Meter{}}, nil
 }
 
 func (s *stubQuota) Forget(name string) { s.forgot = append(s.forgot, name) }
@@ -604,6 +614,59 @@ func TestQuotaOnAdminPlane(t *testing.T) {
 	}
 	if rec := f.do(t, "GET", "/admin/accounts/kimi-1/quota", deliveryKey, ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("delivery key on admin quota = %d, want 401", rec.Code)
+	}
+}
+
+func TestQuotaTestScript(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "POST", "/admin/accounts/kimi-1/quota-test", adminKey,
+		`{"code":"({request:{url:\"https://x\"},extractor:function(r){return{remaining:1}}})","timeout_seconds":5}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK {
+		t.Errorf("ok = false: %s", rec.Body)
+	}
+	if f.quota.testCode == "" {
+		t.Error("script code should reach the quota service")
+	}
+	// 试跑是管理面能力,不下发到 delivery 面。
+	if rec := f.do(t, "POST", "/v1/accounts/kimi-1/quota-test", deliveryKey, "{}"); rec.Code != http.StatusNotFound {
+		t.Errorf("delivery plane should not expose quota-test, got %d", rec.Code)
+	}
+}
+
+func TestQuotaTestScriptFailureIsResult(t *testing.T) {
+	f := newFixture(t)
+	f.quota.testErr = apperr.New(apperr.QuotaUnavailable, "quota script eval: SyntaxError")
+	rec := f.do(t, "POST", "/admin/accounts/kimi-1/quota-test", adminKey, `{"code":"bad"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("script failure is a test result, not a request error, got %d", rec.Code)
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.OK || out.Error == "" {
+		t.Errorf("out = %+v, want ok:false with the script error message", out)
+	}
+}
+
+func TestQuotaTestScriptUnknownAccount(t *testing.T) {
+	f := newFixture(t)
+	f.quota.testErr = apperr.New(apperr.NotFound, `account "ghost" not found`)
+	rec := f.do(t, "POST", "/admin/accounts/ghost/quota-test", adminKey, `{"code":"x"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown account is a request error, got %d", rec.Code)
 	}
 }
 

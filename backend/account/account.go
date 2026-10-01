@@ -9,6 +9,24 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
+// QuotaScript 账号级额度查询脚本(CC Switch usage_script 同款机制):
+// 内置 provider 未声明额度接口、或其响应形态超出通用解析时,用一段
+// JS(request + extractor)定制查询。代码里 {{apiKey}}/{{baseUrl}} 占位符
+// 在执行时替换为账号内置凭据与生效地址,脚本本身不存密钥。
+type QuotaScript struct {
+	Enabled bool   `json:"enabled"`
+	Code    string `json:"code"`
+	// TimeoutSeconds 脚本与上游请求的超时,0 走默认。
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// AutoIntervalMinutes 客户端自动刷新间隔,0 表示不自动刷。
+	AutoIntervalMinutes int `json:"auto_interval_minutes,omitempty"`
+}
+
+// Active 判定脚本是否参与额度查询:启用且代码非空。
+func (s *QuotaScript) Active() bool {
+	return s != nil && s.Enabled && s.Code != ""
+}
+
 type Account struct {
 	Name       string                `json:"name"`
 	ProviderID string                `json:"provider_id"`
@@ -16,33 +34,37 @@ type Account struct {
 	// BaseURL 为空表示沿用 provider 默认根地址。
 	BaseURL   string            `json:"base_url"`
 	Headers   map[string]string `json:"headers"`
-	Enabled   bool              `json:"enabled"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	// QuotaScript 为 nil 表示未配置额度脚本。
+	QuotaScript *QuotaScript `json:"quota_script,omitempty"`
+	Enabled     bool         `json:"enabled"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
 }
 
 // View 是管理面读取形态：凭据脱敏。
 type View struct {
-	Name       string              `json:"name"`
-	ProviderID string              `json:"provider_id"`
-	Credential credential.Redacted `json:"credential"`
-	BaseURL    string              `json:"base_url"`
-	Headers    map[string]string   `json:"headers"`
-	Enabled    bool                `json:"enabled"`
-	CreatedAt  time.Time           `json:"created_at"`
-	UpdatedAt  time.Time           `json:"updated_at"`
+	Name        string              `json:"name"`
+	ProviderID  string              `json:"provider_id"`
+	Credential  credential.Redacted `json:"credential"`
+	BaseURL     string              `json:"base_url"`
+	Headers     map[string]string   `json:"headers"`
+	QuotaScript *QuotaScript        `json:"quota_script,omitempty"`
+	Enabled     bool                `json:"enabled"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
 }
 
 func (a Account) View() View {
 	return View{
-		Name:       a.Name,
-		ProviderID: a.ProviderID,
-		Credential: a.Credential.Redact(),
-		BaseURL:    a.BaseURL,
-		Headers:    a.Headers,
-		Enabled:    a.Enabled,
-		CreatedAt:  a.CreatedAt,
-		UpdatedAt:  a.UpdatedAt,
+		Name:        a.Name,
+		ProviderID:  a.ProviderID,
+		Credential:  a.Credential.Redact(),
+		BaseURL:     a.BaseURL,
+		Headers:     a.Headers,
+		QuotaScript: a.QuotaScript,
+		Enabled:     a.Enabled,
+		CreatedAt:   a.CreatedAt,
+		UpdatedAt:   a.UpdatedAt,
 	}
 }
 

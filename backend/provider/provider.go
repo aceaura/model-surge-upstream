@@ -55,6 +55,8 @@ const (
 	UnitRequests MeterUnit = "requests"
 	UnitTokens   MeterUnit = "tokens"
 	UnitCredits  MeterUnit = "credits"
+	// UnitPercent 周期配额的已用百分比(订阅窗口形态,如 5 小时/7 天窗口)。
+	UnitPercent MeterUnit = "percent"
 )
 
 // QuotaAPI 额度查询接口声明。provider 未声明时 Spec.Quota 为 nil。

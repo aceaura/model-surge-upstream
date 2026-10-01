@@ -1,13 +1,19 @@
 CREATE TABLE IF NOT EXISTS accounts (
-    name        TEXT PRIMARY KEY,
-    provider_id TEXT        NOT NULL,
-    credential  JSONB       NOT NULL,
-    base_url    TEXT        NOT NULL DEFAULT '',
-    headers     JSONB       NOT NULL DEFAULT '{}',
-    enabled     BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    name         TEXT PRIMARY KEY,
+    provider_id  TEXT        NOT NULL,
+    credential   JSONB       NOT NULL,
+    base_url     TEXT        NOT NULL DEFAULT '',
+    headers      JSONB       NOT NULL DEFAULT '{}',
+    quota_script JSONB       NOT NULL DEFAULT '{}',
+    enabled      BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 已存在的库补列:CREATE TABLE IF NOT EXISTS 不会改旧表结构。
+-- quota_script 承载账号级额度查询脚本(enabled/code/timeout_seconds/
+-- auto_interval_minutes),CC Switch usage_script 同款机制,'{}' 即未配置。
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS quota_script JSONB NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS models (
     id             TEXT PRIMARY KEY,
