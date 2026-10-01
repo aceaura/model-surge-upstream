@@ -152,6 +152,9 @@ class _AdminShellState extends State<AdminShell> {
           client: client,
           onOpenSettings: _openSettings,
           onOpenModels: _openAccountModels,
+          // IndexedStack 常驻:切回本页时按 active 沿刷新一次,
+          // 否则别处改动(改额度脚本/外部灌数据)在列表里看不到。
+          active: _page == 'accounts',
         ),
       ),
       _NavItem(

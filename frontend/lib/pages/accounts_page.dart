@@ -20,10 +20,15 @@ class AccountsPage extends StatefulWidget {
     required this.client,
     required this.onOpenSettings,
     required this.onOpenModels,
+    this.active = false,
   });
 
   final ApiClient client;
   final VoidCallback onOpenSettings;
+
+  /// 是否正处于前台(由主壳按当前导航传入)。页在 IndexedStack 里常驻,
+  /// 别处的改动(改额度脚本/删模型等)不会触发本页重建,重新激活时刷新。
+  final bool active;
 
   /// 点「模型」时通知主壳跳到模型总览页,并以该账号名作为搜索词过滤。
   final void Function(Account account) onOpenModels;
@@ -41,13 +46,25 @@ class _AccountsPageState extends State<AccountsPage> {
   /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
   AccountForm? _form;
 
+  @override
+  void didUpdateWidget(AccountsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 重新激活(false→true)时刷新:别处的改动(改额度脚本/API 灌数据等)
+    // 不会触发常驻页重建,不刷新会看不到后配的额度脚本与新账号。
+    if (!oldWidget.active && widget.active) _reload();
+  }
+
   Future<(List<Account>, List<ProviderSpec>)> _load() async {
     final accounts = await widget.client.listAccounts();
     final providers = await widget.client.listProviders();
     return (accounts, providers);
   }
 
-  void _reload() => setState(() => _future = _load());
+  // 块体而非 => 箭头:setState 断言回调不得返回 Future,箭头写法会把
+  // 赋值表达式的 Future 带回去,debug 下每次 _reload 都触发断言。
+  void _reload() => setState(() {
+        _future = _load();
+      });
 
   /// 卡片尾部的小号操作按钮:18 图标 + 弱色,hover 才有底色反馈。
   Widget _action(

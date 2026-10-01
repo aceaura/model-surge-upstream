@@ -101,4 +101,58 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });
+
+  testWidgets('重新激活(active false→true)重新拉取列表,切页回来能看到后配的额度脚本',
+      (tester) async {
+    // 页在 IndexedStack 里常驻:外面给账号配了额度脚本后切回账号页,
+    // 必须重拉列表,否则行内额度永不出现。
+    var accountsCalls = 0;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final path = request.url.path;
+        if (path == '/admin/accounts' && request.method == 'GET') {
+          accountsCalls++;
+        }
+        final Map<String, dynamic> payload;
+        if (path == '/admin/accounts') {
+          payload = {'accounts': <dynamic>[]};
+        } else if (path == '/admin/providers') {
+          payload = {'providers': <dynamic>[]};
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    Widget host(bool active) => MaterialApp(
+          theme: buildAppTheme(),
+          home: Scaffold(
+            body: AccountsPage(
+              client: client,
+              onOpenSettings: () {},
+              onOpenModels: (_) {},
+              active: active,
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(host(false));
+    await tester.pumpAndSettle();
+    expect(accountsCalls, 1); // 首载一次
+
+    await tester.pumpWidget(host(false));
+    await tester.pumpAndSettle();
+    expect(accountsCalls, 1); // 保持后台不重拉
+
+    await tester.pumpWidget(host(true));
+    await tester.pumpAndSettle();
+    expect(accountsCalls, 2); // 激活沿重拉一次
+  });
 }
