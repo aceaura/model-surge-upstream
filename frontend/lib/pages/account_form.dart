@@ -246,86 +246,7 @@ class _AccountFormState extends State<AccountForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 编辑时账号名不可改(标题已含),提供商独占整行;
-            // 新建时提供商与账号名并排(CC Switch 式双列)
-            if (_isEdit)
-              LabeledField(label: '提供商', child: _providerDropdown())
-            else
-              FormRow2(
-                LabeledField(label: '提供商', child: _providerDropdown()),
-                LabeledField(
-                  label: '账号名',
-                  child: TextFormField(
-                    key: const ValueKey('account-name'),
-                    controller: _name,
-                    decoration: const InputDecoration(
-                      hintText: 'kimi-1',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (v) => (v == null || v.trim().isEmpty)
-                        ? '账号名不能为空'
-                        : null,
-                  ),
-                ),
-              ),
-            const SizedBox(height: 20),
-            LabeledField(
-              label: '请求地址',
-              hint: '默认跟随提供商；修改后仅本账号生效',
-              child: TextFormField(
-                key: const ValueKey('account-base-url'),
-                controller: _baseUrl,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) {
-                  final t = v?.trim() ?? '';
-                  if (t.isEmpty) return '请求地址不能为空';
-                  if (!t.startsWith('http://') &&
-                      !t.startsWith('https://')) {
-                    return '需以 http:// 或 https:// 开头';
-                  }
-                  return null;
-                },
-              ),
-            ),
-            const SizedBox(height: 20),
-            LabeledField(
-              label: '密钥',
-              child: TextFormField(
-                key: const ValueKey('account-api-key'),
-                controller: _apiKey,
-                obscureText: !_revealKey,
-                decoration: InputDecoration(
-                  // 默认纯星号不泄露任何字符,点眼睛才亮部分
-                  // 掩码帮助辨认;完整密钥后端从不下发。
-                  hintText: _isEdit
-                      ? _revealKey
-                          ? widget.editing!.maskedApiKey
-                          : '************'
-                      : widget.copyFrom != null
-                          ? _revealKey
-                              ? widget.copyFrom!.maskedApiKey
-                              : '************'
-                          : null,
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    tooltip: _revealKey ? '隐藏' : '显示',
-                    icon: Icon(_revealKey
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined),
-                    onPressed: () =>
-                        setState(() => _revealKey = !_revealKey),
-                  ),
-                ),
-                validator: (v) {
-                  if (_isEdit) return null;
-                  return (v == null || v.trim().isEmpty)
-                      ? '密钥不能为空'
-                      : null;
-                },
-              ),
-            ),
+            _basicSection(),
             const SizedBox(height: 26),
             HeaderEditor(
               initial: _headers,
@@ -335,6 +256,108 @@ class _AccountFormState extends State<AccountForm> {
             _quotaScriptSection(),
           ],
         ),
+      ),
+    );
+  }
+
+  // ── 基本信息(提供商/账号名/请求地址/密钥),收进可折叠分栏 ──
+
+  String get _basicSubtitle {
+    final p =
+        widget.providers.where((p) => p.id == _providerId).firstOrNull;
+    final name = p?.displayName ?? _providerId ?? '';
+    final url = _baseUrl.text.trim();
+    if (name.isEmpty && url.isEmpty) return '提供商、请求地址与密钥';
+    return [name, url].where((s) => s.isNotEmpty).join(' · ');
+  }
+
+  Widget _basicSection() {
+    return CollapsibleSection(
+      icon: Icons.badge_outlined,
+      title: '基本信息',
+      subtitle: _basicSubtitle,
+      // 主信息默认展开,收起时靠副标题辨认当前配置。
+      initiallyExpanded: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 编辑时账号名不可改(标题已含),提供商独占整行;
+          // 新建时提供商与账号名并排(CC Switch 式双列)
+          if (_isEdit)
+            LabeledField(label: '提供商', child: _providerDropdown())
+          else
+            FormRow2(
+              LabeledField(label: '提供商', child: _providerDropdown()),
+              LabeledField(
+                label: '账号名',
+                child: TextFormField(
+                  key: const ValueKey('account-name'),
+                  controller: _name,
+                  decoration: const InputDecoration(
+                    hintText: 'kimi-1',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? '账号名不能为空'
+                      : null,
+                ),
+              ),
+            ),
+          const SizedBox(height: 20),
+          LabeledField(
+            label: '请求地址',
+            hint: '默认跟随提供商；修改后仅本账号生效',
+            child: TextFormField(
+              key: const ValueKey('account-base-url'),
+              controller: _baseUrl,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+              ),
+              validator: (v) {
+                final t = v?.trim() ?? '';
+                if (t.isEmpty) return '请求地址不能为空';
+                if (!t.startsWith('http://') && !t.startsWith('https://')) {
+                  return '需以 http:// 或 https:// 开头';
+                }
+                return null;
+              },
+            ),
+          ),
+          const SizedBox(height: 20),
+          LabeledField(
+            label: '密钥',
+            child: TextFormField(
+              key: const ValueKey('account-api-key'),
+              controller: _apiKey,
+              obscureText: !_revealKey,
+              decoration: InputDecoration(
+                // 默认纯星号不泄露任何字符,点眼睛才亮部分
+                // 掩码帮助辨认;完整密钥后端从不下发。
+                hintText: _isEdit
+                    ? _revealKey
+                        ? widget.editing!.maskedApiKey
+                        : '************'
+                    : widget.copyFrom != null
+                        ? _revealKey
+                            ? widget.copyFrom!.maskedApiKey
+                            : '************'
+                        : null,
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  tooltip: _revealKey ? '隐藏' : '显示',
+                  icon: Icon(_revealKey
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined),
+                  onPressed: () => setState(() => _revealKey = !_revealKey),
+                ),
+              ),
+              validator: (v) {
+                if (_isEdit) return null;
+                return (v == null || v.trim().isEmpty) ? '密钥不能为空' : null;
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

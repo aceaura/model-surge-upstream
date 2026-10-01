@@ -144,6 +144,24 @@ void main() {
         reason: 'copy is a create, not an edit');
   });
 
+  testWidgets('basic info section defaults expanded with config subtitle',
+      (tester) async {
+    await pumpForm(tester, editing: account);
+
+    expect(find.text('基本信息'), findsOneWidget);
+    expect(find.text('DeepSeek · https://ds.example.com'), findsOneWidget,
+        reason: '收起也能靠副标题辨认当前提供商与地址');
+    expect(find.byKey(const ValueKey('account-api-key')), findsOneWidget,
+        reason: '主信息默认展开,字段直接可见');
+
+    // 折叠再展开,已填内容不丢(分栏只裁剪不卸载)。
+    await tester.tap(find.text('基本信息'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('基本信息'));
+    await tester.pumpAndSettle();
+    expect(fieldText(tester, 'account-base-url'), 'https://ds.example.com');
+  });
+
   testWidgets('edit masks key hint behind asterisks until eye tapped',
       (tester) async {
     await pumpForm(tester, editing: account);
