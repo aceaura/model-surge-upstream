@@ -40,11 +40,16 @@ void main() {
     // 两个输入框都在同一个描边盒内,不再裸排在说明文字下。
     expect(_box(fields.first), findsOneWidget);
     expect(_box(fields.last), findsOneWidget);
+    // 说明文字也收进描边盒(盒内顶部),不留在盒外上方。
+    expect(_box(find.text('随每次请求发往上游，用于租户标识等附加头')),
+        findsOneWidget);
 
     await tester.tap(find.byTooltip('删除'));
     await tester.pump();
     expect(find.byType(TextFormField), findsNothing);
     expect(_box(find.byType(Form)), findsNothing);
+    // 盒消失后说明回到盒外渲染,不随盒消失。
+    expect(find.text('随每次请求发往上游，用于租户标识等附加头'), findsOneWidget);
   });
 
   testWidgets('初始即带请求头时直接渲染在描边盒内', (tester) async {

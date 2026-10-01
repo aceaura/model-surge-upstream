@@ -34,12 +34,16 @@ class _HeaderEditorState extends State<HeaderEditor> {
     widget.onChanged(out);
   }
 
+  static const _desc = '随每次请求发往上游，用于租户标识等附加头';
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final hasPairs = _pairs.isNotEmpty;
     return FormSection(
       title: '自定义请求头',
-      desc: '随每次请求发往上游，用于租户标识等附加头',
+      // 有键值行时说明文字收进描边盒顶部;空列表没有盒,说明留在盒外。
+      desc: hasPairs ? null : _desc,
       trailing: IconButton(
         tooltip: '添加',
         icon: const Icon(Icons.add, size: 18),
@@ -47,7 +51,7 @@ class _HeaderEditorState extends State<HeaderEditor> {
         onPressed: () => setState(() => _pairs.add(_Pair())),
       ),
       // 新增的键值行收进圆角描边盒,不散落在分区说明下方裸排。
-      child: _pairs.isEmpty
+      child: !hasPairs
           ? const SizedBox.shrink()
           : Container(
               decoration: BoxDecoration(
@@ -56,7 +60,10 @@ class _HeaderEditorState extends State<HeaderEditor> {
               ),
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Text(_desc, style: TextStyle(fontSize: 12, color: t.faint)),
+                  const SizedBox(height: 10),
                   for (var i = 0; i < _pairs.length; i++)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
