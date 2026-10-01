@@ -190,9 +190,10 @@ class _StyledDropdownState extends State<StyledDropdown> {
             decoration: d,
             isEmpty: !widget.showValue,
             isFocused: _open,
-            // 定高:值显隐切换时盒子不缩;字号与输入框正文一致(13)
+            // 定高:值显隐切换时盒子不缩;内容高与 TextFormField 正文行高
+            // (fontSize 16 x height 1.5 = 24)一致,触发器总高与输入框相同
             child: SizedBox(
-              height: 19,
+              height: 24,
               // 箭头常驻(含占位态);只值文本按态显隐
               child: Row(children: [
                 Expanded(
