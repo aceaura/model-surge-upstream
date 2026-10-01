@@ -93,6 +93,11 @@ void main() {
     final timeRight = tester.getRect(find.text('刚刚')).right;
     final refreshLeft = tester.getRect(find.byIcon(Icons.refresh)).left;
     expect(refreshLeft - timeRight, greaterThanOrEqualTo(12));
+
+    // 整块右对齐(CC Switch items-end):时间行右沿与计量行右沿齐平。
+    final refreshRowRight = tester.getRect(find.byType(InkWell)).right;
+    final metersRight = tester.getRect(find.textContaining('已用')).right;
+    expect(refreshRowRight, moreOrLessEquals(metersRight, epsilon: 0.5));
   });
 
   testWidgets('percent meter shows bold colored figure and reset countdown',

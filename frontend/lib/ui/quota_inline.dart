@@ -101,7 +101,9 @@ class _QuotaInlineState extends State<QuotaInline> {
       return Text('额度未识别', style: TextStyle(fontSize: 11.5, color: t.faint));
     }
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      // CC Switch inline 是 items-end:时间行右沿与计量行右沿对齐,
+      // 刷新钮成为整块的最右端。
+      crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisSize: MainAxisSize.min,
       children: [
         _timeRow(t, report.at ?? DateTime.now()),
