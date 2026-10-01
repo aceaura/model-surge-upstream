@@ -3,6 +3,7 @@ package proxyplane
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
@@ -115,5 +116,34 @@ func geminiErrorStatus(status int) string {
 		return "INTERNAL"
 	default:
 		return "INVALID_ARGUMENT"
+	}
+}
+
+// writeContextExceeded 输出「上下文超限」的协议原生 400。文案与错误码
+// 对齐真实上游（Anthropic "prompt is too long"、OpenAI
+// context_length_exceeded），让 Claude Code 等客户端按既有逻辑
+// 触发自己的会话压缩。
+func writeContextExceeded(w http.ResponseWriter, fam family, estimated, window int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	switch fam {
+	case familyAnthropic:
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "invalid_request_error",
+				"message": fmt.Sprintf("prompt is too long: estimated %d tokens > %d maximum", estimated, window),
+			},
+		})
+	default: // openai（gemini 一期不走压缩路径）
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"message": fmt.Sprintf(
+					"This model's maximum context length is %d tokens; your request is estimated at %d tokens. Compact the conversation and retry.",
+					window, estimated),
+				"type": "invalid_request_error",
+				"code": "context_length_exceeded",
+			},
+		})
 	}
 }

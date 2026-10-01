@@ -17,10 +17,15 @@ CREATE TABLE IF NOT EXISTS models (
     context_window INTEGER     NOT NULL DEFAULT 0,
     defaults       JSONB       NOT NULL DEFAULT '{}',
     overrides      JSONB       NOT NULL DEFAULT '{}',
+    compact        JSONB       NOT NULL DEFAULT '{}',
     enabled        BOOLEAN     NOT NULL DEFAULT TRUE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 已存在的库补列：CREATE TABLE IF NOT EXISTS 不会改旧表结构。
+-- compact 承载上下文压缩配置（mode/threshold/keep_turns/max_summary_tokens）。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS compact JSONB NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 

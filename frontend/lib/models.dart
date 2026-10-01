@@ -110,6 +110,7 @@ class UpstreamModel {
     required this.contextWindow,
     required this.defaults,
     required this.overrides,
+    required this.compact,
     required this.enabled,
   });
 
@@ -120,6 +121,10 @@ class UpstreamModel {
   final int contextWindow;
   final Map<String, dynamic> defaults;
   final Map<String, dynamic> overrides;
+
+  /// 上下文压缩配置:{mode: passive|error|auto, threshold, keep_turns,
+  /// max_summary_tokens}。passive=只记录不生效。
+  final Map<String, dynamic> compact;
   final bool enabled;
 
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
@@ -130,6 +135,7 @@ class UpstreamModel {
         contextWindow: json['context_window'] as int? ?? 0,
         defaults: json['defaults'] as Map<String, dynamic>? ?? const {},
         overrides: json['overrides'] as Map<String, dynamic>? ?? const {},
+        compact: json['compact'] as Map<String, dynamic>? ?? const {},
         enabled: json['enabled'] as bool? ?? false,
       );
 }

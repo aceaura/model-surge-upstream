@@ -17,7 +17,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, enabled, created_at, updated_at`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, enabled, created_at, updated_at`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -41,6 +41,7 @@ type Input struct {
 	ContextWindow int
 	Defaults      json.RawMessage
 	Overrides     json.RawMessage
+	Compact       json.RawMessage
 	Enabled       bool
 }
 
@@ -54,9 +55,9 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-			[]byte(m.Defaults), []byte(m.Overrides), m.Enabled, m.CreatedAt, m.UpdatedAt)
+			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), m.Enabled, m.CreatedAt, m.UpdatedAt)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -131,9 +132,9 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	persist := func() error {
 		tag, err := r.pool.Exec(ctx, `UPDATE models SET
 			account=$2, native_model=$3, protocol=$4, context_window=$5,
-			defaults=$6, overrides=$7, enabled=$8, updated_at=$9 WHERE id=$1`,
+			defaults=$6, overrides=$7, compact=$8, enabled=$9, updated_at=$10 WHERE id=$1`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-			[]byte(m.Defaults), []byte(m.Overrides), m.Enabled, m.UpdatedAt)
+			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), m.Enabled, m.UpdatedAt)
 		if err != nil {
 			return apperr.Wrap(apperr.StorageError, "update model", err)
 		}
@@ -196,6 +197,10 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	compactCfg, err := normalizeCompact(in.Compact)
+	if err != nil {
+		return Model{}, err
+	}
 
 	return Model{
 		ID:            id,
@@ -205,8 +210,45 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		ContextWindow: in.ContextWindow,
 		Defaults:      defaults,
 		Overrides:     overrides,
+		Compact:       compactCfg,
 		Enabled:       in.Enabled,
 	}, nil
+}
+
+// normalizeCompact 校验 compact JSON：必须是对象；mode 只允许
+// passive/error/auto；数值项给出合理范围。mode 的取值集合定义在此
+// 而非 compact 包——compact 依赖 resolve、resolve 依赖本包，
+// 反向引用会成环，故取值集合随存储校验落在这里。
+func normalizeCompact(raw json.RawMessage) (json.RawMessage, error) {
+	obj, err := normalizeObject(raw, "compact")
+	if err != nil {
+		return nil, err
+	}
+	var probe struct {
+		Mode             string   `json:"mode"`
+		Threshold        *float64 `json:"threshold"`
+		KeepTurns        *int     `json:"keep_turns"`
+		MaxSummaryTokens *int     `json:"max_summary_tokens"`
+	}
+	if err := json.Unmarshal(obj, &probe); err != nil {
+		return nil, apperr.New(apperr.InvalidJSON, "compact must be a json object")
+	}
+	switch probe.Mode {
+	case "", "passive", "error", "auto":
+	default:
+		return nil, apperr.New(apperr.InvalidRequest,
+			"compact.mode must be one of: passive, error, auto")
+	}
+	if probe.Threshold != nil && (*probe.Threshold <= 0 || *probe.Threshold > 1) {
+		return nil, apperr.New(apperr.InvalidRequest, "compact.threshold must be in (0, 1]")
+	}
+	if probe.KeepTurns != nil && *probe.KeepTurns < 1 {
+		return nil, apperr.New(apperr.InvalidRequest, "compact.keep_turns must be positive")
+	}
+	if probe.MaxSummaryTokens != nil && *probe.MaxSummaryTokens < 1 {
+		return nil, apperr.New(apperr.InvalidRequest, "compact.max_summary_tokens must be positive")
+	}
+	return obj, nil
 }
 
 // normalizeObject 把空值补成 {}，并要求内容是 JSON object。
@@ -237,18 +279,23 @@ func scan(s scanner) (Model, error) {
 		m         Model
 		defaults  []byte
 		overrides []byte
+		compact   []byte
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &m.Enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&defaults, &overrides, &compact, &m.Enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)
 	m.Overrides = json.RawMessage(overrides)
+	m.Compact = json.RawMessage(compact)
 	if len(m.Defaults) == 0 {
 		m.Defaults = json.RawMessage(`{}`)
 	}
 	if len(m.Overrides) == 0 {
 		m.Overrides = json.RawMessage(`{}`)
+	}
+	if len(m.Compact) == 0 {
+		m.Compact = json.RawMessage(`{}`)
 	}
 	return m, nil
 }

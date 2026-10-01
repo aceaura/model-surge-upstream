@@ -15,6 +15,7 @@ type modelRequest struct {
 	ContextWindow int             `json:"context_window"`
 	Defaults      json.RawMessage `json:"defaults"`
 	Overrides     json.RawMessage `json:"overrides"`
+	Compact       json.RawMessage `json:"compact"`
 	Enabled       *bool           `json:"enabled"`
 }
 
@@ -27,6 +28,7 @@ func (r modelRequest) input(id string) model.Input {
 		ContextWindow: r.ContextWindow,
 		Defaults:      r.Defaults,
 		Overrides:     r.Overrides,
+		Compact:       r.Compact,
 		Enabled:       true,
 	}
 	if r.Enabled != nil {

@@ -18,8 +18,9 @@ import (
 // 因此 String() 脱敏而 MarshalJSON 输出原值——响应带凭据、日志不带凭据
 // 由类型本身保证，不依赖调用点自觉。
 //
-// Defaults 与 Overrides 原样下发而不在此合并：两者语义不同（前者缺失才填、
-// 后者强制压盖），调用方要把它们作用到自己构造的上游请求体上，合并后就分不清了。
+// Defaults、Overrides 与 Compact 都原样下发而不在此合并：三者语义各异
+// （缺失才填 / 强制压盖 / 压缩策略），调用方要把它们作用到自己构造的
+// 上游请求体或处置逻辑上，合并后就分不清了。
 type ResolvedTarget struct {
 	ModelID       string            `json:"model_id"`
 	Account       string            `json:"account"`
@@ -31,6 +32,7 @@ type ResolvedTarget struct {
 	Headers       map[string]string `json:"headers"`
 	Defaults      json.RawMessage   `json:"defaults"`
 	Overrides     json.RawMessage   `json:"overrides"`
+	Compact       json.RawMessage   `json:"compact,omitempty"`
 }
 
 // 认证头名。
@@ -115,6 +117,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Headers:       AuthHeaders(spec, acc),
 		Defaults:      m.Defaults,
 		Overrides:     m.Overrides,
+		Compact:       m.Compact,
 	}, nil
 }
 

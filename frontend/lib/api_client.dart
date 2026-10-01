@@ -193,6 +193,7 @@ class ApiClient {
     required int contextWindow,
     required Map<String, dynamic> defaults,
     required Map<String, dynamic> overrides,
+    Map<String, dynamic>? compact,
     bool enabled = true,
   }) async {
     final body = await _send('POST', '/admin/models', body: {
@@ -203,6 +204,7 @@ class ApiClient {
       'context_window': contextWindow,
       'defaults': defaults,
       'overrides': overrides,
+      'compact': ?compact,
       'enabled': enabled,
     });
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);
@@ -216,6 +218,7 @@ class ApiClient {
     int? contextWindow,
     Map<String, dynamic>? defaults,
     Map<String, dynamic>? overrides,
+    Map<String, dynamic>? compact,
     required bool enabled,
   }) async {
     final body = await _send('PUT', '/admin/models/$id', body: {
@@ -225,6 +228,7 @@ class ApiClient {
       'context_window': ?contextWindow,
       'defaults': ?defaults,
       'overrides': ?overrides,
+      'compact': ?compact,
       'enabled': enabled,
     });
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);
