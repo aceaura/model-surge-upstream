@@ -11,6 +11,7 @@ import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
 import '../ui/quota_inline.dart';
 import '../ui/summary_band.dart';
+import '../ui/top_toast.dart';
 import 'account_form.dart';
 
 class AccountsPage extends StatefulWidget {
@@ -134,9 +135,8 @@ class _AccountsPageState extends State<AccountsPage> {
     try {
       final deleted = await widget.client.deleteAccount(account.name);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('已删除账号 ${account.name}，级联删除 ${deleted.length} 个模型'),
-      ));
+      TopToast.show(
+          context, '已删除账号 ${account.name}，级联删除 ${deleted.length} 个模型');
       _reload();
     } catch (e) {
       if (mounted) showError(context, e);
@@ -147,23 +147,18 @@ class _AccountsPageState extends State<AccountsPage> {
 
   /// 检测连通性(参考 CC Switch stream_check):GET 生效请求地址,拿到任意
   /// HTTP 响应即「可达」——可达 ≠ 凭据正确,凭据与模型名的验证在模型页
-  /// 的模型级检测。结果用 snackbar 呈现,行内容不因此抖动。
+  /// 的模型级检测。结果用顶部提示框呈现,行内容不因此抖动。
   Future<void> _test(Account account) async {
     setState(() => _testing.add(account.name));
     try {
       final res = await widget.client.testAccount(account.name);
       if (!mounted) return;
-      final messenger = ScaffoldMessenger.of(context);
       if (res.ok) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(
-              '账号 ${account.name} 可达 · HTTP ${res.statusCode} · ${res.latencyMs} ms'),
-        ));
+        TopToast.show(context,
+            '账号 ${account.name} 可达 · HTTP ${res.statusCode} · ${res.latencyMs} ms');
       } else {
-        messenger.showSnackBar(SnackBar(
-          backgroundColor: Theme.of(context).colorScheme.error,
-          content: Text('账号 ${account.name} 检测失败：${res.error}'),
-        ));
+        TopToast.show(context, '账号 ${account.name} 检测失败：${res.error}',
+            error: true);
       }
     } catch (e) {
       if (mounted) showError(context, e);

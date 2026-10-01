@@ -384,5 +384,9 @@ void main() {
     expect(find.text('看这张'), findsOneWidget, reason: '失败时文本还回输入框');
     expect(find.byType(Image), findsNWidgets(2), reason: '附件也还回 strip');
     expect(find.text('图片需模型支持视觉输入，单张不超过 4 MB，最多 4 张'), findsOneWidget);
+
+    // 冲刷失败提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 }

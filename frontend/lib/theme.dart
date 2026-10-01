@@ -217,15 +217,6 @@ ThemeData _build(AppTokens t, Brightness brightness) {
       hintStyle: TextStyle(fontSize: 12, color: t.faint),
     ),
     dividerTheme: DividerThemeData(color: t.border, thickness: 1, space: 1),
-    snackBarTheme: SnackBarThemeData(
-      behavior: SnackBarBehavior.floating,
-      backgroundColor: isDark ? const Color(0xFF263040) : null,
-      contentTextStyle: TextStyle(
-          color: isDark ? t.ink : null,
-          fontFamily: AppConst.fontFamily,
-          fontFamilyFallback: AppConst.fontFallback),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-    ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
       linearTrackColor:
           isDark ? const Color(0xFF263040) : const Color(0xFFC9D0DD),

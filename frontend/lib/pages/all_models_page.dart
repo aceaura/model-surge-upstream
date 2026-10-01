@@ -10,6 +10,7 @@ import '../ui/page_header.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/provider_tag.dart';
 import '../ui/summary_band.dart';
+import '../ui/top_toast.dart';
 import 'model_form.dart';
 
 /// 搜索词种子:主壳在账号页点「模型」时下发,每次点击都是新实例,
@@ -174,27 +175,21 @@ class _AllModelsPageState extends State<AllModelsPage> {
   }
 
   /// 检测连通性(参考 CC Switch):向真实上游发最小探测请求,
-  /// 链路/凭据/模型名任一不通都会在结果里说明。结果用 snackbar 呈现,
+  /// 链路/凭据/模型名任一不通都会在结果里说明。结果用顶部提示框呈现,
   /// 行内容不因此抖动。
   Future<void> _test(UpstreamModel model) async {
     setState(() => _testing.add(model.id));
     try {
       final res = await widget.client.testModel(model.id);
       if (!mounted) return;
-      final messenger = ScaffoldMessenger.of(context);
       if (res.ok) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(
-              '${model.id} 连通正常 · HTTP ${res.statusCode} · ${res.latencyMs} ms'),
-        ));
+        TopToast.show(context,
+            '${model.id} 连通正常 · HTTP ${res.statusCode} · ${res.latencyMs} ms');
       } else {
         final detail = res.statusCode > 0
             ? 'HTTP ${res.statusCode} · ${res.latencyMs} ms\n${res.error}'
             : res.error;
-        messenger.showSnackBar(SnackBar(
-          backgroundColor: Theme.of(context).colorScheme.error,
-          content: Text('${model.id} 检测失败：$detail'),
-        ));
+        TopToast.show(context, '${model.id} 检测失败：$detail', error: true);
       }
     } catch (e) {
       if (mounted) showError(context, e);

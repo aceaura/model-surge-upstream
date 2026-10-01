@@ -59,7 +59,7 @@ Future<void> pumpPage(WidgetTester tester, Map<String, dynamic> testResult) asyn
 }
 
 void main() {
-  testWidgets('账号行检测按钮排第三位,成功结果走 snackbar 报时延', (tester) async {
+  testWidgets('账号行检测按钮排第三位,成功结果走顶部提示框报时延', (tester) async {
     await pumpPage(tester, {'ok': true, 'status_code': 200, 'latency_ms': 123});
 
     final btn = find.byTooltip('检测连通性');
@@ -79,9 +79,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('账号 ds-1 可达 · HTTP 200 · 123 ms'),
         findsOneWidget);
+
+    // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 
-  testWidgets('检测失败 snackbar 红底带原因', (tester) async {
+  testWidgets('检测失败提示框带原因', (tester) async {
     await pumpPage(tester, {
       'ok': false,
       'status_code': 0,
@@ -93,5 +97,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('检测失败'), findsOneWidget);
     expect(find.textContaining('上游不可达'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 }

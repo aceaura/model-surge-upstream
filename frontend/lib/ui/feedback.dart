@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
+import 'top_toast.dart';
 
 /// describeError 把异常转成面向运维者的文案。
 String describeError(Object error) => switch (error) {
@@ -75,10 +76,9 @@ class ErrorPanel extends StatelessWidget {
 }
 
 /// showError 用于提交类操作的失败提示（列表已有内容，不该整页替换）。
+/// 走顶部滑出提示框,与成功提示同一形态,仅图标/图标色按失败语义区分。
 void showError(BuildContext context, Object error) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(describeError(error))),
-  );
+  TopToast.show(context, describeError(error), error: true);
 }
 
 /// BusyButton 在请求进行中禁用自身并显示进度，避免重复提交。

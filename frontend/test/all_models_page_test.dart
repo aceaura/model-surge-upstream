@@ -83,6 +83,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('ds-1/v4 连通正常 · HTTP 200 · 123 ms'),
         findsOneWidget);
+
+    // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('第四位统计按钮:排位锁在检测与删除之间,点击上抛模型', (tester) async {
@@ -102,7 +106,7 @@ void main() {
     expect(opened?.id, 'ds-1/v4');
   });
 
-  testWidgets('检测失败 snackbar 带状态码与上游说明', (tester) async {
+  testWidgets('检测失败提示框带状态码与上游说明', (tester) async {
     await pumpPage(tester, {
       'ok': false,
       'status_code': 401,
@@ -112,8 +116,12 @@ void main() {
 
     await tester.tap(find.byTooltip('检测连通性'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('检测失败'), findsOneWidget);
-    expect(find.textContaining('HTTP 401'), findsOneWidget);
+    // 多行提示按 \n 拆成两排:首排带状态码,次排带上游说明。
+    expect(find.textContaining('检测失败：HTTP 401'), findsOneWidget);
+    expect(find.textContaining('上游返回 HTTP 401：bad key'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('重新激活(active false→true)重新拉取列表,切页回来能看到别处的删改',

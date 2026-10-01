@@ -12,6 +12,7 @@ import '../ui/dialog_band.dart';
 import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import '../ui/styled_dropdown.dart';
+import '../ui/top_toast.dart';
 
 /// 对话页：左侧会话列表（新对话/切换/删除），右侧消息流 + 模型选择 + 输入框。
 /// 补全走服务端：按所选模型的出站协议透传上游，整段历史落库可回看。
@@ -645,9 +646,7 @@ class _ChatPageState extends State<ChatPage> {
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: seg.text));
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制代码')),
-                    );
+                    TopToast.show(context, '已复制代码');
                   },
                   icon: Icon(Icons.copy_all_rounded, size: 13, color: t.faint),
                   splashRadius: 13,

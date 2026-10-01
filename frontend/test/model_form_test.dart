@@ -234,5 +234,9 @@ void main() {
 
     expect(sentBody, isNotNull);
     expect(sentBody!['context_window'], 256000);
+
+    // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 }

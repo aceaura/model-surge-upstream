@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../api_client.dart';
 import '../theme.dart';
 import '../ui/feedback.dart';
+import '../ui/top_toast.dart';
 
 /// 代理转发面配置：独立端口、独立密钥，把命名模型按各协议原生形态
 /// 暴露给客户端（不做协议转化）。改动点「应用配置」后服务端立即重绑监听。
@@ -175,13 +176,11 @@ class _ProxyPageState extends State<ProxyPage> {
     return 1;
   }
 
-  /// 复制接入地址到剪贴板，SnackBar 回显所抄内容便于确认没抄错行。
+  /// 复制接入地址到剪贴板，顶部提示框回显所抄内容便于确认没抄错行。
   Future<void> _copyEndpoint(String url) async {
     await Clipboard.setData(ClipboardData(text: url));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已复制 $url')),
-    );
+    TopToast.show(context, '已复制 $url');
   }
 
   Future<void> _apply() async {
