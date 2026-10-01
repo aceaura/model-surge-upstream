@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/header_editor.dart';
 
-/// 包住键值行的描边盒:BoxDecoration 带 border 的 Container。
+/// 键值行外的描边盒:BoxDecoration 带 border 的 Container(应已不存在)。
 Finder _box(Finder descendant) => find.ancestor(
       of: descendant,
       matching: find.byWidgetPredicate(
@@ -23,15 +23,14 @@ Widget _app(Map<String, String> initial) => MaterialApp(
     );
 
 void main() {
-  testWidgets('空列表默认收起,说明作副标题、无描边盒', (tester) async {
+  testWidgets('空列表默认收起,说明作副标题、无键值行', (tester) async {
     await tester.pumpWidget(_app(const {}));
     expect(find.byType(TextFormField), findsNothing);
     expect(find.text('随每次请求发往上游，用于租户标识等附加头'), findsOneWidget,
         reason: '说明收作分栏副标题');
-    expect(_box(find.byType(Scaffold)), findsNothing);
   });
 
-  testWidgets('展开后点添加,键值行收进描边盒;删空后盒消失', (tester) async {
+  testWidgets('展开后点添加,键值行直排不套描边盒;删空后行消失', (tester) async {
     await tester.pumpWidget(_app(const {}));
 
     // 分栏默认收起,先点标题展开。
@@ -43,25 +42,23 @@ void main() {
 
     final fields = find.byType(TextFormField);
     expect(fields, findsNWidgets(2));
-    // 两个输入框都在同一个描边盒内。
-    expect(_box(fields.first), findsOneWidget);
-    expect(_box(fields.last), findsOneWidget);
+    // 分栏卡本身就是外框,行外不再套描边盒。
+    expect(_box(fields.first), findsNothing);
     expect(find.text('已配置 1 个 · 随每次请求发往上游'), findsOneWidget,
         reason: '副标题改报已配置个数');
 
     await tester.tap(find.byTooltip('删除'));
     await tester.pumpAndSettle();
     expect(find.byType(TextFormField), findsNothing);
-    expect(_box(find.byType(Scaffold)), findsNothing);
     expect(find.text('随每次请求发往上游，用于租户标识等附加头'), findsOneWidget,
         reason: '删空后副标题回到说明口径');
   });
 
-  testWidgets('初始即带请求头时默认展开,直接渲染在描边盒内', (tester) async {
+  testWidgets('初始即带请求头时默认展开,行直排不套描边盒', (tester) async {
     await tester.pumpWidget(_app(const {'X-Tenant': 'a-1'}));
     final fields = find.byType(TextFormField);
     expect(fields, findsNWidgets(2));
-    expect(_box(fields.first), findsOneWidget);
+    expect(_box(fields.first), findsNothing);
     expect(find.text('已配置 1 个 · 随每次请求发往上游'), findsOneWidget);
   });
 }
