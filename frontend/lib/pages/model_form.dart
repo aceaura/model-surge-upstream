@@ -337,44 +337,44 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          FormRow2(
-            LabeledField(
-              label: '上下文窗口',
-              hint: '单位 k(1k = 1000 tokens),0 表示未声明',
-              child: TextFormField(
-                key: const ValueKey('model-context'),
-                controller: _contextWindow,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  suffixText: 'k',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) {
-                  final n = double.tryParse(v?.trim() ?? '');
-                  if (n == null) return '请填写数字';
-                  if (n < 0) return '不能为负数';
-                  return null;
-                },
+          // 窗口带提示行、压缩策略不带,并排会一高一矮,独占两行。
+          LabeledField(
+            label: '上下文窗口',
+            hint: '单位 k(1k = 1000 tokens),0 表示未声明',
+            child: TextFormField(
+              key: const ValueKey('model-context'),
+              controller: _contextWindow,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                suffixText: 'k',
+                border: OutlineInputBorder(),
               ),
+              validator: (v) {
+                final n = double.tryParse(v?.trim() ?? '');
+                if (n == null) return '请填写数字';
+                if (n < 0) return '不能为负数';
+                return null;
+              },
             ),
-            // 上下文压缩:模式下拉常驻;阈值对 error/auto 生效;
-            // 保留轮数仅 auto 使用
-            LabeledField(
-              key: const ValueKey('model-compact-mode-field'),
-              label: '上下文压缩策略',
-              child: StyledDropdownFormField(
-                key: const ValueKey('model-compact-mode'),
-                value: _compactMode,
-                decoration: const InputDecoration(border: OutlineInputBorder()),
-                options: const ['passive', 'error', 'auto'],
-                labelOf: (m) => switch (m) {
-                  'error' => '客户端压缩',
-                  'auto' => '上游压缩',
-                  _ => '元数据',
-                },
-                onChanged: (v) => setState(() => _compactMode = v!),
-              ),
+          ),
+          const SizedBox(height: 20),
+          // 上下文压缩:模式下拉常驻;阈值对 error/auto 生效;
+          // 保留轮数仅 auto 使用
+          LabeledField(
+            key: const ValueKey('model-compact-mode-field'),
+            label: '上下文压缩策略',
+            child: StyledDropdownFormField(
+              key: const ValueKey('model-compact-mode'),
+              value: _compactMode,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              options: const ['passive', 'error', 'auto'],
+              labelOf: (m) => switch (m) {
+                'error' => '客户端压缩',
+                'auto' => '上游压缩',
+                _ => '元数据',
+              },
+              onChanged: (v) => setState(() => _compactMode = v!),
             ),
           ),
           if (_compactMode != 'passive') ...[
