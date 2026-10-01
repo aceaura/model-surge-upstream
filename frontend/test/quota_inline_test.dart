@@ -87,6 +87,12 @@ void main() {
     expect(find.text('刚刚'), findsOneWidget);
     expect(find.byIcon(Icons.refresh), findsOneWidget);
     expect(find.byIcon(Icons.schedule), findsOneWidget);
+
+    // 刷新钮与时间文案拉开(CC Switch 时间行 gap-2 + p-1 的口径),
+    // 不贴住状态文字。
+    final timeRight = tester.getRect(find.text('刚刚')).right;
+    final refreshLeft = tester.getRect(find.byIcon(Icons.refresh)).left;
+    expect(refreshLeft - timeRight, greaterThanOrEqualTo(12));
   });
 
   testWidgets('percent meter shows bold colored figure and reset countdown',

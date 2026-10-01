@@ -123,7 +123,9 @@ class _QuotaInlineState extends State<QuotaInline> {
         Icon(Icons.schedule, size: 10, color: t.faint),
         const SizedBox(width: 3),
         Text(_relative(at), style: TextStyle(fontSize: 10, color: t.faint)),
-        const SizedBox(width: 4),
+        // CC Switch 的时间行是 gap-2 + p-1 按钮,刷新钮与文案之间
+        // 留得开,不会贴住状态文字。
+        const SizedBox(width: 10),
         if (_busy)
           SizedBox(
             width: 10,
@@ -135,7 +137,7 @@ class _QuotaInlineState extends State<QuotaInline> {
             onTap: _query,
             borderRadius: BorderRadius.circular(8),
             child: Padding(
-              padding: const EdgeInsets.all(1),
+              padding: const EdgeInsets.all(2),
               child: Icon(Icons.refresh, size: 12, color: t.faint),
             ),
           ),
