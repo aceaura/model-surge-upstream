@@ -53,5 +53,9 @@ void main() {
     expect(find.text('计费模式'), findsNWidgets(2));
     expect(find.text('订阅'), findsOneWidget, reason: 'kimi 是订阅制');
     expect(find.text('按量计费'), findsOneWidget, reason: 'deepseek 是按量计费');
+    expect(find.text('额度查询'), findsNothing,
+        reason: '额度查询由账号脚本配置决定,不是供应商的属性');
+    expect(find.text('额度形态'), findsNothing);
+    expect(find.text('额度重置'), findsNothing);
   });
 }

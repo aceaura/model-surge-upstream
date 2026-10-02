@@ -170,13 +170,6 @@ class _ProviderCard extends StatelessWidget {
             _row(context, '认证形态', spec.auth),
             _row(context, '凭据形态', spec.credential),
             _row(context, '计费模式', spec.billingLabel),
-            if (!spec.quotaQueryable)
-              _row(context, '额度查询', '不支持')
-            else ...[
-              if (spec.quotaKind != null)
-                _row(context, '额度形态', '${spec.quotaKind} / ${spec.quotaUnit}'),
-              _row(context, '额度重置', spec.quotaReset ?? '未声明'),
-            ],
           ],
         ),
       ),
