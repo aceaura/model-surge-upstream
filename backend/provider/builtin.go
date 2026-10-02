@@ -49,7 +49,7 @@ func init() {
 		Auth:       AuthAnthropicKey,
 		Credential: CredAPIKey,
 		Billing:    BillingSubscription,
-		Region:     RegionCN,
+		Region:     RegionGlobal,
 		Models:     &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	// ark 的 responses 端点实测不可用，故只声明两个协议；其模型列举端点

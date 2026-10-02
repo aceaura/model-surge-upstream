@@ -66,7 +66,7 @@ func TestBuiltinRegion(t *testing.T) {
 		"anthropic": RegionGlobal,
 		"openai":    RegionGlobal,
 		"gemini":    RegionGlobal,
-		"kimi":      RegionCN,
+		"kimi":      RegionGlobal,
 		"ark":       RegionCN,
 		"deepseek":  RegionCN,
 	}
