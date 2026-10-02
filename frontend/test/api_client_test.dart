@@ -119,6 +119,7 @@ void main() {
           'auth': 'anthropic_key',
           'credential': 'api_key',
           'billing': 'paygo',
+          'region': 'Global',
         },
         {
           'id': 'deepseek',
@@ -142,6 +143,8 @@ void main() {
     expect(providers.first.quotaQueryable, isFalse);
     expect(providers.first.billing, 'paygo');
     expect(providers.first.billingLabel, '按量计费');
+    expect(providers.first.region, 'Global');
+    expect(providers.first.regionLabel, '全球');
     expect(providers.last.quotaQueryable, isTrue);
     expect(providers.last.quotaKind, 'balance');
     expect(providers.last.quotaUnit, 'currency');

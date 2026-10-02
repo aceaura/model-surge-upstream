@@ -170,6 +170,7 @@ class _ProviderCard extends StatelessWidget {
             _row(context, '认证形态', spec.auth),
             _row(context, '凭据形态', spec.credential),
             _row(context, '计费模式', spec.billingLabel),
+            _row(context, '服务区域', spec.regionLabel),
           ],
         ),
       ),

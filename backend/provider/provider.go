@@ -34,6 +34,13 @@ const (
 	BillingPayGo        Billing = "paygo"        // 按量计费
 )
 
+// 服务区域取值。存储英文、展示层译中文;取值开放(不限于这两个),
+// 阿里云类云厂商还可能拆出更多分区。
+const (
+	RegionCN     = "CN"
+	RegionGlobal = "Global"
+)
+
 // ResetRule 额度重置规律。
 type ResetRule string
 
@@ -95,8 +102,11 @@ type Spec struct {
 	Auth        AuthScheme     `json:"auth"`
 	Credential  CredentialKind `json:"credential"`
 	Billing     Billing        `json:"billing"`
-	Quota       *QuotaAPI      `json:"quota,omitempty"`
-	Models      *ModelsAPI     `json:"models,omitempty"`
+	// Region 服务区域(CN/Global 或厂商自定义分区),普通字符串:
+	// 值域开放,只强制非空。
+	Region string     `json:"region"`
+	Quota  *QuotaAPI  `json:"quota,omitempty"`
+	Models *ModelsAPI `json:"models,omitempty"`
 }
 
 func (s Spec) Supports(protocol string) bool {
@@ -134,6 +144,9 @@ func register(s Spec) {
 	case BillingSubscription, BillingPayGo:
 	default:
 		panic(fmt.Sprintf("provider %q: billing must be subscription or paygo", s.ID))
+	}
+	if s.Region == "" {
+		panic(fmt.Sprintf("provider %q: region is required", s.ID))
 	}
 	if s.Quota != nil && (s.Quota.Kind == "" || s.Quota.Unit == "") {
 		panic(fmt.Sprintf("provider %q: quota must declare kind and unit", s.ID))

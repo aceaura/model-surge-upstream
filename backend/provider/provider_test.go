@@ -61,6 +61,27 @@ func TestBuiltinBilling(t *testing.T) {
 	}
 }
 
+func TestBuiltinRegion(t *testing.T) {
+	want := map[string]string{
+		"anthropic": RegionGlobal,
+		"openai":    RegionGlobal,
+		"gemini":    RegionGlobal,
+		"kimi":      RegionCN,
+		"ark":       RegionCN,
+		"deepseek":  RegionCN,
+	}
+	for id, region := range want {
+		s, ok := Get(id)
+		if !ok {
+			t.Errorf("provider %q not registered", id)
+			continue
+		}
+		if s.Region != region {
+			t.Errorf("provider %q region = %q, want %q", id, s.Region, region)
+		}
+	}
+}
+
 func TestAllOrderStable(t *testing.T) {
 	first, second := All(), All()
 	if len(first) != len(second) {

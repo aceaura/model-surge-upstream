@@ -27,6 +27,7 @@ class ProviderSpec {
     required this.auth,
     required this.credential,
     required this.billing,
+    required this.region,
     required this.quotaKind,
     required this.quotaUnit,
     required this.quotaReset,
@@ -51,6 +52,16 @@ class ProviderSpec {
         _ => billing,
       };
 
+  /// 服务区域:CN/Global 或厂商自定义分区,存储英文。
+  final String region;
+
+  /// 服务区域的中文名,未识别值原样透传。
+  String get regionLabel => switch (region) {
+        'CN' => '中国',
+        'Global' => '全球',
+        _ => region,
+      };
+
   /// 后端只要带 quota 块即视为声明了额度接口;kind/unit 只是
   /// 主计量项形态说明,老数据可能缺省,不能拿它们当可查询判据。
   final String? quotaKind;
@@ -72,6 +83,7 @@ class ProviderSpec {
       auth: json['auth'] as String? ?? '',
       credential: json['credential'] as String? ?? '',
       billing: json['billing'] as String? ?? '',
+      region: json['region'] as String? ?? '',
       quotaKind: quota?['kind'] as String?,
       quotaUnit: quota?['unit'] as String?,
       quotaReset: quota?['reset'] as String?,
