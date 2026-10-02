@@ -5,7 +5,7 @@ func init() {
 	register(Spec{
 		ID:          "anthropic",
 		DisplayName: "Anthropic",
-		Website:     "https://www.anthropic.com",
+		Website:     "https://console.anthropic.com",
 		BaseURL:     "https://api.anthropic.com",
 		Protocols:   []string{ProtocolAnthropic},
 		Auth:        AuthAnthropicKey,
@@ -17,7 +17,7 @@ func init() {
 	register(Spec{
 		ID:          "openai",
 		DisplayName: "OpenAI",
-		Website:     "https://openai.com",
+		Website:     "https://platform.openai.com",
 		BaseURL:     "https://api.openai.com",
 		Protocols:   []string{ProtocolChatCompletions, ProtocolResponses},
 		Auth:        AuthBearer,
@@ -29,7 +29,7 @@ func init() {
 	register(Spec{
 		ID:          "gemini",
 		DisplayName: "Google Gemini",
-		Website:     "https://ai.google.dev",
+		Website:     "https://aistudio.google.com",
 		BaseURL:     "https://generativelanguage.googleapis.com",
 		Protocols:   []string{ProtocolGemini, ProtocolChatCompletions},
 		Auth:        AuthBearer,
@@ -41,7 +41,7 @@ func init() {
 	register(Spec{
 		ID:          "kimi",
 		DisplayName: "Moonshot Kimi",
-		Website:     "https://platform.moonshot.cn",
+		Website:     "https://www.kimi.com",
 		// Kimi For Coding 订阅端点在 api.kimi.com;api.moonshot.cn 没有
 		// /coding 路由(恒 404 url.not_found),/anthropic 只认平台密钥。
 		BaseURL:    "https://api.kimi.com/coding",
@@ -57,7 +57,7 @@ func init() {
 	register(Spec{
 		ID:          "ark",
 		DisplayName: "Volcengine Ark",
-		Website:     "https://www.volcengine.com/product/ark",
+		Website:     "https://console.volcengine.com/ark",
 		BaseURL:     "https://ark.cn-beijing.volces.com/api/v3",
 		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions},
 		Auth:        AuthBearer,

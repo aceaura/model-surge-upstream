@@ -82,6 +82,31 @@ func TestBuiltinRegion(t *testing.T) {
 	}
 }
 
+// 官网要对上计费模式与服务区域:订阅产品挂订阅站,按量 API 挂控制台,
+// 别把 marketing 主页或另一产品线地址挂上来。
+func TestBuiltinWebsite(t *testing.T) {
+	want := map[string]string{
+		"anthropic": "https://console.anthropic.com",
+		"openai":    "https://platform.openai.com",
+		"gemini":    "https://aistudio.google.com",
+		// kimi 是订阅(Kimi For Coding),订阅站在 kimi.com;
+		// platform.moonshot.cn 是按量平台,不挂。
+		"kimi":     "https://www.kimi.com",
+		"ark":      "https://console.volcengine.com/ark",
+		"deepseek": "https://platform.deepseek.com",
+	}
+	for id, website := range want {
+		s, ok := Get(id)
+		if !ok {
+			t.Errorf("provider %q not registered", id)
+			continue
+		}
+		if s.Website != website {
+			t.Errorf("provider %q website = %q, want %q", id, s.Website, website)
+		}
+	}
+}
+
 func TestAllOrderStable(t *testing.T) {
 	first, second := All(), All()
 	if len(first) != len(second) {
