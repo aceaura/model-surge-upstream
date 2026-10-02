@@ -26,10 +26,10 @@ ApiClient fakeClient() => ApiClient(
                 'region': 'Global',
               },
               {
-                'id': 'deepseek',
-                'display_name': 'DeepSeek',
-                'website': 'https://platform.deepseek.com',
-                'base_url': 'https://api.deepseek.com',
+                'id': 'ark',
+                'display_name': 'Volcengine Ark',
+                'website': 'https://console.volcengine.com/ark',
+                'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
                 'protocols': ['anthropic', 'chat_completions'],
                 'auth': 'bearer',
                 'credential': 'api_key',
@@ -65,9 +65,9 @@ void main() {
 
     expect(find.text('计费模式'), findsNWidgets(3));
     expect(find.text('订阅'), findsOneWidget, reason: 'kimi 是订阅制');
-    expect(find.text('按量计费'), findsNWidgets(2), reason: 'deepseek/openai 是按量计费');
+    expect(find.text('按量计费'), findsNWidgets(2), reason: 'ark/openai 是按量计费');
     expect(find.text('服务区域'), findsNWidgets(3));
-    expect(find.text('中国'), findsOneWidget, reason: 'deepseek 服务区域 CN');
+    expect(find.text('中国'), findsOneWidget, reason: 'ark 服务区域 CN');
     expect(find.text('全球'), findsNWidgets(2), reason: 'kimi/openai 服务区域 Global');
     expect(find.text('额度查询'), findsNothing,
         reason: '额度查询由账号脚本配置决定,不是供应商的属性');

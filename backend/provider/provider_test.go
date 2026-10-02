@@ -68,7 +68,7 @@ func TestBuiltinRegion(t *testing.T) {
 		"gemini":    RegionGlobal,
 		"kimi":      RegionGlobal,
 		"ark":       RegionCN,
-		"deepseek":  RegionCN,
+		"deepseek":  RegionGlobal,
 	}
 	for id, region := range want {
 		s, ok := Get(id)

@@ -74,7 +74,7 @@ func init() {
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
 		Billing:     BillingPayGo,
-		Region:      RegionCN,
+		Region:      RegionGlobal,
 		Quota: &QuotaAPI{
 			Path:   "/user/balance",
 			Method: "GET",
