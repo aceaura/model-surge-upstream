@@ -26,6 +26,7 @@ class ProviderSpec {
     required this.protocols,
     required this.auth,
     required this.credential,
+    required this.billing,
     required this.quotaKind,
     required this.quotaUnit,
     required this.quotaReset,
@@ -39,6 +40,16 @@ class ProviderSpec {
   final List<String> protocols;
   final String auth;
   final String credential;
+
+  /// 计费模式:subscription=订阅,paygo=按量计费。
+  final String billing;
+
+  /// 计费模式的中文名,未识别值原样透传。
+  String get billingLabel => switch (billing) {
+        'subscription' => '订阅',
+        'paygo' => '按量计费',
+        _ => billing,
+      };
 
   /// 后端只要带 quota 块即视为声明了额度接口;kind/unit 只是
   /// 主计量项形态说明,老数据可能缺省,不能拿它们当可查询判据。
@@ -60,6 +71,7 @@ class ProviderSpec {
           (json['protocols'] as List<dynamic>? ?? const []).cast<String>(),
       auth: json['auth'] as String? ?? '',
       credential: json['credential'] as String? ?? '',
+      billing: json['billing'] as String? ?? '',
       quotaKind: quota?['kind'] as String?,
       quotaUnit: quota?['unit'] as String?,
       quotaReset: quota?['reset'] as String?,

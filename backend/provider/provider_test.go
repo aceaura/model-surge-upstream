@@ -39,6 +39,28 @@ func TestKiroNotRegistered(t *testing.T) {
 	}
 }
 
+func TestBuiltinBilling(t *testing.T) {
+	want := map[string]Billing{
+		"anthropic": BillingPayGo,
+		"openai":    BillingPayGo,
+		"gemini":    BillingPayGo,
+		// kimi 预设端点是 api.kimi.com/coding,即 Kimi For Coding 订阅产品。
+		"kimi":     BillingSubscription,
+		"ark":      BillingPayGo,
+		"deepseek": BillingPayGo,
+	}
+	for id, billing := range want {
+		s, ok := Get(id)
+		if !ok {
+			t.Errorf("provider %q not registered", id)
+			continue
+		}
+		if s.Billing != billing {
+			t.Errorf("provider %q billing = %q, want %q", id, s.Billing, billing)
+		}
+	}
+}
+
 func TestAllOrderStable(t *testing.T) {
 	first, second := All(), All()
 	if len(first) != len(second) {

@@ -25,6 +25,15 @@ type CredentialKind string
 
 const CredAPIKey CredentialKind = "api_key"
 
+// Billing 计费模式判别式:订阅制按周期配额收费(如 Kimi For Coding),
+// 按量计费按实际用量结算(预付费余额或后付费账单)。
+type Billing string
+
+const (
+	BillingSubscription Billing = "subscription" // 订阅
+	BillingPayGo        Billing = "paygo"        // 按量计费
+)
+
 // ResetRule 额度重置规律。
 type ResetRule string
 
@@ -85,6 +94,7 @@ type Spec struct {
 	Protocols   []string       `json:"protocols"`
 	Auth        AuthScheme     `json:"auth"`
 	Credential  CredentialKind `json:"credential"`
+	Billing     Billing        `json:"billing"`
 	Quota       *QuotaAPI      `json:"quota,omitempty"`
 	Models      *ModelsAPI     `json:"models,omitempty"`
 }
@@ -119,6 +129,11 @@ func register(s Spec) {
 	}
 	if len(s.Protocols) == 0 {
 		panic(fmt.Sprintf("provider %q: at least one protocol is required", s.ID))
+	}
+	switch s.Billing {
+	case BillingSubscription, BillingPayGo:
+	default:
+		panic(fmt.Sprintf("provider %q: billing must be subscription or paygo", s.ID))
 	}
 	if s.Quota != nil && (s.Quota.Kind == "" || s.Quota.Unit == "") {
 		panic(fmt.Sprintf("provider %q: quota must declare kind and unit", s.ID))

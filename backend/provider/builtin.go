@@ -10,6 +10,7 @@ func init() {
 		Protocols:   []string{ProtocolAnthropic},
 		Auth:        AuthAnthropicKey,
 		Credential:  CredAPIKey,
+		Billing:     BillingPayGo,
 		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	register(Spec{
@@ -20,6 +21,7 @@ func init() {
 		Protocols:   []string{ProtocolChatCompletions, ProtocolResponses},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
+		Billing:     BillingPayGo,
 		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	register(Spec{
@@ -30,6 +32,7 @@ func init() {
 		Protocols:   []string{ProtocolGemini, ProtocolChatCompletions},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
+		Billing:     BillingPayGo,
 		Models:      &ModelsAPI{Path: "/v1beta/models", Method: "GET"},
 	})
 	register(Spec{
@@ -38,11 +41,12 @@ func init() {
 		Website:     "https://platform.moonshot.cn",
 		// Kimi For Coding 订阅端点在 api.kimi.com;api.moonshot.cn 没有
 		// /coding 路由(恒 404 url.not_found),/anthropic 只认平台密钥。
-		BaseURL:     "https://api.kimi.com/coding",
-		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions},
-		Auth:        AuthAnthropicKey,
-		Credential:  CredAPIKey,
-		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
+		BaseURL:    "https://api.kimi.com/coding",
+		Protocols:  []string{ProtocolAnthropic, ProtocolChatCompletions},
+		Auth:       AuthAnthropicKey,
+		Credential: CredAPIKey,
+		Billing:    BillingSubscription,
+		Models:     &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	// ark 的 responses 端点实测不可用，故只声明两个协议；其模型列举端点
 	// 实测各路径恒回 401，故不声明 Models——查不到比查错了好。
@@ -54,6 +58,7 @@ func init() {
 		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
+		Billing:     BillingPayGo,
 	})
 	register(Spec{
 		ID:          "deepseek",
@@ -63,6 +68,7 @@ func init() {
 		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
+		Billing:     BillingPayGo,
 		Quota: &QuotaAPI{
 			Path:   "/user/balance",
 			Method: "GET",
