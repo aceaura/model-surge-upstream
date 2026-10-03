@@ -32,7 +32,31 @@ final providers = [
     'billing': 'paygo',
     'region': 'Global',
   }),
+  ProviderSpec.fromJson(const {
+    'id': 'openai-codex',
+    'display_name': 'OpenAI',
+    'website': 'https://chatgpt.com',
+    'base_url': 'https://chatgpt.com/backend-api/codex',
+    'protocols': ['responses'],
+    'auth': 'bearer',
+    'credential': 'oauth_refresh',
+    'billing': 'subscription',
+    'region': 'Global',
+  }),
 ];
+
+/// oauth_refresh(订阅登录态)账号样本。
+final accountOAuth = Account.fromJson(const {
+  'name': 'gpt-1',
+  'provider_id': 'openai-codex',
+  'credential': {
+    'kind': 'oauth_refresh',
+    'refresh_token': 'rt-a***z',
+    'account_id': 'acc-123',
+  },
+  'base_url': '',
+  'enabled': true,
+});
 
 final account = Account.fromJson(const {
   'name': 'ds-1',
@@ -511,5 +535,122 @@ void main() {
     expect(button.onPressed, isNull,
         reason: '试跑凭据取自已存账号,新建态不可试跑');
     expect(find.text('保存账号后才能试跑'), findsOneWidget);
+  });
+
+  // ── oauth_refresh(订阅登录态)表单分流 ──
+
+  testWidgets('oauth provider shows login fields instead of api key',
+      (tester) async {
+    await pumpForm(tester);
+
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+
+    expect(find.byKey(const ValueKey('account-api-key')), findsNothing,
+        reason: '订阅登录态不是静态密钥,密钥框不出现');
+    expect(find.byKey(const ValueKey('account-refresh-token')), findsOneWidget);
+    expect(find.byKey(const ValueKey('account-account-id')), findsOneWidget);
+    expect(fieldText(tester, 'account-base-url'),
+        'https://chatgpt.com/backend-api/codex',
+        reason: '级联解析到 openai-codex 后带出其默认地址');
+  });
+
+  testWidgets('oauth create submits credential object not api_key',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'gpt-1');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-refresh-token')), 'rt-live');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-account-id')), 'acc-9');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(captured, hasLength(1));
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['provider_id'], 'openai-codex');
+    expect(body.containsKey('api_key'), isFalse,
+        reason: 'oauth 形态不走 api_key 简写');
+    final cred = body['credential'] as Map<String, dynamic>;
+    expect(cred, {
+      'kind': 'oauth_refresh',
+      'refresh_token': 'rt-live',
+      'account_id': 'acc-9',
+    });
+  });
+
+  testWidgets('oauth create requires refresh token', (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'gpt-1');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-account-id')), 'acc-9');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(captured, isEmpty, reason: '校验失败不发请求');
+    expect(find.text('Refresh Token 不能为空'), findsOneWidget);
+  });
+
+  testWidgets('oauth edit prefills account id and keeps credential when blank',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, editing: accountOAuth, client: recordingClient(captured));
+
+    expect(fieldText(tester, 'account-account-id'), 'acc-123',
+        reason: 'account_id 是标识不是秘密,预填回显');
+    expect(find.textContaining('************'), findsOneWidget,
+        reason: 'refresh_token 默认纯星号');
+    expect(find.byKey(const ValueKey('oauth-reauth-banner')), findsNothing,
+        reason: '未标记失效不出横幅');
+
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body.containsKey('credential'), isFalse,
+        reason: 'refresh_token 留空=保留原登录态,整体不动凭据');
+  });
+
+  testWidgets('oauth edit replaces credential when refresh token pasted',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, editing: accountOAuth, client: recordingClient(captured));
+
+    await tester.enterText(
+        find.byKey(const ValueKey('account-refresh-token')), 'rt-new');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    final cred = body['credential'] as Map<String, dynamic>;
+    expect(cred['kind'], 'oauth_refresh');
+    expect(cred['refresh_token'], 'rt-new');
+    expect(cred['account_id'], 'acc-123', reason: '预填的 account_id 随凭据一起提交');
+  });
+
+  testWidgets('oauth edit shows reauth banner when flagged', (tester) async {
+    final flagged = Account.fromJson(const {
+      'name': 'gpt-1',
+      'provider_id': 'openai-codex',
+      'credential': {
+        'kind': 'oauth_refresh',
+        'refresh_token': 'rt-a***z',
+        'account_id': 'acc-123',
+      },
+      'base_url': '',
+      'enabled': true,
+      'needs_reauth': true,
+    });
+    await pumpForm(tester, editing: flagged);
+
+    expect(find.byKey(const ValueKey('oauth-reauth-banner')), findsOneWidget,
+        reason: '服务端标记登录态终态失效时提示重新粘贴');
   });
 }

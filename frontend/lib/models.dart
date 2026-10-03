@@ -138,6 +138,10 @@ class Account {
     required this.headers,
     required this.enabled,
     this.quotaScript,
+    this.credentialKind = 'api_key',
+    this.maskedRefreshToken = '',
+    this.accountId = '',
+    this.needsReauth = false,
   });
 
   final String name;
@@ -152,6 +156,18 @@ class Account {
   /// 额度脚本配置;null 表示未配置(服务端空脚本不回传)。
   final QuotaScript? quotaScript;
 
+  /// 凭据形态:api_key / oauth_refresh(订阅登录态)。
+  final String credentialKind;
+
+  /// oauth_refresh 形态:服务端脱敏的 refresh_token,仅供显示。
+  final String maskedRefreshToken;
+
+  /// oauth_refresh 形态:账号标识(auth.json 的 tokens.account_id),明文。
+  final String accountId;
+
+  /// oauth_refresh 形态:登录态终态失效,需重新粘贴凭据。
+  final bool needsReauth;
+
   factory Account.fromJson(Map<String, dynamic> json) {
     final credential = json['credential'] as Map<String, dynamic>? ?? const {};
     final headers = json['headers'] as Map<String, dynamic>? ?? const {};
@@ -164,6 +180,10 @@ class Account {
       headers: headers.map((k, v) => MapEntry(k, '$v')),
       enabled: json['enabled'] as bool? ?? false,
       quotaScript: script == null ? null : QuotaScript.fromJson(script),
+      credentialKind: credential['kind'] as String? ?? 'api_key',
+      maskedRefreshToken: credential['refresh_token'] as String? ?? '',
+      accountId: credential['account_id'] as String? ?? '',
+      needsReauth: json['needs_reauth'] as bool? ?? false,
     );
   }
 }

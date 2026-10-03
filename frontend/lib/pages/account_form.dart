@@ -44,6 +44,11 @@ class _AccountFormState extends State<AccountForm> {
       text: widget.editing?.name ??
           (widget.copyFrom != null ? '${widget.copyFrom!.name}-copy' : ''));
   late final TextEditingController _apiKey = TextEditingController();
+  // oauth_refresh(订阅登录态)字段:refresh_token 永不下发明文,
+  // 编辑态留空表示保留;account_id 是标识不是秘密,预填回显。
+  late final TextEditingController _refreshToken = TextEditingController();
+  late final TextEditingController _accountId = TextEditingController(
+      text: widget.editing?.accountId ?? widget.copyFrom?.accountId ?? '');
 
   late String? _providerId =
       widget.editing?.providerId ?? widget.copyFrom?.providerId;
@@ -91,12 +96,17 @@ class _AccountFormState extends State<AccountForm> {
   void dispose() {
     _name.dispose();
     _apiKey.dispose();
+    _refreshToken.dispose();
+    _accountId.dispose();
     _baseUrl.dispose();
     _scriptCode.dispose();
     _scriptTimeout.dispose();
     _scriptInterval.dispose();
     super.dispose();
   }
+
+  /// 当前选中的提供商是否 OAuth 登录态(订阅)凭据形态。
+  bool get _isOAuth => _spec?.credential == 'oauth_refresh';
 
   ProviderSpec? get _spec =>
       widget.providers.where((p) => p.id == _providerId).firstOrNull;
@@ -184,6 +194,20 @@ class _AccountFormState extends State<AccountForm> {
     }
   }
 
+  /// oauth 凭据提交载荷:null=不是 oauth 形态或编辑态保留原登录态。
+  /// 服务端要求 oauth_refresh 必带 refresh_token,所以编辑态只有用户
+  /// 重新粘贴了 refresh_token 才整体替换凭据。
+  Map<String, dynamic>? _credentialPayload() {
+    if (!_isOAuth) return null;
+    final rt = _refreshToken.text.trim();
+    if (_isEdit && rt.isEmpty) return null;
+    return {
+      'kind': 'oauth_refresh',
+      'refresh_token': rt,
+      'account_id': _accountId.text.trim(),
+    };
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _busy = true);
@@ -192,6 +216,7 @@ class _AccountFormState extends State<AccountForm> {
       final url = _baseUrl.text.trim();
       final baseUrl = url == (_spec?.baseUrl ?? '') ? '' : url;
       final quotaScript = _quotaScriptPayload();
+      final credential = _credentialPayload();
       if (_isEdit) {
         await widget.client.updateAccount(
           name: widget.editing!.name,
@@ -201,6 +226,7 @@ class _AccountFormState extends State<AccountForm> {
           headers: _headers,
           quotaScript: quotaScript,
           enabled: _enabled,
+          credential: credential,
         );
       } else {
         await widget.client.createAccount(
@@ -211,6 +237,7 @@ class _AccountFormState extends State<AccountForm> {
           headers: _headers,
           quotaScript: quotaScript,
           enabled: _enabled,
+          credential: credential,
         );
       }
       if (!mounted) return;
@@ -377,42 +404,121 @@ class _AccountFormState extends State<AccountForm> {
             ),
           ),
           const SizedBox(height: 20),
-          LabeledField(
-            label: '密钥',
-            child: TextFormField(
-              key: const ValueKey('account-api-key'),
-              controller: _apiKey,
-              obscureText: !_revealKey,
-              decoration: InputDecoration(
-                // 默认纯星号不泄露任何字符,点眼睛才亮部分
-                // 掩码帮助辨认;完整密钥后端从不下发。
-                hintText: _isEdit
-                    ? _revealKey
-                        ? widget.editing!.maskedApiKey
-                        : '************'
-                    : widget.copyFrom != null
-                        ? _revealKey
-                            ? widget.copyFrom!.maskedApiKey
-                            : '************'
-                        : null,
-                border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  tooltip: _revealKey ? '隐藏' : '显示',
-                  icon: Icon(_revealKey
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined),
-                  onPressed: () => setState(() => _revealKey = !_revealKey),
+          if (_isOAuth && _isEdit && widget.editing!.needsReauth) ...[
+            Container(
+              key: const ValueKey('oauth-reauth-banner'),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '登录态已失效,请重新粘贴 Refresh Token 后保存',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: Theme.of(context).colorScheme.onErrorContainer,
                 ),
               ),
-              validator: (v) {
-                if (_isEdit) return null;
-                return (v == null || v.trim().isEmpty) ? '密钥不能为空' : null;
-              },
             ),
-          ),
+            const SizedBox(height: 20),
+          ],
+          if (_isOAuth) ..._oauthFields() else _apiKeyField(),
         ],
       ),
     );
+  }
+
+  // ── 凭据区:api_key 单框 / oauth_refresh 双框,按提供商声明的形态分流 ──
+
+  Widget _apiKeyField() {
+    return LabeledField(
+      label: '密钥',
+      child: TextFormField(
+        key: const ValueKey('account-api-key'),
+        controller: _apiKey,
+        obscureText: !_revealKey,
+        decoration: InputDecoration(
+          // 默认纯星号不泄露任何字符,点眼睛才亮部分
+          // 掩码帮助辨认;完整密钥后端从不下发。
+          hintText: _isEdit
+              ? _revealKey
+                  ? widget.editing!.maskedApiKey
+                  : '************'
+              : widget.copyFrom != null
+                  ? _revealKey
+                      ? widget.copyFrom!.maskedApiKey
+                      : '************'
+                  : null,
+          border: const OutlineInputBorder(),
+          suffixIcon: IconButton(
+            tooltip: _revealKey ? '隐藏' : '显示',
+            icon: Icon(_revealKey
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined),
+            onPressed: () => setState(() => _revealKey = !_revealKey),
+          ),
+        ),
+        validator: (v) {
+          if (_isEdit) return null;
+          return (v == null || v.trim().isEmpty) ? '密钥不能为空' : null;
+        },
+      ),
+    );
+  }
+
+  List<Widget> _oauthFields() {
+    final masked = widget.editing?.maskedRefreshToken ??
+        widget.copyFrom?.maskedRefreshToken ??
+        '';
+    return [
+      LabeledField(
+        label: 'Refresh Token',
+        hint: 'codex CLI auth.json 的 tokens.refresh_token;'
+            '${_isEdit ? '留空保留原登录态' : '粘贴后由服务端自动续期'}',
+        child: TextFormField(
+          key: const ValueKey('account-refresh-token'),
+          controller: _refreshToken,
+          obscureText: !_revealKey,
+          decoration: InputDecoration(
+            // 与密钥同款:默认纯星号,眼睛才亮掩码;完整 token 后端从不下发。
+            hintText: (_isEdit || widget.copyFrom != null)
+                ? _revealKey
+                    ? masked
+                    : '************'
+                : null,
+            border: const OutlineInputBorder(),
+            suffixIcon: IconButton(
+              tooltip: _revealKey ? '隐藏' : '显示',
+              icon: Icon(_revealKey
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined),
+              onPressed: () => setState(() => _revealKey = !_revealKey),
+            ),
+          ),
+          validator: (v) {
+            if (_isEdit) return null;
+            return (v == null || v.trim().isEmpty)
+                ? 'Refresh Token 不能为空'
+                : null;
+          },
+        ),
+      ),
+      const SizedBox(height: 20),
+      LabeledField(
+        label: 'Account ID',
+        hint: 'auth.json 的 tokens.account_id',
+        child: TextFormField(
+          key: const ValueKey('account-account-id'),
+          controller: _accountId,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+          ),
+          validator: (v) => (v == null || v.trim().isEmpty)
+              ? 'Account ID 不能为空'
+              : null,
+        ),
+      ),
+    ];
   }
 
   // ── 额度脚本区(仿 CC Switch 脚本弹窗,收进可折叠分栏)──

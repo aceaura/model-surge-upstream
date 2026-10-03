@@ -142,11 +142,13 @@ class ApiClient {
     Map<String, String>? headers,
     Map<String, dynamic>? quotaScript,
     bool enabled = true,
+    Map<String, dynamic>? credential,
   }) async {
     final body = await _send('POST', '/admin/accounts', body: {
       'name': name,
       'provider_id': providerId,
-      'api_key': apiKey,
+      // 完整 credential 对象(oauth_refresh 等)优先于 api_key 简写。
+      if (credential != null) 'credential': credential else 'api_key': apiKey,
       'base_url': ?baseUrl,
       'headers': ?headers,
       'quota_script': ?quotaScript,
@@ -156,6 +158,7 @@ class ApiClient {
   }
 
   /// apiKey 为空表示保留服务端已存的凭据。
+  /// credential(oauth 登录态)非空时整体替换凭据,优先于 apiKey。
   /// quotaScript 为 null 表示保留原脚本配置;传空 Map 表示清除。
   Future<Account> updateAccount({
     required String name,
@@ -165,10 +168,14 @@ class ApiClient {
     Map<String, String>? headers,
     Map<String, dynamic>? quotaScript,
     required bool enabled,
+    Map<String, dynamic>? credential,
   }) async {
     final body = await _send('PUT', '/admin/accounts/$name', body: {
       'provider_id': ?providerId,
-      if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
+      if (credential != null)
+        'credential': credential
+      else if (apiKey != null && apiKey.isNotEmpty)
+        'api_key': apiKey,
       'base_url': ?baseUrl,
       'headers': ?headers,
       'quota_script': ?quotaScript,
