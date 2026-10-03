@@ -145,6 +145,33 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 	return acc, nil
 }
 
+// UpdateCredential 只回写凭据字段:OAuth 续期产物(access_token/expiry/轮换
+// 的 refresh_token)落库,其余字段不动。续期单飞在 oauth 包内,这里不做去重。
+func (r *Repo) UpdateCredential(ctx context.Context, name string, cred credential.Credential) error {
+	acc, err := r.Get(ctx, name)
+	if err != nil {
+		return err
+	}
+	acc.Credential = cred
+	acc.UpdatedAt = time.Now().UTC()
+	credRaw, err := cred.Encode()
+	if err != nil {
+		return apperr.Wrap(apperr.InvalidCredential, "encode credential", err)
+	}
+	persist := func() error {
+		tag, err := r.pool.Exec(ctx, `UPDATE accounts SET credential=$2, updated_at=$3 WHERE name=$1`,
+			name, credRaw, acc.UpdatedAt)
+		if err != nil {
+			return apperr.Wrap(apperr.StorageError, "update account credential", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return apperr.New(apperr.NotFound, fmt.Sprintf("account %q not found", name))
+		}
+		return nil
+	}
+	return cache.WriteThrough(ctx, r.cache, cache.AccountKey(name), acc, persist)
+}
+
 // Delete 在单事务内先删模型再删账号，返回被级联删除的模型标识，
 // 供上层失效缓存并向运维者回报影响范围。
 func (r *Repo) Delete(ctx context.Context, name string) ([]string, error) {
