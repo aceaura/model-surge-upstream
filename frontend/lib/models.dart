@@ -62,14 +62,6 @@ class ProviderSpec {
         _ => region,
       };
 
-  /// 缩写标签:Global 原样,其他区域加小写 -区域 后缀(如 ark-cn);
-  /// id 本身已带该后缀(如 kimi-cn)时不重复拼。
-  String get tagLabel {
-    if (region == 'Global' || region.isEmpty) return id;
-    final suffix = '-${region.toLowerCase()}';
-    return id.endsWith(suffix) ? id : '$id$suffix';
-  }
-
   /// 类型签:计费模式 · 服务区域(如 订阅 · 全球),分组卡片分节标题用。
   String get typeLabel => '$billingLabel · $regionLabel';
 

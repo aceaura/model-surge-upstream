@@ -76,11 +76,12 @@ void main() {
     expect(find.text('计费模式'), findsNothing, reason: '独立属性行已被类型签取代');
     expect(find.text('服务区域'), findsNothing);
 
-    // 缩写标签:Global 原样,CN 加小写后缀
+    // 缩写标签就是 provider id,不拼任何区域后缀(区域由类型签承载)
     expect(find.text('kimi'), findsOneWidget);
-    expect(find.text('ark-cn'), findsOneWidget, reason: 'CN 区域缩写加 -cn 后缀');
-    expect(find.textContaining('-CN'), findsNothing,
-        reason: '分组卡片厂商名不再拼 -CN 后缀');
+    expect(find.text('ark'), findsOneWidget, reason: 'CN 区域也不加 -cn 后缀');
+    expect(find.textContaining('-CN'), findsNothing);
+    expect(find.textContaining('-cn'), findsNothing,
+        reason: '分组形态下名字一律不带区域后缀');
 
     // 属性行按节下发(官网/请求地址每节各一份)
     expect(find.text('官网'), findsNWidgets(3));
