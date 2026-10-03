@@ -503,9 +503,7 @@ class _ModelFormState extends State<ModelForm> {
                         key: ValueKey('model-effort-name-$i'),
                         controller: rows[i].name,
                         decoration: const InputDecoration(
-                          labelText: '名',
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                          hintText: '名',
                         ),
                       ),
                     ),
@@ -516,9 +514,7 @@ class _ModelFormState extends State<ModelForm> {
                         key: ValueKey('model-effort-value-$i'),
                         controller: rows[i].value,
                         decoration: const InputDecoration(
-                          labelText: '值',
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                          hintText: '值',
                         ),
                       ),
                     ),

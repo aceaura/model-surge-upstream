@@ -865,9 +865,7 @@ class _AccountFormState extends State<AccountForm> {
                       key: ValueKey('script-var-name-$i'),
                       controller: _scriptVars[i].name,
                       decoration: const InputDecoration(
-                        labelText: '名',
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                        hintText: '名',
                       ),
                     ),
                   ),
@@ -878,9 +876,7 @@ class _AccountFormState extends State<AccountForm> {
                       key: ValueKey('script-var-value-$i'),
                       controller: _scriptVars[i].value,
                       decoration: const InputDecoration(
-                        labelText: '值',
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                        hintText: '值',
                       ),
                     ),
                   ),

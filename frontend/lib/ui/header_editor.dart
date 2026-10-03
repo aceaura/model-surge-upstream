@@ -60,9 +60,7 @@ class _HeaderEditorState extends State<HeaderEditor> {
                     child: TextFormField(
                       initialValue: _pairs[i].key,
                       decoration: const InputDecoration(
-                        labelText: '名',
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                        hintText: '名',
                       ),
                       onChanged: (v) {
                         _pairs[i].key = v;
@@ -76,9 +74,7 @@ class _HeaderEditorState extends State<HeaderEditor> {
                     child: TextFormField(
                       initialValue: _pairs[i].value,
                       decoration: const InputDecoration(
-                        labelText: '值',
-                        border: OutlineInputBorder(),
-                        isDense: true,
+                        hintText: '值',
                       ),
                       onChanged: (v) {
                         _pairs[i].value = v;
