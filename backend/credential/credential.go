@@ -9,16 +9,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
 // SupportedKinds 是本期支持的凭据形态，顺序固定用于错误消息。
-var SupportedKinds = []provider.CredentialKind{provider.CredAPIKey}
+var SupportedKinds = []provider.CredentialKind{provider.CredAPIKey, provider.CredOAuthRefresh}
 
 type Credential struct {
 	Kind   provider.CredentialKind `json:"kind"`
 	APIKey string                  `json:"api_key,omitempty"`
+	// oauth_refresh 形态:RefreshToken/AccountID 由用户粘贴(codex CLI
+	// auth.json 的 tokens.refresh_token/tokens.account_id);AccessToken/Expiry
+	// 是续期产物,由 oauth 包运行时维护并落库,不要求初始填写。
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	AccessToken  string    `json:"access_token,omitempty"`
+	Expiry       time.Time `json:"expiry,omitzero"`
+	AccountID    string    `json:"account_id,omitempty"`
 }
 
 // Decode 两步解码：先取 kind，再按 kind 校验具体字段。
@@ -53,6 +61,14 @@ func (c Credential) Validate() error {
 			return fmt.Errorf("credential api_key is required for kind %q", provider.CredAPIKey)
 		}
 		return nil
+	case provider.CredOAuthRefresh:
+		if strings.TrimSpace(c.RefreshToken) == "" {
+			return fmt.Errorf("credential refresh_token is required for kind %q", provider.CredOAuthRefresh)
+		}
+		if strings.TrimSpace(c.AccountID) == "" {
+			return fmt.Errorf("credential account_id is required for kind %q", provider.CredOAuthRefresh)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported credential kind %q, supported: %s", c.Kind, kindList())
 	}
@@ -70,17 +86,27 @@ func (c Credential) Encode() ([]byte, error) { return json.Marshal(c) }
 
 // Redact 转成脱敏视图，用于任何会离开进程且非下发面的路径。
 func (c Credential) Redact() Redacted {
-	return Redacted{Kind: c.Kind, APIKey: Mask(c.APIKey)}
+	return Redacted{
+		Kind:         c.Kind,
+		APIKey:       Mask(c.APIKey),
+		RefreshToken: Mask(c.RefreshToken),
+		AccountID:    c.AccountID,
+	}
 }
 
 // String 保证凭据不会因日志格式化而泄露。
 func (c Credential) String() string {
-	return fmt.Sprintf("Credential{Kind:%q APIKey:%s}", c.Kind, Mask(c.APIKey))
+	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s}",
+		c.Kind, Mask(c.APIKey), Mask(c.RefreshToken), Mask(c.AccessToken))
 }
 
+// Redacted 脱敏视图。AccessToken 是短效续期产物,不下发;AccountID 是标识
+// 不是秘密,明文下发(管理面展示授权归属)。
 type Redacted struct {
-	Kind   provider.CredentialKind `json:"kind"`
-	APIKey string                  `json:"api_key,omitempty"`
+	Kind         provider.CredentialKind `json:"kind"`
+	APIKey       string                  `json:"api_key,omitempty"`
+	RefreshToken string                  `json:"refresh_token,omitempty"`
+	AccountID    string                  `json:"account_id,omitempty"`
 }
 
 // Mask 短值全掩，长值保留前 4 后 4。

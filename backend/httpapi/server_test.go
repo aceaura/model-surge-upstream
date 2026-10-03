@@ -415,7 +415,7 @@ func TestCreateAccountValidationErrors(t *testing.T) {
 func TestUnsupportedCredentialKindListsSupported(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"x","provider_id":"kimi","credential":{"kind":"oauth_refresh","api_key":"x"}}`)
+		`{"name":"x","provider_id":"kimi","credential":{"kind":"session_token","token":"x"}}`)
 	if !strings.Contains(rec.Body.String(), "api_key") {
 		t.Errorf("error should list the supported kinds: %s", rec.Body)
 	}

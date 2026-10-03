@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
@@ -20,13 +21,16 @@ func TestDecodeAPIKey(t *testing.T) {
 
 func TestDecodeRejects(t *testing.T) {
 	cases := map[string]struct{ raw, wants string }{
-		"unknown kind":  {`{"kind":"oauth_refresh","refresh_token":"x"}`, "api_key"},
+		"unknown kind":  {`{"kind":"static_token","token":"x"}`, "unsupported credential kind"},
 		"missing kind":  {`{"api_key":"sk-abcdefghijkl"}`, "kind is required"},
 		"empty key":     {`{"kind":"api_key","api_key":""}`, "api_key is required"},
 		"blank key":     {`{"kind":"api_key","api_key":"   "}`, "api_key is required"},
 		"absent key":    {`{"kind":"api_key"}`, "api_key is required"},
 		"not json":      {`not json`, "not valid json"},
 		"kiro deferred": {`{"kind":"kiro_desktop"}`, "unsupported credential kind"},
+		"oauth missing refresh":  {`{"kind":"oauth_refresh","account_id":"acc-1"}`, "refresh_token is required"},
+		"oauth missing account":  {`{"kind":"oauth_refresh","refresh_token":"rt-abcdefghijkl"}`, "account_id is required"},
+		"oauth blank account":    {`{"kind":"oauth_refresh","refresh_token":"rt-abcdefghijkl","account_id":"  "}`, "account_id is required"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -58,6 +62,68 @@ func TestValidateAgainstProvider(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), spec.ID) {
 		t.Errorf("error %q should name the provider", err)
+	}
+}
+
+func TestDecodeOAuthRefresh(t *testing.T) {
+	raw := `{"kind":"oauth_refresh","refresh_token":"rt-abcdefghijkl","account_id":"acc-123",` +
+		`"access_token":"at-zzzzyyyyxxxx","expiry":"2026-10-03T20:00:00Z"}`
+	c, err := Decode([]byte(raw))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Kind != provider.CredOAuthRefresh || c.RefreshToken != "rt-abcdefghijkl" || c.AccountID != "acc-123" {
+		t.Errorf("decoded = %+v", c)
+	}
+	if c.AccessToken != "at-zzzzyyyyxxxx" || c.Expiry.IsZero() {
+		t.Errorf("token state = %+v", c)
+	}
+
+	// 初始只粘贴 refresh_token+account_id 也合法:access_token 由续期补
+	minimal, err := Decode([]byte(`{"kind":"oauth_refresh","refresh_token":"rt-abcdefghijkl","account_id":"acc-123"}`))
+	if err != nil {
+		t.Fatalf("minimal paste should decode: %v", err)
+	}
+	if minimal.AccessToken != "" || !minimal.Expiry.IsZero() {
+		t.Errorf("token state should start empty: %+v", minimal)
+	}
+}
+
+func TestRedactOAuthRefresh(t *testing.T) {
+	c := Credential{Kind: provider.CredOAuthRefresh,
+		RefreshToken: "rt-abcdefghijkl", AccessToken: "at-zzzzyyyyxxxx", AccountID: "acc-123"}
+
+	redacted, err := json.Marshal(c.Redact())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"rt-abcdefghijkl", "at-zzzzyyyyxxxx"} {
+		if strings.Contains(string(redacted), secret) {
+			t.Errorf("redacted view leaked %q: %s", secret, redacted)
+		}
+	}
+	if strings.Contains(string(redacted), "access_token") {
+		t.Errorf("短效 access_token 不下发: %s", redacted)
+	}
+	if !strings.Contains(string(redacted), "acc-123") {
+		t.Errorf("account_id 是标识不是秘密,应明文下发: %s", redacted)
+	}
+}
+
+func TestEncodeRoundTripOAuth(t *testing.T) {
+	c := Credential{Kind: provider.CredOAuthRefresh,
+		RefreshToken: "rt-abcdefghijkl", AccessToken: "at-zzzzyyyyxxxx",
+		Expiry: time.Date(2026, 10, 3, 20, 0, 0, 0, time.UTC), AccountID: "acc-123"}
+	raw, err := c.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back != c {
+		t.Errorf("round trip changed the credential: %+v vs %+v", back, c)
 	}
 }
 

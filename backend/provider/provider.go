@@ -20,10 +20,14 @@ const (
 	AuthAnthropicKey AuthScheme = "anthropic_key" // x-api-key + anthropic-version
 )
 
-// CredentialKind 凭据形态判别式。本期只支持静态密钥。
+// CredentialKind 凭据形态判别式。api_key 是静态密钥;oauth_refresh 是
+// OAuth 刷新型登录态(refresh_token 续期 access_token,如 ChatGPT 订阅)。
 type CredentialKind string
 
-const CredAPIKey CredentialKind = "api_key"
+const (
+	CredAPIKey       CredentialKind = "api_key"
+	CredOAuthRefresh CredentialKind = "oauth_refresh"
+)
 
 // Billing 计费模式判别式:订阅制按周期配额收费(如 Kimi For Coding),
 // 按量计费按实际用量结算(预付费余额或后付费账单)。
