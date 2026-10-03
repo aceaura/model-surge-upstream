@@ -24,8 +24,8 @@ func TestBuiltinSpecsWellFormed(t *testing.T) {
 		if len(s.Protocols) == 0 {
 			t.Errorf("provider %q: no protocols", s.ID)
 		}
-		if s.Credential != CredAPIKey {
-			t.Errorf("provider %q: credential = %q, this iteration supports only api_key", s.ID, s.Credential)
+		if s.Credential != CredAPIKey && s.Credential != CredOAuthRefresh {
+			t.Errorf("provider %q: credential = %q, supported: api_key, oauth_refresh", s.ID, s.Credential)
 		}
 		if s.Auth != AuthBearer && s.Auth != AuthAnthropicKey {
 			t.Errorf("provider %q: unknown auth scheme %q", s.ID, s.Auth)
@@ -45,9 +45,10 @@ func TestBuiltinBilling(t *testing.T) {
 		"openai":    BillingPayGo,
 		"gemini":    BillingPayGo,
 		// kimi 预设端点是 api.kimi.com/coding,即 Kimi For Coding 订阅产品。
-		"kimi":     BillingSubscription,
-		"ark":      BillingPayGo,
-		"deepseek": BillingPayGo,
+		"kimi":          BillingSubscription,
+		"ark":           BillingPayGo,
+		"deepseek":      BillingPayGo,
+		"openai-codex": BillingSubscription,
 	}
 	for id, billing := range want {
 		s, ok := Get(id)
@@ -66,9 +67,10 @@ func TestBuiltinRegion(t *testing.T) {
 		"anthropic": RegionGlobal,
 		"openai":    RegionGlobal,
 		"gemini":    RegionGlobal,
-		"kimi":      RegionGlobal,
-		"ark":       RegionGlobal,
-		"deepseek":  RegionGlobal,
+		"kimi":         RegionGlobal,
+		"ark":          RegionGlobal,
+		"deepseek":     RegionGlobal,
+		"openai-codex": RegionGlobal,
 	}
 	for id, region := range want {
 		s, ok := Get(id)
@@ -91,9 +93,12 @@ func TestBuiltinWebsite(t *testing.T) {
 		"gemini":    "https://aistudio.google.com",
 		// kimi 是订阅(Kimi For Coding),订阅站在 kimi.com;
 		// platform.moonshot.cn 是按量平台,不挂。
-		"kimi":     "https://www.kimi.com",
-		"ark":      "https://console.volcengine.com/ark",
-		"deepseek": "https://platform.deepseek.com",
+		"kimi":         "https://www.kimi.com",
+		"ark":          "https://console.volcengine.com/ark",
+		"deepseek":     "https://platform.deepseek.com",
+		// openai-codex 是订阅(ChatGPT Plus/Pro),订阅站在 chatgpt.com;
+		// platform.openai.com 是按量平台,已挂给 openai。
+		"openai-codex": "https://chatgpt.com",
 	}
 	for id, website := range want {
 		s, ok := Get(id)
@@ -171,6 +176,28 @@ func TestIDs(t *testing.T) {
 	ids := IDs()
 	if len(ids) != len(All()) {
 		t.Fatalf("IDs length %d != All length %d", len(ids), len(All()))
+	}
+}
+
+func TestOpenAICodexSpec(t *testing.T) {
+	s, ok := Get("openai-codex")
+	if !ok {
+		t.Fatal("openai-codex should be registered")
+	}
+	if s.Credential != CredOAuthRefresh {
+		t.Errorf("credential = %q, want oauth_refresh", s.Credential)
+	}
+	if s.BaseURL != "https://chatgpt.com/backend-api/codex" {
+		t.Errorf("base_url = %q", s.BaseURL)
+	}
+	if !s.Supports(ProtocolResponses) || len(s.Protocols) != 1 {
+		t.Errorf("订阅端点只支持 responses, protocols = %v", s.Protocols)
+	}
+	if s.Models != nil {
+		t.Error("codex 端点无模型列举接口,不应声明 Models")
+	}
+	if s.DisplayName != "OpenAI" {
+		t.Errorf("display_name = %q, 与按量 openai 同名才能在级联里同厂商分组", s.DisplayName)
 	}
 }
 
