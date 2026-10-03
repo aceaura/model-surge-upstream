@@ -242,8 +242,9 @@ func TestEffortsRoundTrip(t *testing.T) {
 	repo, _ := fixtures(t)
 	ctx := context.Background()
 
-	// 未配置 efforts:落库存 null,有效列表走协议默认
-	// (chat_completions 协议的 gpt-5 自动得 low/medium/high)。
+	// 未配置 efforts:落库存 null(自动=跟随上游声明)。有效列表不在仓储
+	// 现算——由能访问上游的 httpapi/resolve 层填充,仓储只保证原始配置
+	// 的持久化与显式数组的词表校验。
 	in := input()
 	in.ID = "kimi-1/gpt5"
 	in.NativeModel = "gpt-5"
@@ -252,25 +253,22 @@ func TestEffortsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if string(created.Efforts) != `null` {
-		t.Errorf("auto efforts should persist as null, got %s", created.Efforts)
-	}
-	assertEfforts(t, created.EffortsEffective, []string{"low", "medium", "high"})
+	assertRawEfforts(t, created.Efforts, `null`)
 
-	// 显式数组:按词表升序去重。
+	// 显式数组:原样落库(归一排序在消费侧现算)。
 	in.Efforts = json.RawMessage(`["high","low","high","xhigh"]`)
 	updated, err := repo.Update(ctx, in)
 	if err != nil {
 		t.Fatalf("update explicit: %v", err)
 	}
-	assertEfforts(t, updated.EffortsEffective, []string{"low", "high", "xhigh"})
+	assertRawEfforts(t, updated.Efforts, `["high","low","high","xhigh"]`)
 
 	// 更新不带 efforts:保留现状。
 	keep, err := repo.Update(ctx, Input{ID: in.ID, Enabled: true})
 	if err != nil {
 		t.Fatalf("update omitted: %v", err)
 	}
-	assertEfforts(t, keep.EffortsEffective, []string{"low", "high", "xhigh"})
+	assertRawEfforts(t, keep.Efforts, `["high","low","high","xhigh"]`)
 
 	// 显式空数组 = 管理员声明不支持。
 	in.Efforts = json.RawMessage(`[]`)
@@ -278,39 +276,34 @@ func TestEffortsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update empty: %v", err)
 	}
-	assertEfforts(t, empty.EffortsEffective, []string{})
+	assertRawEfforts(t, empty.Efforts, `[]`)
 
-	// null 恢复自动推导。
+	// null 恢复自动(跟随上游声明)。
 	in.Efforts = json.RawMessage(`null`)
 	auto, err := repo.Update(ctx, in)
 	if err != nil {
 		t.Fatalf("update null: %v", err)
 	}
-	assertEfforts(t, auto.EffortsEffective, []string{"low", "medium", "high"})
+	assertRawEfforts(t, auto.Efforts, `null`)
 
-	// 读回(走缓存/库)同样带算好的有效列表。
+	// 读回(走缓存/库)原始配置不变。
 	got, err := repo.Get(ctx, in.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertEfforts(t, got.EffortsEffective, []string{"low", "medium", "high"})
+	assertRawEfforts(t, got.Efforts, `null`)
 
-	// 词表外档位被拒。
+	// 词表外档位被拒(写路径仍校验显式数组)。
 	in.Efforts = json.RawMessage(`["ultra"]`)
 	if _, err := repo.Update(ctx, in); !apperr.Is(err, apperr.InvalidRequest) {
 		t.Errorf("unknown level err = %v, want invalid_request", err)
 	}
 }
 
-func assertEfforts(t *testing.T, got, want []string) {
+func assertRawEfforts(t *testing.T, got json.RawMessage, want string) {
 	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("efforts = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("efforts = %v, want %v", got, want)
-		}
+	if string(got) != want {
+		t.Fatalf("efforts = %s, want %s", got, want)
 	}
 }
 

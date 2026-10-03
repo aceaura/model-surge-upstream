@@ -12,6 +12,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/oauth"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
@@ -36,8 +37,8 @@ type ResolvedTarget struct {
 	Defaults      json.RawMessage   `json:"defaults"`
 	Overrides     json.RawMessage   `json:"overrides"`
 	Compact       json.RawMessage   `json:"compact,omitempty"`
-	// Efforts 是模型的有效推理档列表（含自动推导），对话页发送侧
-	// 按它校验所选档位；空列表表示该模型不支持 effort。
+	// Efforts 是模型的有效推理档列表（自动模式=上游声明，显式数组=管理员
+	// 声明），对话页发送侧按它校验所选档位；空列表表示该模型不支持 effort。
 	Efforts []string `json:"efforts,omitempty"`
 }
 
@@ -87,10 +88,18 @@ type Tokens interface {
 	AccessToken(ctx context.Context, acc account.Account) (string, error)
 }
 
+// EffortDeclarations 是上游推理档声明的来源(upmodels.Lister 实现):
+// 自动模式的模型按它取 supported_reasoning_levels。nil 表示不装配,
+// 自动模式一律视为无声明(不支持)。
+type EffortDeclarations interface {
+	DeclaredEfforts(ctx context.Context, accountName, nativeModel string) []string
+}
+
 type Resolver struct {
 	accounts Accounts
 	models   Models
 	tokens   Tokens
+	efforts  EffortDeclarations
 }
 
 func NewResolver(accounts Accounts, models Models) *Resolver {
@@ -101,6 +110,13 @@ func NewResolver(accounts Accounts, models Models) *Resolver {
 // 必须装配,否则解析到这类账号报错。
 func (r *Resolver) WithTokens(t Tokens) *Resolver {
 	r.tokens = t
+	return r
+}
+
+// WithEffortDeclarations 挂上上游推理档声明来源:自动模式模型的有效档位
+// 跟随上游 /models 声明,无声明即不支持。
+func (r *Resolver) WithEffortDeclarations(d EffortDeclarations) *Resolver {
+	r.efforts = d
 	return r
 }
 
@@ -143,8 +159,23 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Defaults:      m.Defaults,
 		Overrides:     m.Overrides,
 		Compact:       m.Compact,
-		Efforts:       m.EffortsEffective,
+		Efforts:       r.effectiveEfforts(ctx, acc.Name, m),
 	}, nil
+}
+
+// effectiveEfforts 现算模型的有效档位:显式数组本地归一(写路径已校验,
+// 算错只可能是词表演进后的存量数据,退回空列表比挡住解析安全);
+// 自动模式跟随上游声明,声明来源未装配或查询失败都按无声明(不支持)处置。
+func (r *Resolver) effectiveEfforts(ctx context.Context, accountName string, m model.Model) []string {
+	var declared []string
+	if effort.Auto(m.Efforts) && r.efforts != nil {
+		declared = r.efforts.DeclaredEfforts(ctx, accountName, m.NativeModel)
+	}
+	eff, err := effort.Effective(m.Efforts, declared)
+	if err != nil {
+		return []string{}
+	}
+	return eff
 }
 
 // HeadersFor 把 authHeaders 暴露给管理面连通性检测等旁路调用:它们刻意

@@ -75,6 +75,65 @@ func fixture() (fakeAccounts, fakeModels, *Resolver) {
 	return accounts, models, NewResolver(accounts, models)
 }
 
+// fakeDecls 桩上游推理档声明来源:记录调用,按「账号/原生模型」返回。
+type fakeDecls struct {
+	calls int
+	data  map[string][]string
+}
+
+func (f *fakeDecls) DeclaredEfforts(_ context.Context, accountName, nativeModel string) []string {
+	f.calls++
+	return f.data[accountName+"/"+nativeModel]
+}
+
+// TestResolveEfforts 锁定有效档位的声明式语义:自动模式跟随上游声明(未装配
+// 声明来源即无声明=不支持);显式数组本地归一且不查声明来源。
+func TestResolveEfforts(t *testing.T) {
+	t.Run("自动模式跟随上游声明", func(t *testing.T) {
+		accounts, models, _ := fixture()
+		decls := &fakeDecls{data: map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "low"}}}
+		r := NewResolver(accounts, models).WithEffortDeclarations(decls)
+		got, err := r.Resolve(context.Background(), "kimi-1/k2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Efforts) != 2 || got.Efforts[0] != "low" || got.Efforts[1] != "high" {
+			t.Errorf("efforts = %v, want [low high](声明归一升序)", got.Efforts)
+		}
+		if decls.calls != 1 {
+			t.Errorf("声明来源调用 = %d, want 1", decls.calls)
+		}
+	})
+	t.Run("显式数组压过声明且不查上游", func(t *testing.T) {
+		accounts, models, _ := fixture()
+		m := models["kimi-1/k2"]
+		m.Efforts = json.RawMessage(`["xhigh","medium"]`)
+		models["kimi-1/k2"] = m
+		decls := &fakeDecls{data: map[string][]string{"kimi-1/kimi-k2-turbo": {"low"}}}
+		r := NewResolver(accounts, models).WithEffortDeclarations(decls)
+		got, err := r.Resolve(context.Background(), "kimi-1/k2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Efforts) != 2 || got.Efforts[0] != "medium" || got.Efforts[1] != "xhigh" {
+			t.Errorf("efforts = %v, want [medium xhigh](显式声明)", got.Efforts)
+		}
+		if decls.calls != 0 {
+			t.Errorf("显式数组不应查声明来源,调用 = %d", decls.calls)
+		}
+	})
+	t.Run("未装配声明来源=无声明=不支持", func(t *testing.T) {
+		_, _, r := fixture()
+		got, err := r.Resolve(context.Background(), "kimi-1/k2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Efforts) != 0 {
+			t.Errorf("efforts = %v, want 空(自动模式无声明来源)", got.Efforts)
+		}
+	})
+}
+
 func TestResolve(t *testing.T) {
 	_, _, r := fixture()
 	got, err := r.Resolve(context.Background(), "kimi-1/k2")

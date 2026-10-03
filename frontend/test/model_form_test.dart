@@ -296,9 +296,9 @@ void main() {
     );
     await pumpForm(tester, client: client);
 
-    // 新建默认自动:分区收起,副标题标注自动推导。
+    // 新建默认自动:分区收起,副标题标注跟随上游声明。
     expect(find.text('推理档'), findsOneWidget);
-    expect(find.text('自动（按协议与模型名推导）'), findsOneWidget);
+    expect(find.text('自动（跟随上游声明）'), findsOneWidget);
 
     // 展开并切到自定义:七个档位的 chip 全渲染(分区在首屏外,先滚入视野)。
     await tester.tap(find.text('推理档'));

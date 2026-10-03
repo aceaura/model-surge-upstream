@@ -160,6 +160,13 @@ func MapSuffix(suffix string) string {
 	return suffix
 }
 
+// ModelsURL 返回模型清单端点地址。client_version 查询参数是硬条件:
+// 缺了上游恒 400(sub2api buildCodexModelsManifestURL 同款协商语义)。
+// 响应按模型携带 supported_reasoning_levels,是推理档动态适配的数据源。
+func ModelsURL(baseURL string) string {
+	return strings.TrimRight(baseURL, "/") + "/models?client_version=" + oauth.ClientVersion
+}
+
 // SessionID 由账号与 prompt_cache_key 派生稳定 UUID:同账号同会话恒定,
 // 跨账号/跨会话隔离(sub2api 同款隔离思路,防客户端自带 session 头串号)。
 // 客户端传来的 session_id/conversation_id 一律不用,转发面先删后写。

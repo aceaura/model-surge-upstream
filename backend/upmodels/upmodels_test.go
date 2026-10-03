@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -200,11 +201,161 @@ func TestParseEntriesShapes(t *testing.T) {
 				t.Fatalf("entries = %v, want %v", got, tc.want)
 			}
 			for i := range got {
-				if got[i] != tc.want[i] {
+				if got[i].ID != tc.want[i].ID || got[i].DisplayName != tc.want[i].DisplayName {
 					t.Errorf("entry %d = %+v, want %+v", i, got[i], tc.want[i])
 				}
 			}
 		})
+	}
+}
+
+// TestParseDeclaredEfforts 锁定 supported_reasoning_levels 双形态解析:
+// codex 订阅端点是 [{effort,description}] 对象数组,OpenAI 兼容网关是
+// 字符串数组;名字按词表归一升序,未声明回 nil。
+func TestParseDeclaredEfforts(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want []string
+	}{
+		"对象数组形态(codex)": {
+			`{"data":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"high","description":"x"},{"effort":"low"}]}]}`,
+			[]string{"low", "high"},
+		},
+		"字符串数组形态(网关)": {
+			`{"data":[{"id":"o4-mini","supported_reasoning_levels":["medium","low","high"]}]}`,
+			[]string{"low", "medium", "high"},
+		},
+		"词表外与别名归一": {
+			`{"data":[{"id":"m","supported_reasoning_levels":["ultra","extra-high"," High "]}]}`,
+			[]string{"high", "xhigh"},
+		},
+		"未声明回 nil": {
+			`{"data":[{"id":"m"}]}`,
+			nil,
+		},
+		"空数组回 nil": {
+			`{"data":[{"id":"m","supported_reasoning_levels":[]}]}`,
+			nil,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := parseEntries([]byte(tc.body))
+			if len(got) != 1 {
+				t.Fatalf("entries = %v, want 1 entry", got)
+			}
+			if !slices.Equal(got[0].Efforts, tc.want) {
+				t.Errorf("efforts = %v, want %v", got[0].Efforts, tc.want)
+			}
+		})
+	}
+}
+
+// TestDeclaredEfforts 锁定按原生模型名查声明:命中返回声明;未声明/模型不在
+// 清单/上游失败都回 nil(无声明即不支持,不是错误)。
+func TestDeclaredEfforts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[` +
+			`{"id":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},` +
+			`{"id":"plain-model"}]}`))
+	}))
+	defer srv.Close()
+
+	l := New(fakeAccounts{"oa-1": acct("oa-1", "openai", srv.URL)}, time.Minute)
+	ctx := context.Background()
+	if got := l.DeclaredEfforts(ctx, "oa-1", "gpt-6.1-sol"); !slices.Equal(got, []string{"low", "high"}) {
+		t.Errorf("declared = %v, want [low high]", got)
+	}
+	if got := l.DeclaredEfforts(ctx, "oa-1", "plain-model"); got != nil {
+		t.Errorf("模型未声明 = %v, want nil", got)
+	}
+	if got := l.DeclaredEfforts(ctx, "oa-1", "ghost-model"); got != nil {
+		t.Errorf("模型不在清单 = %v, want nil", got)
+	}
+	if got := l.DeclaredEfforts(ctx, "ghost-account", "gpt-6.1-sol"); got != nil {
+		t.Errorf("账号不存在 = %v, want nil", got)
+	}
+}
+
+// TestDeclaredEffortsCachesWithList 声明查询与清单共用同一份 TTL 缓存:
+// 先 List 后 DeclaredEfforts 不再打上游。
+func TestDeclaredEffortsCachesWithList(t *testing.T) {
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		_, _ = w.Write([]byte(`{"data":[{"id":"m","supported_reasoning_levels":["low"]}]}`))
+	}))
+	defer srv.Close()
+
+	l := New(fakeAccounts{"oa-1": acct("oa-1", "openai", srv.URL)}, time.Minute)
+	ctx := context.Background()
+	if _, err := l.List(ctx, "oa-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.DeclaredEfforts(ctx, "oa-1", "m"); !slices.Equal(got, []string{"low"}) {
+		t.Errorf("declared = %v, want [low]", got)
+	}
+	if got := atomic.LoadInt64(&hits); got != 1 {
+		t.Errorf("upstream hits = %d, want 1(共用清单缓存)", got)
+	}
+}
+
+// TestHeaderSourceOverridesStaticAuth 装配头来源后用其构造上游头
+// (oauth 账号的活体 token 路径),而不是静态空 Bearer。
+func TestHeaderSourceOverridesStaticAuth(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+
+	l := New(fakeAccounts{"cx-1": acct("cx-1", "openai-codex", srv.URL)}, time.Minute).
+		WithHeaderSource(headerSourceFunc(func(context.Context, provider.Spec, account.Account) (map[string]string, error) {
+			return map[string]string{"Authorization": "Bearer live-token"}, nil
+		}))
+	if _, err := l.List(context.Background(), "cx-1"); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer live-token" {
+		t.Errorf("auth = %q, want 头来源的活体 token", gotAuth)
+	}
+}
+
+type headerSourceFunc func(context.Context, provider.Spec, account.Account) (map[string]string, error)
+
+func (f headerSourceFunc) HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error) {
+	return f(ctx, spec, acc)
+}
+
+// TestCodexModelsURLCarriesClientVersion codex 清单端点必须带 client_version
+// 协商参数,缺了上游恒 400(sub2api 实测);Accept 恒为 JSON(凭据形态头里
+// 的 SSE Accept 不适用清单 GET)。
+func TestCodexModelsURLCarriesClientVersion(t *testing.T) {
+	var gotURL, gotAccept string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		gotAccept = r.Header.Get("Accept")
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"low"}]}]}`))
+	}))
+	defer srv.Close()
+
+	l := New(fakeAccounts{"cx-1": acct("cx-1", "openai-codex", srv.URL)}, time.Minute)
+	got, err := l.List(context.Background(), "cx-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotURL != "/models?client_version=0.160.0" {
+		t.Errorf("url = %q, want client_version 协商参数", gotURL)
+	}
+	if gotAccept != "application/json" {
+		t.Errorf("Accept = %q, want application/json", gotAccept)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "gpt-6.1-sol" {
+		t.Fatalf("models = %+v, want slug 作为条目 ID", got.Models)
+	}
+	if !slices.Equal(got.Models[0].Efforts, []string{"low"}) {
+		t.Errorf("efforts = %v, want [low]", got.Models[0].Efforts)
 	}
 }
 

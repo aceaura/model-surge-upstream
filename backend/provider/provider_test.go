@@ -193,8 +193,8 @@ func TestOpenAICodexSpec(t *testing.T) {
 	if !s.Supports(ProtocolResponses) || len(s.Protocols) != 1 {
 		t.Errorf("订阅端点只支持 responses, protocols = %v", s.Protocols)
 	}
-	if s.Models != nil {
-		t.Error("codex 端点无模型列举接口,不应声明 Models")
+	if s.Models == nil || s.Models.Path != "/models" {
+		t.Errorf("codex /models 清单端点是推理档声明的数据源,应声明 Models, got %+v", s.Models)
 	}
 	if s.DisplayName != "OpenAI" {
 		t.Errorf("display_name = %q, 与按量 openai 同名才能在级联里同厂商分组", s.DisplayName)

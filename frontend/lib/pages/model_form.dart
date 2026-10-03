@@ -81,7 +81,7 @@ class _ModelFormState extends State<ModelForm> {
   // 启停由列表行开关控制,表单不再展示;编辑/拷贝时沿用原值提交,新建默认启用
   late final bool _enabled = _source?.enabled ?? true;
 
-  // 推理档支持列表:null=自动(按协议+模型名推导);数组=显式声明,
+  // 推理档支持列表:null=自动(跟随上游 /models 声明);数组=显式声明,
   // 空数组即声明该模型不支持。拷贝创建沿用来源配置。
   late List<String>? _efforts = _source?.efforts == null
       ? null
@@ -439,11 +439,11 @@ class _ModelFormState extends State<ModelForm> {
     );
   }
 
-  // ── 推理档(自动推导/自定义支持列表)──
+  // ── 推理档(跟随上游声明/自定义支持列表)──
 
   String get _effortSubtitle {
     final efforts = _efforts;
-    if (efforts == null) return '自动（按协议与模型名推导）';
+    if (efforts == null) return '自动（跟随上游声明）';
     if (efforts.isEmpty) return '不支持';
     return efforts.map((e) => effortLevelLabels[e] ?? e).join(' / ');
   }
@@ -463,7 +463,7 @@ class _ModelFormState extends State<ModelForm> {
             key: const ValueKey('model-effort-mode-field'),
             label: '支持档位',
             hint: efforts == null
-                ? '按协议与模型名自动推导，词表演进自动跟随'
+                ? '跟随上游 /models 声明的支持档位，上游未声明即不支持'
                 : '勾选该模型支持的档位；都不选即声明不支持推理档',
             child: StyledDropdownFormField(
               key: const ValueKey('model-effort-mode'),

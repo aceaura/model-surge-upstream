@@ -19,10 +19,11 @@ type Model struct {
 	// Compact 上下文压缩配置：{"mode":"passive|error|auto", "threshold",
 	// "keep_turns", "max_summary_tokens"}，缺项回落到全局 env 默认。
 	Compact json.RawMessage `json:"compact"`
-	// Efforts 推理档支持列表的原始配置：null=自动（按协议+模型名规则
-	// 推导），数组=管理员显式声明（空数组即不支持）。
+	// Efforts 推理档支持列表的原始配置：null=自动（跟随上游 /models 声明的
+	// supported_reasoning_levels），数组=管理员显式声明（空数组即不支持）。
 	Efforts json.RawMessage `json:"efforts"`
-	// EffortsEffective 是算好的有效支持列表（不落库），对话页按它渲染
+	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
+	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
 	// 档位选择器，发送侧按它校验所选档位。
 	EffortsEffective []string `json:"efforts_effective"`
 	Enabled          bool     `json:"enabled"`

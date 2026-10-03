@@ -67,11 +67,15 @@ func run() error {
 	// OAuth 登录态(ChatGPT 订阅)的 token 生命周期:解析面取活体 token,
 	// 转发面 401 时作废旧 token 触发续期。
 	tokens := oauth.NewManager(accounts)
-	resolver := loggedResolver{inner: resolve.NewResolver(accounts, models).WithTokens(tokens)}
+	upstream := upmodels.New(accounts, cfg.QuotaTTL)
+	// 推理档自动模式的声明来源是上游 /models;oauth 账号查清单的头
+	// (活体 token+codex 头集)复用解析面的头构造。
+	resolver := loggedResolver{inner: resolve.NewResolver(accounts, models).
+		WithTokens(tokens).WithEffortDeclarations(upstream)}
+	upstream.WithHeaderSource(resolver.inner)
 	quotas := quota.New(accounts, cfg.QuotaTTL)
 	// 额度脚本的 {{accessToken}} 复用同一个 token 生命周期管理。
 	quotas.SetTokenSource(tokens)
-	upstream := upmodels.New(accounts, cfg.QuotaTTL)
 	// 账号活动追踪:转发面/对话面每服务一次请求触活一次,额度定时轮询
 	// 据此跳过停止查询间隔内无请求的空闲账号,直到下一次请求到达自动恢复。
 	act := activity.New()

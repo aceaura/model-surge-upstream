@@ -1,7 +1,8 @@
-// Package effort 定义推理档的统一词表与「自动」支持列表规则。
-// 词表与 new-api/sub2api/cc-switch 三家同构;各家模型支持哪些档并不统一,
-// Defaults 用协议默认+模型名规则给出免维护的初始答案,
-// 规则失灵时管理员在模型上显式覆盖(efforts 列存数组即压过本规则)。
+// Package effort 定义推理档的统一词表与「声明式」支持列表判定。
+// 词表与 new-api/sub2api/cc-switch 三家同构;某模型支持哪些档不靠猜——
+// 自动模式跟随上游 /models 响应里声明的 supported_reasoning_levels
+// (sub2api 同款动态适配),上游没声明即不支持;管理员也可在模型上
+// 显式声明(efforts 列存数组),显式声明压过上游声明。
 package effort
 
 import (
@@ -10,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
-	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
 // Levels 是全部合法档位,按强度升序。UI 与校验都以这份词表为准。
@@ -26,63 +26,74 @@ func Valid(s string) bool {
 	return false
 }
 
-// Defaults 给出协议×模型名的自动支持列表:
-//   - responses(codex 订阅族):实测 minimal~high 可用;xhigh/max 词表里有,
-//     需管理员确认上游支持后手动加,不放默认。
-//   - chat_completions(o 系列/推理型兼容端点):low~high。
-//   - anthropic/gemini 协议:没有通用 effort 语义(thinking 走 budget 数值),
-//     不支持。
-//
-// 模型名规则只在有 effort 语义的协议内收窄:gemini 系只分低/高两档;
-// kimi/deepseek 的「思考」是开关不是档位,塞 effort 只会被上游拒,一律置空。
-func Defaults(protocol, nativeModel string) []string {
-	name := strings.ToLower(nativeModel)
-	for _, noEffort := range []string{"kimi", "deepseek"} {
-		if strings.Contains(name, noEffort) {
-			return []string{}
-		}
-	}
-	switch protocol {
-	case provider.ProtocolResponses:
-		if strings.Contains(name, "gemini") {
-			return []string{"low", "high"}
-		}
-		return []string{"minimal", "low", "medium", "high"}
-	case provider.ProtocolChatCompletions:
-		if strings.Contains(name, "gemini") {
-			return []string{"low", "high"}
-		}
-		return []string{"low", "medium", "high"}
+// Auto 判定原始配置是否为自动模式(null/缺省=跟随上游声明)。
+func Auto(raw json.RawMessage) bool {
+	s := strings.TrimSpace(string(raw))
+	return s == "" || s == "null"
+}
+
+// Normalize 把上游声明的档位名折进词表:大小写与空白归一,常见别名映射
+// (off/disabled→none、extra-high/extra_high→xhigh),词表外的名字回 ""
+// (各家私有档位词表表达不了,丢弃而不是编造)。别名表与 sub2api 同款。
+func Normalize(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "off", "disabled":
+		return "none"
+	case "extra-high", "extra_high":
+		return "xhigh"
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return strings.ToLower(strings.TrimSpace(level))
 	default:
-		return []string{}
+		return ""
 	}
 }
 
-// Effective 算出模型的有效支持列表:raw 为 null/空(未显式配置)走
-// Defaults;raw 为数组时逐项校验词表并按 Levels 升序去重返回,
-// 显式空数组 [] 表示管理员声明该模型不支持 effort。
-func Effective(protocol, nativeModel string, raw json.RawMessage) ([]string, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return Defaults(protocol, nativeModel), nil
+// NormalizeList 归一一份上游声明列表:逐项 Normalize、丢弃词表外项、
+// 按 Levels 升序去重。
+func NormalizeList(declared []string) []string {
+	seen := map[string]bool{}
+	for _, d := range declared {
+		if n := Normalize(d); n != "" {
+			seen[n] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for _, l := range Levels {
+		if seen[l] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// Effective 算出模型的有效支持列表:
+//   - raw 为自动模式(null/缺省):跟随上游声明,declared 是上游 /models
+//     声明的 supported_reasoning_levels(原始名字,此处归一);无声明即
+//     不支持(回空列表,选择器不露面)。
+//   - raw 为数组:管理员显式声明,逐项校验词表并按 Levels 升序去重,
+//     显式空数组 [] 表示声明该模型不支持 effort。
+func Effective(raw json.RawMessage, declared []string) ([]string, error) {
+	if Auto(raw) {
+		return NormalizeList(declared), nil
 	}
 	var list []string
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return nil, apperr.New(apperr.InvalidJSON, "efforts must be a json array of strings")
 	}
-	seen := map[string]bool{}
-	out := make([]string, 0, len(list))
-	for _, l := range Levels {
-		for _, got := range list {
-			if got == l && !seen[l] {
-				seen[l] = true
-				out = append(out, l)
-			}
-		}
-	}
 	for _, got := range list {
 		if !Valid(got) {
 			return nil, apperr.New(apperr.InvalidRequest,
 				fmt.Sprintf("unknown reasoning effort %q (levels: %s)", got, strings.Join(Levels, ", ")))
+		}
+	}
+	seen := map[string]bool{}
+	for _, l := range list {
+		seen[l] = true
+	}
+	out := make([]string, 0, len(seen))
+	for _, l := range Levels {
+		if seen[l] {
+			out = append(out, l)
 		}
 	}
 	return out, nil

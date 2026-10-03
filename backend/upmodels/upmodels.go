@@ -18,6 +18,8 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/codex"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -27,10 +29,15 @@ const (
 	bodyLimit      = 1 << 20
 )
 
-// Entry 是上游模型条目。除 ID 外各家给的字段参差不齐，只收敛能普遍拿到的两项。
+// Entry 是上游模型条目。除 ID 外各家给的字段参差不齐,只收敛能普遍拿到的
+// 两项,外加推理档声明(动态适配数据源,见 effort 包)。
 type Entry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name,omitempty"`
+	// Efforts 是上游为该模型声明的推理档(supported_reasoning_levels,
+	// 已按词表归一升序)。nil 表示上游未声明——不等于不支持由本地判定,
+	// 调用方按「无声明即不支持」处置。
+	Efforts []string `json:"efforts,omitempty"`
 }
 
 type Report struct {
@@ -45,15 +52,23 @@ type Accounts interface {
 	Get(ctx context.Context, name string) (account.Account, error)
 }
 
+// HeaderSource 按账号凭据形态构造上游头(resolve.Resolver 实现):
+// oauth 账号的静态头只有空 Bearer,活体 token 与 codex 身份头离不开
+// token 来源。未装配时回落 resolve.AuthHeaders 的静态形态。
+type HeaderSource interface {
+	HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error)
+}
+
 type entry struct {
 	report  Report
 	expires time.Time
 }
 
 type Lister struct {
-	accounts Accounts
-	client   *http.Client
-	ttl      time.Duration
+	accounts     Accounts
+	headerSource HeaderSource
+	client       *http.Client
+	ttl          time.Duration
 
 	mu     sync.RWMutex
 	cached map[string]entry
@@ -66,6 +81,12 @@ func New(accounts Accounts, ttl time.Duration) *Lister {
 		ttl:      ttl,
 		cached:   map[string]entry{},
 	}
+}
+
+// WithHeaderSource 挂上凭据形态感知的头来源;不挂则用静态认证头。
+func (l *Lister) WithHeaderSource(h HeaderSource) *Lister {
+	l.headerSource = h
+	return l
 }
 
 // SetClient 供测试注入桩上游。
@@ -106,13 +127,25 @@ func (l *Lister) fetch(ctx context.Context, spec provider.Spec, acc account.Acco
 		method = http.MethodGet
 	}
 	url := strings.TrimRight(acc.EffectiveBaseURL(spec), "/") + spec.Models.Path
+	if spec.ID == codex.ProviderID {
+		// 订阅清单端点的 client_version 协商是硬条件,缺了恒 400。
+		url = codex.ModelsURL(acc.EffectiveBaseURL(spec))
+	}
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return Report{}, apperr.Wrap(apperr.UpstreamUnavailable, "build models request", err)
 	}
-	for k, v := range resolve.AuthHeaders(spec, acc) {
+	headers := resolve.AuthHeaders(spec, acc)
+	if l.headerSource != nil {
+		if headers, err = l.headerSource.HeadersFor(ctx, spec, acc); err != nil {
+			return Report{}, err
+		}
+	}
+	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	// 清单是 JSON GET:凭据形态头里给 SSE 转发准备的 Accept 在此不适用。
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := l.client.Do(req)
 	if err != nil {
@@ -160,15 +193,57 @@ func parseEntries(body []byte) []Entry {
 		if !ok {
 			continue
 		}
-		id := firstString(obj, "id", "name", "model")
+		id := firstString(obj, "id", "name", "model", "slug")
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		out = append(out, Entry{ID: id, DisplayName: firstString(obj, "display_name", "displayName")})
+		out = append(out, Entry{
+			ID:          id,
+			DisplayName: firstString(obj, "display_name", "displayName"),
+			Efforts:     parseDeclaredEfforts(obj),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// parseDeclaredEfforts 提取条目的 supported_reasoning_levels。两种形态都认:
+// codex 订阅端点是 [{effort, description}] 对象数组,OpenAI 兼容网关是
+// 字符串数组(sub2api 同款双形态解析)。未声明回 nil;名字归一走 effort 包。
+func parseDeclaredEfforts(obj map[string]any) []string {
+	raw, ok := obj["supported_reasoning_levels"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	levels := make([]string, 0, len(raw))
+	for _, item := range raw {
+		switch v := item.(type) {
+		case string:
+			levels = append(levels, v)
+		case map[string]any:
+			if s, ok := v["effort"].(string); ok {
+				levels = append(levels, s)
+			}
+		}
+	}
+	return effort.NormalizeList(levels)
+}
+
+// DeclaredEfforts 返回账号某原生模型在上游声明的推理档(词表内,升序)。
+// 上游不可查、查询失败或该模型未声明都回 nil——无声明即不支持,
+// 这是正常答案而非错误,调用方按此隐藏档位入口。
+func (l *Lister) DeclaredEfforts(ctx context.Context, accountName, nativeModel string) []string {
+	r, err := l.List(ctx, accountName)
+	if err != nil {
+		return nil
+	}
+	for _, e := range r.Models {
+		if e.ID == nativeModel {
+			return e.Efforts
+		}
+	}
+	return nil
 }
 
 func firstString(obj map[string]any, keys ...string) string {

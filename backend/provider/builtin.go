@@ -41,7 +41,8 @@ func init() {
 	// ChatGPT 订阅(Plus/Pro 登录态):走 backend-api 的 codex 端点,只支持
 	// Responses 协议;凭据是 OAuth 刷新型,请求整形(强制 store/stream/
 	// instructions 与额外头)在 resolve/proxyplane 按本 provider 收口。
-	// 该端点无模型列举接口,Models 不声明——查不到比查错了好。
+	// /models 清单端点存在(sub2api 同款硬编码路径),按模型携带
+	// supported_reasoning_levels 声明——推理档动态适配的数据源。
 	register(Spec{
 		ID:          "openai-codex",
 		DisplayName: "OpenAI",
@@ -52,6 +53,7 @@ func init() {
 		Credential:  CredOAuthRefresh,
 		Billing:     BillingSubscription,
 		Region:      RegionGlobal,
+		Models:      &ModelsAPI{Path: "/models", Method: "GET"},
 	})
 	register(Spec{
 		ID:          "kimi",

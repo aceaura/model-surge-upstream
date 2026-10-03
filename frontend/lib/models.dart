@@ -253,11 +253,11 @@ class UpstreamModel {
   final Map<String, dynamic> compact;
   final bool enabled;
 
-  /// 推理档支持列表的管理员覆盖:null=自动(按协议+模型名推导),
+  /// 推理档支持列表的管理员覆盖:null=自动(跟随上游声明),
   /// 数组=显式声明(空数组即不支持)。
   final List<String>? efforts;
 
-  /// 服务端算好的有效支持列表(含自动推导),空列表=不支持。
+  /// 服务端算好的有效支持列表(自动模式=上游声明),空列表=不支持。
   final List<String> effortsEffective;
 
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(

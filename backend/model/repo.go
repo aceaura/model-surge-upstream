@@ -214,28 +214,28 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
-	effective, err := effort.Effective(in.Protocol, native, efforts)
-	if err != nil {
+	// 显式数组的词表合法性在写路径统一校验;有效列表(自动模式跟随上游
+	// 声明)由能访问上游的层(httpapi/resolve)现算,仓储不拼凑。
+	if _, err := effort.Effective(efforts, nil); err != nil {
 		return Model{}, err
 	}
 
 	return Model{
-		ID:               id,
-		Account:          accountName,
-		NativeModel:      native,
-		Protocol:         in.Protocol,
-		ContextWindow:    in.ContextWindow,
-		Defaults:         defaults,
-		Overrides:        overrides,
-		Compact:          compactCfg,
-		Efforts:          efforts,
-		EffortsEffective: effective,
-		Enabled:          in.Enabled,
+		ID:            id,
+		Account:       accountName,
+		NativeModel:   native,
+		Protocol:      in.Protocol,
+		ContextWindow: in.ContextWindow,
+		Defaults:      defaults,
+		Overrides:     overrides,
+		Compact:       compactCfg,
+		Efforts:       efforts,
+		Enabled:       in.Enabled,
 	}, nil
 }
 
-// normalizeEfforts 把空值补成 JSON null（自动推导）；数组形态的词表
-// 合法性在 effort.Effective 里统一校验。
+// normalizeEfforts 把空值补成 JSON null（自动=跟随上游声明）；数组形态的
+// 词表合法性在 effort.Effective 里统一校验。
 func normalizeEfforts(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.RawMessage(`null`), nil
@@ -337,13 +337,6 @@ func scan(s scanner) (Model, error) {
 	if len(m.Efforts) == 0 {
 		m.Efforts = json.RawMessage(`null`)
 	}
-	// 库里 JSON 已落过校验,此处算错只可能是词表演进后不认识的旧档位,
-	// 退回空列表(不露面选择器)比读不出模型更安全。
-	effective, err := effort.Effective(m.Protocol, m.NativeModel, m.Efforts)
-	if err != nil {
-		effective = []string{}
-	}
-	m.EffortsEffective = effective
 	return m, nil
 }
 

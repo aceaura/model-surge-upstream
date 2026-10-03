@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 )
 
@@ -16,7 +18,7 @@ type modelRequest struct {
 	Defaults      json.RawMessage `json:"defaults"`
 	Overrides     json.RawMessage `json:"overrides"`
 	Compact       json.RawMessage `json:"compact"`
-	// Efforts 推理档支持列表:null=自动推导,数组=显式声明;缺省不改现状。
+	// Efforts 推理档支持列表:null=自动(跟随上游声明),数组=显式声明;缺省不改现状。
 	Efforts json.RawMessage `json:"efforts"`
 	Enabled *bool           `json:"enabled"`
 }
@@ -40,11 +42,29 @@ func (r modelRequest) input(id string) model.Input {
 	return in
 }
 
+// decorateEfforts 现算模型的有效档位填进响应:显式数组本地归一(写路径
+// 已校验,存量脏数据退回空列表而不挡读路径);自动模式跟随上游声明,
+// 声明源未装配或查询失败都按无声明(不支持)处置——与 resolve 侧同口径。
+func (h handler) decorateEfforts(ctx context.Context, m *model.Model) {
+	var declared []string
+	if effort.Auto(m.Efforts) && h.UpstreamModels != nil {
+		declared = h.UpstreamModels.DeclaredEfforts(ctx, m.Account, m.NativeModel)
+	}
+	eff, err := effort.Effective(m.Efforts, declared)
+	if err != nil {
+		eff = []string{}
+	}
+	m.EffortsEffective = eff
+}
+
 func (h handler) listModels(w http.ResponseWriter, r *http.Request) {
 	models, err := h.Models.List(r.Context(), r.URL.Query().Get("account"))
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	for i := range models {
+		h.decorateEfforts(r.Context(), &models[i])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
@@ -55,6 +75,7 @@ func (h handler) getModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	h.decorateEfforts(r.Context(), &m)
 	writeJSON(w, http.StatusOK, map[string]any{"model": m})
 }
 
@@ -68,6 +89,7 @@ func (h handler) createModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	h.decorateEfforts(r.Context(), &m)
 	writeJSON(w, http.StatusCreated, map[string]any{"model": m})
 }
 
@@ -81,6 +103,7 @@ func (h handler) updateModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	h.decorateEfforts(r.Context(), &m)
 	writeJSON(w, http.StatusOK, map[string]any{"model": m})
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,10 +200,16 @@ type stubUpstreamModels struct {
 	report upmodels.Report
 	err    error
 	forgot []string
+	// efforts 按「账号/原生模型」预置的声明档位,供 decorateEfforts 测试。
+	efforts map[string][]string
 }
 
 func (s *stubUpstreamModels) List(context.Context, string) (upmodels.Report, error) {
 	return s.report, s.err
+}
+
+func (s *stubUpstreamModels) DeclaredEfforts(_ context.Context, accountName, nativeModel string) []string {
+	return s.efforts[accountName+"/"+nativeModel]
 }
 
 func (s *stubUpstreamModels) Forget(name string) { s.forgot = append(s.forgot, name) }
@@ -621,6 +628,45 @@ func TestListModelsFiltersByAccount(t *testing.T) {
 	}
 	if len(body.Models) != 0 {
 		t.Errorf("filtered list = %v, want empty", body.Models)
+	}
+}
+
+// TestModelEffortsEffectiveDecoration 锁定模型响应的有效档位现算:
+// 自动模式(efforts=null)跟随声明源;显式数组本地归一;显式空数组=不支持。
+func TestModelEffortsEffectiveDecoration(t *testing.T) {
+	f := newFixture(t)
+	f.upstream.efforts = map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "low"}}
+
+	get := func() model.Model {
+		t.Helper()
+		rec := f.do(t, "GET", "/admin/models/kimi-1/k2", adminKey, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get = %d: %s", rec.Code, rec.Body)
+		}
+		var body struct {
+			Model model.Model `json:"model"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Model
+	}
+
+	if got := get().EffortsEffective; !slices.Equal(got, []string{"low", "high"}) {
+		t.Errorf("自动模式 efforts_effective = %v, want [low high](声明源)", got)
+	}
+
+	m := f.models.data["kimi-1/k2"]
+	m.Efforts = json.RawMessage(`["xhigh","medium"]`)
+	f.models.data["kimi-1/k2"] = m
+	if got := get().EffortsEffective; !slices.Equal(got, []string{"medium", "xhigh"}) {
+		t.Errorf("显式数组 efforts_effective = %v, want [medium xhigh](归一升序)", got)
+	}
+
+	m.Efforts = json.RawMessage(`[]`)
+	f.models.data["kimi-1/k2"] = m
+	if got := get().EffortsEffective; len(got) != 0 {
+		t.Errorf("显式空数组 efforts_effective = %v, want 空(不支持)", got)
 	}
 }
 
