@@ -277,7 +277,7 @@ func newFixture(t *testing.T) *fixture {
 		server: NewServer(Deps{
 			Accounts:       accounts,
 			Models:         models,
-			Resolver:       resolve.NewResolver(accounts, models),
+			Resolver:       resolve.NewResolver(accounts, models).WithEffortDeclarations(up),
 			Quota:          q,
 			UpstreamModels: up,
 			Health:         h,
@@ -755,6 +755,33 @@ func TestDeliveryModelsCarryNoCredential(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), secret) {
 		t.Errorf("listing leaked a credential: %s", rec.Body)
+	}
+}
+
+// TestDeliveryModelsCarryEfforts 锁定下发面 /v1/models 带有效推理档:
+// 下游客户端按它渲染/校验档位(与管理面 efforts_effective、Resolve 同口径)。
+func TestDeliveryModelsCarryEfforts(t *testing.T) {
+	f := newFixture(t)
+	f.upstream.efforts = map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "ultra"}}
+	rec := f.do(t, "GET", "/v1/models", deliveryKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Models []struct {
+			ID      string         `json:"id"`
+			Efforts []effort.Entry `json:"efforts"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("bad delivery list: %v", err)
+	}
+	if len(body.Models) != 1 {
+		t.Fatalf("delivery list = %d models, want 1", len(body.Models))
+	}
+	want := []effort.Entry{{Name: "高", Value: "high"}, {Name: "ultra", Value: "ultra"}}
+	if !slices.Equal(body.Models[0].Efforts, want) {
+		t.Errorf("delivery efforts = %v, want %v(声明源,原值声明序)", body.Models[0].Efforts, want)
 	}
 }
 

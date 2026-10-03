@@ -238,6 +238,9 @@ type Listing struct {
 	NativeModel   string `json:"native_model"`
 	ContextWindow int    `json:"context_window,omitempty"`
 	Enabled       bool   `json:"enabled"`
+	// Efforts 是模型的有效推理档列表(与 Resolve 同口径现算),下游客户端
+	// 按它渲染/校验档位;空列表表示该模型不支持 effort。
+	Efforts []effort.Entry `json:"efforts"`
 }
 
 // List 列举模型并附上其账号的 provider。账号停用时模型一并标记为不可用。
@@ -268,6 +271,7 @@ func (r *Resolver) List(ctx context.Context) ([]Listing, error) {
 			NativeModel:   m.NativeModel,
 			ContextWindow: m.ContextWindow,
 			Enabled:       m.Enabled && enabledByAccount[m.Account],
+			Efforts:       r.effectiveEfforts(ctx, m.Account, m),
 		})
 	}
 	return out, nil

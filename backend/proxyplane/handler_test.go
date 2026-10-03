@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
 
@@ -246,15 +247,19 @@ func TestListModelsNativeShapes(t *testing.T) {
 	h, _, cleanup := newTestHandler(t, "")
 	defer cleanup()
 	h.resolver = fakeResolver{listing: []resolve.Listing{
-		{ID: "my-claude", ProviderID: "kimi", Protocol: "anthropic", Enabled: true},
-		{ID: "my-gpt", ProviderID: "openai", Protocol: "chat_completions", Enabled: true},
-		{ID: "my-o3", ProviderID: "openai", Protocol: "responses", Enabled: true},
+		{ID: "my-claude", ProviderID: "kimi", Protocol: "anthropic", Enabled: true,
+			Efforts: []effort.Entry{{Name: "低", Value: "low"}, {Name: "ultra", Value: "ultra"}}},
+		{ID: "my-gpt", ProviderID: "openai", Protocol: "chat_completions", Enabled: true,
+			Efforts: []effort.Entry{{Name: "高", Value: "high"}}},
+		{ID: "my-o3", ProviderID: "openai", Protocol: "responses", Enabled: true,
+			Efforts: []effort.Entry{}},
 		{ID: "disabled-one", ProviderID: "kimi", Protocol: "anthropic", Enabled: false},
-		{ID: "my-gemini", ProviderID: "gemini", Protocol: "gemini", Enabled: true},
+		{ID: "my-gemini", ProviderID: "gemini", Protocol: "gemini", Enabled: true,
+			Efforts: []effort.Entry{{Name: "中", Value: "medium"}}},
 	}}
 
 	// 三族共用 /v1/models:Bearer 放钥按 openai 形态列
-	// (chat_completions + responses 都列,禁用的不列)。
+	// (chat_completions + responses 都列,禁用的不列),并带有效推理档。
 	rec := doRequest(t, h, http.MethodGet, "/v1/models",
 		map[string]string{"Authorization": "Bearer " + testKey}, "")
 	if rec.Code != http.StatusOK {
@@ -263,7 +268,8 @@ func TestListModelsNativeShapes(t *testing.T) {
 	var oai struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID string `json:"id"`
+			ID      string         `json:"id"`
+			Efforts []effort.Entry `json:"efforts"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &oai); err != nil {
@@ -272,6 +278,12 @@ func TestListModelsNativeShapes(t *testing.T) {
 	if oai.Object != "list" || len(oai.Data) != 2 {
 		t.Fatalf("openai list = %+v", oai)
 	}
+	if len(oai.Data[0].Efforts) != 1 || oai.Data[0].Efforts[0] != (effort.Entry{Name: "高", Value: "high"}) {
+		t.Fatalf("openai my-gpt efforts = %+v", oai.Data[0].Efforts)
+	}
+	if oai.Data[1].Efforts == nil || len(oai.Data[1].Efforts) != 0 {
+		t.Fatalf("openai my-o3 efforts = %+v, want []", oai.Data[1].Efforts)
+	}
 
 	// 同一路径带 x-api-key(Anthropic SDK 原生放钥位置)则按 anthropic
 	// 形态列,只含 anthropic 协议的启用模型。
@@ -279,8 +291,9 @@ func TestListModelsNativeShapes(t *testing.T) {
 		map[string]string{"x-api-key": testKey}, "")
 	var ant struct {
 		Data []struct {
-			ID   string `json:"id"`
-			Type string `json:"type"`
+			ID      string         `json:"id"`
+			Type    string         `json:"type"`
+			Efforts []effort.Entry `json:"efforts"`
 		} `json:"data"`
 		HasMore bool `json:"has_more"`
 	}
@@ -290,12 +303,17 @@ func TestListModelsNativeShapes(t *testing.T) {
 	if len(ant.Data) != 1 || ant.Data[0].ID != "my-claude" || ant.Data[0].Type != "model" || ant.HasMore {
 		t.Fatalf("anthropic list = %+v", ant)
 	}
+	wantAnt := []effort.Entry{{Name: "低", Value: "low"}, {Name: "ultra", Value: "ultra"}}
+	if len(ant.Data[0].Efforts) != 2 || ant.Data[0].Efforts[0] != wantAnt[0] || ant.Data[0].Efforts[1] != wantAnt[1] {
+		t.Fatalf("anthropic my-claude efforts = %+v, want %v", ant.Data[0].Efforts, wantAnt)
+	}
 
 	// gemini 族：name 带 models/ 前缀。
 	rec = doRequest(t, h, http.MethodGet, "/v1beta/models?key="+testKey, nil, "")
 	var gem struct {
 		Models []struct {
-			Name string `json:"name"`
+			Name    string         `json:"name"`
+			Efforts []effort.Entry `json:"efforts"`
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &gem); err != nil {
@@ -303,6 +321,9 @@ func TestListModelsNativeShapes(t *testing.T) {
 	}
 	if len(gem.Models) != 1 || gem.Models[0].Name != "models/my-gemini" {
 		t.Fatalf("gemini list = %+v", gem)
+	}
+	if len(gem.Models[0].Efforts) != 1 || gem.Models[0].Efforts[0] != (effort.Entry{Name: "中", Value: "medium"}) {
+		t.Fatalf("gemini my-gemini efforts = %+v", gem.Models[0].Efforts)
 	}
 }
 

@@ -497,6 +497,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 			data = append(data, map[string]any{
 				"id": m.ID, "type": "model", "display_name": m.ID,
 				"created_at": time.Now().UTC().Format(time.RFC3339),
+				"efforts": m.Efforts,
 			})
 		}
 		body := map[string]any{"data": data, "has_more": false}
@@ -513,6 +514,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 			}
 			models = append(models, map[string]any{
 				"name": "models/" + m.ID, "displayName": m.ID,
+				"efforts": m.Efforts,
 			})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
@@ -524,6 +526,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 			}
 			data = append(data, map[string]any{
 				"id": m.ID, "object": "model", "created": 0, "owned_by": m.ProviderID,
+				"efforts": m.Efforts,
 			})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})

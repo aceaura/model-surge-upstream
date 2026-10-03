@@ -318,8 +318,10 @@ func TestStringRedactsBearer(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	accounts, models, r := fixture()
+	accounts, models, _ := fixture()
 	models["kimi-1/k3"] = mdl("kimi-1/k3", "kimi-1", provider.ProtocolChatCompletions)
+	decls := &fakeDecls{data: map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "ultra"}}}
+	r := NewResolver(accounts, models).WithEffortDeclarations(decls)
 
 	got, err := r.List(context.Background())
 	if err != nil {
@@ -328,6 +330,7 @@ func TestList(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("listing = %d entries, want 2", len(got))
 	}
+	want := []effort.Entry{{Name: "高", Value: "high"}, {Name: "ultra", Value: "ultra"}}
 	for _, l := range got {
 		if l.ProviderID != "kimi" {
 			t.Errorf("provider_id = %q", l.ProviderID)
@@ -335,12 +338,15 @@ func TestList(t *testing.T) {
 		if !l.Enabled {
 			t.Errorf("%s should be enabled", l.ID)
 		}
+		if !slices.Equal(l.Efforts, want) {
+			t.Errorf("%s efforts = %v, want %v", l.ID, l.Efforts, want)
+		}
 	}
 
 	acc := accounts["kimi-1"]
 	acc.Enabled = false
 	accounts["kimi-1"] = acc
-	got, err = NewResolver(accounts, models).List(context.Background())
+	got, err = NewResolver(accounts, models).WithEffortDeclarations(decls).List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
