@@ -190,12 +190,18 @@ class _AccountFormState extends State<AccountForm> {
           ? '${_initialScript!.autoIntervalMinutes}'
           : '');
   late final TextEditingController _scriptStopInterval = TextEditingController(
-      text: (_initialScript?.stopIntervalMinutes ?? 0) > 0
-          ? '${_initialScript!.stopIntervalMinutes}'
-          : '');
+      text: _initialStopInterval());
   bool _testingScript = false;
   String? _scriptTestResult;
   bool? _scriptTestOk;
+
+  /// 停止查询间隔初值:已有配置(编辑/拷贝)按存储值回显,0=留空走后端
+  /// 默认;全新表单一上来就填 5(与后端默认一致,让用户看见默认值)。
+  String _initialStopInterval() {
+    final v = _initialScript?.stopIntervalMinutes ?? 0;
+    if (v > 0) return '$v';
+    return (widget.editing == null && widget.copyFrom == null) ? '5' : '';
+  }
 
   bool _revealKey = false;
   bool _busy = false;
@@ -864,7 +870,7 @@ class _AccountFormState extends State<AccountForm> {
                   controller: _scriptStopInterval,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
-                    labelText: '停止查询间隔(分钟)',
+                    labelText: '不活跃停止查询间隔(分钟)',
                     hintText: '默认5分钟',
                     border: OutlineInputBorder(),
                   ),

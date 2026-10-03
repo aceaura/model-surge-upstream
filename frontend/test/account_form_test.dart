@@ -456,6 +456,22 @@ void main() {
         reason: '停止查询间隔随脚本配置全量提交,0 走后端默认 5 分钟');
   });
 
+  testWidgets('stop interval: create defaults to 5, edit without script blank',
+      (tester) async {
+    await pumpForm(tester);
+    await expandScriptSection(tester);
+    expect(find.text('不活跃停止查询间隔(分钟)'), findsOneWidget);
+    expect(fieldText(tester, 'quota-script-stop-interval'), '5',
+        reason: '新建配置默认 5,与后端默认一致,让用户看见默认值');
+  });
+
+  testWidgets('stop interval: edit without script stays blank', (tester) async {
+    await pumpForm(tester, editing: account);
+    await expandScriptSection(tester);
+    expect(fieldText(tester, 'quota-script-stop-interval'), isEmpty,
+        reason: '已存配置为 0 时留空,保留"走后端默认"语义');
+  });
+
   testWidgets('create without touching script section omits the key',
       (tester) async {
     final captured = <String>[];
