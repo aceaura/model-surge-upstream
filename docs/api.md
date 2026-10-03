@@ -150,7 +150,8 @@ Authorization: Bearer <密钥>
 
 | 值 | 含义 |
 |---|---|
-| `api_key` | 静态 API 密钥（本期唯一；kind 字段为将来刷新型凭据预留判别式） |
+| `api_key` | 静态 API 密钥 |
+| `oauth_refresh` | OAuth 刷新型登录态（如 ChatGPT 订阅）：`refresh_token` + `account_id` 由用户粘贴（codex CLI auth.json 的 `tokens.refresh_token`/`tokens.account_id`），服务端自动续期 `access_token` 并落库；`access_token`/`expiry` 是续期产物，不要求初始填写 |
 
 **`MeterKind`（计量项形态）**
 
@@ -195,7 +196,7 @@ Authorization: Bearer <密钥>
 | `base_url` | string | 恒有 | 默认根地址；账号未覆盖 `base_url` 时使用 |
 | `protocols` | array of string | 恒有 | 支持的协议，取值见 2.8 `protocol`；创建模型时 `protocol` 只能取账号 provider 的此集合 |
 | `auth` | 枚举 | 恒有 | 认证头形态，见 2.8 `auth` |
-| `credential` | 枚举 | 恒有 | 凭据形态，本期恒为 `api_key` |
+| `credential` | 枚举 | 恒有 | 凭据形态，见 2.8 `credential.kind`；`openai-codex` 为 `oauth_refresh`，其余为 `api_key` |
 | `quota` | object | 该 provider 声明了额度端点时 | 额度接口声明，子字段见下 |
 | `quota.path` | string | 同上 | 额度端点路径，拼接在生效 `base_url` 之后 |
 | `quota.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
@@ -206,12 +207,13 @@ Authorization: Bearer <密钥>
 | `models.path` | string | 同上 | 列举端点路径 |
 | `models.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
 
-当前注册序（固定顺序，共 6 家）：
+当前注册序（固定顺序，共 7 家）：
 
 | id | base_url | protocols | auth | quota | models |
 |---|---|---|---|---|---|
 | `anthropic` | `https://api.anthropic.com` | `anthropic` | `anthropic_key` | — | `/v1/models` |
 | `openai` | `https://api.openai.com` | `chat_completions`, `responses` | `bearer` | — | `/v1/models` |
+| `openai-codex` | `https://chatgpt.com/backend-api/codex` | `responses` | `bearer` | — | — |
 | `gemini` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
 | `kimi` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
 | `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
@@ -221,6 +223,8 @@ Authorization: Bearer <密钥>
 
 > `ark` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
+> `openai-codex` 是 ChatGPT 订阅（Plus/Pro 登录态，`credential` 为 `oauth_refresh`）：只走 `responses` 协议，转发面对该 provider 强制请求整形——`store=false`/`stream=true`、剥离 `max_output_tokens`/`temperature`/`top_p` 等上游不接受的采样参数、`instructions` 空缺时注入 codex 官方 prompt、路径 `/v1/responses`→`/responses`、`session_id` 由服务端按账号+`prompt_cache_key` 派生（客户端自带会话头作废）。上游 401 时作废旧 access_token、续期后原样重放一次。
+
 ### 3.2 Account View（账号读取形态）
 
 管理面一切读取路径返回该形态，**凭据一律脱敏**：
@@ -229,8 +233,11 @@ Authorization: Bearer <密钥>
 |---|---|---|---|
 | `name` | string | 恒有 | 账号唯一标识 |
 | `provider_id` | string | 恒有 | 所属提供商 id，见 3.1 |
-| `credential.kind` | 枚举 | 恒有 | `api_key` |
-| `credential.api_key` | string | 恒有 | **脱敏值**，规则：空串回空串；长度 ≤ 8 全掩为 `***`；否则前 4 位 + `***` + 后 4 位 |
+| `credential.kind` | 枚举 | 恒有 | `api_key` 或 `oauth_refresh` |
+| `credential.api_key` | string | `api_key` 形态 | **脱敏值**，规则：空串回空串；长度 ≤ 8 全掩为 `***`；否则前 4 位 + `***` + 后 4 位 |
+| `credential.refresh_token` | string | `oauth_refresh` 形态 | **脱敏值**，同 `api_key` 规则；完整 token 从不下发 |
+| `credential.account_id` | string | `oauth_refresh` 形态 | 账号标识（auth.json 的 `tokens.account_id`），明文——它是标识不是秘密 |
+| `needs_reauth` | bool | 恒有 | `oauth_refresh` 账号的登录态是否终态失效（refresh_token 被吊销/复用）；`true` 时需重新粘贴凭据，更新账号即清除该标记 |
 | `base_url` | string | 恒有 | 端点覆盖；空串表示沿用 provider 默认 |
 | `headers` | map[string]string | 恒有 | 附加到上游请求的自定义头（原值，不脱敏）；空对象表示无 |
 | `enabled` | bool | 恒有 | `false` 时其下所有模型在 resolve 中返回 `409 account_disabled` |
@@ -478,7 +485,7 @@ POST /admin/accounts
 | `name` | string | 是 | 首尾空白剥除后非空；全局唯一，重名 `409 already_exists`；**不应含 `/`**（见下注） | 账号唯一标识 |
 | `provider_id` | string | 是 | 须精确等于 3.1 表中某个 `id`（**不做空白剥除、大小写敏感**），未知返回 `400 invalid_provider` | 所属提供商 |
 | `api_key` | string | 与 `credential` 二选一 | 非空 | 凭据简写，等价于 `credential: {"kind":"api_key","api_key":…}` |
-| `credential` | object | 与 `api_key` 二选一 | 须为 `{"kind":"api_key","api_key":"…"}`；`kind` 须与 provider 声明的 `credential` 一致 | 完整凭据结构；**与 `api_key` 同时给出时以本字段为准** |
+| `credential` | object | 与 `api_key` 二选一 | `kind` 须与 provider 声明的 `credential` 一致：`api_key` 须带 `api_key`；`oauth_refresh` 须带 `refresh_token` 与 `account_id` | 完整凭据结构；**与 `api_key` 同时给出时以本字段为准** |
 | `base_url` | string | 否 | 缺省或空串 = 沿用 provider 默认；非空时首尾空白剥除、尾部 `/` 剥除后须以 `http://` 或 `https://` 开头 | 上游根地址覆盖 |
 | `headers` | map[string]string | 否 | 缺省落库为 `{}`；键值不做内容校验 | 附加到上游请求的自定义头 |
 | `enabled` | bool | 否 | 缺省 `true` | 账号开关 |
@@ -499,7 +506,7 @@ POST /admin/accounts
 }
 ```
 
-`api_key` 字段是 `credential.api_key` 的等价简写，两者给出其一即可。
+`api_key` 字段是 `credential.api_key` 的等价简写，两者给出其一即可（`oauth_refresh` 形态没有简写，必须给 `credential` 对象）。
 
 > **`name` 含 `/` 的后果**：创建本身不会被拒绝，但单段路由 `{name}` 无法匹配含 `/` 的名字——该账号创建后**无法再被 GET/PUT/DELETE 寻址**，只能整体重建数据清理。请避免。
 
