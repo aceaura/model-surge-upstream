@@ -333,37 +333,23 @@ class _AccountFormState extends State<AccountForm> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // 账号名/厂商/计费模式/服务区域四个配置一行一个,账号名居首;
-          // 编辑态账号名是资源键不可改,只读展示(不套禁用框);
+          // 编辑态账号名是资源键不可改,灰框禁用展示;
           // 计费模式/服务区域是级联下两级,从上至下依次解锁
-          if (_isEdit)
-            LabeledField(
-              label: '账号名',
-              child: SizedBox(
-                // 与下拉触发器同高,行间节奏一致
-                height: 48,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(widget.editing!.name,
-                      key: const ValueKey('account-name-readonly'),
-                      style: const TextStyle(fontSize: 13)),
-                ),
+          LabeledField(
+            label: '账号名',
+            child: TextFormField(
+              key: const ValueKey('account-name'),
+              controller: _name,
+              enabled: !_isEdit,
+              decoration: const InputDecoration(
+                hintText: 'kimi-1',
+                border: OutlineInputBorder(),
               ),
-            )
-          else
-            LabeledField(
-              label: '账号名',
-              child: TextFormField(
-                key: const ValueKey('account-name'),
-                controller: _name,
-                decoration: const InputDecoration(
-                  hintText: 'kimi-1',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? '账号名不能为空'
-                    : null,
-              ),
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? '账号名不能为空'
+                  : null,
             ),
+          ),
           const SizedBox(height: 20),
           LabeledField(label: '厂商', child: _vendorDropdown()),
           const SizedBox(height: 20),
