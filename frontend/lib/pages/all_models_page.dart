@@ -314,12 +314,18 @@ class _AllModelsPageState extends State<AllModelsPage> {
 
   Widget _modelCard(UpstreamModel m, List<Account> accounts,
       List<ProviderSpec> providers, AppTokens t) {
+    // 头像继承账号所属提供商的官方 Logo;账号找不到时回落模型名首字母。
+    final providerId = accounts
+            .where((a) => a.name == m.account)
+            .firstOrNull
+            ?.providerId ??
+        _shortName(m.id);
     return HoverCard(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            ProviderAvatar(providerId: _shortName(m.id)),
+            ProviderAvatar(providerId: providerId),
             const SizedBox(width: 13),
             Expanded(
               child: Column(
