@@ -55,6 +55,10 @@ func Headers(accessToken, accountID string) map[string]string {
 //   - 剥掉上游不认的采样参数;
 //   - input 字符串规范化为单条 user 消息列表(Responses 规范允许字符串,
 //     订阅端点只收列表,裸字符串恒 400 "Input must be a list");
+//   - input 里的 system 消息:订阅端点拒收 role=system(恒 400
+//     "System messages are not allowed"),把文本镜像进 instructions
+//     并将该条改写为 developer(sub2api extractSystemMessagesFromInput
+//     同款,Qoder 等 BYOK 客户端常把系统提示放在 input 里);
 //   - 带 reasoning 时补 include: reasoning.encrypted_content(否则推理
 //     内容不回传,多轮上下文断链);
 //   - instructions 空缺时注入 codex 官方 prompt(上游要求非空)。
@@ -73,6 +77,7 @@ func ShapeBody(body map[string]any, nativeModel string) map[string]any {
 			},
 		}}
 	}
+	hoistSystemMessages(body)
 	if _, ok := body["reasoning"]; ok {
 		body["include"] = appendStringSet(body["include"], "reasoning.encrypted_content")
 	}
@@ -80,6 +85,60 @@ func ShapeBody(body map[string]any, nativeModel string) map[string]any {
 		body["instructions"] = InstructionsForModel(nativeModel)
 	}
 	return body
+}
+
+// hoistSystemMessages 把 input 里 role=system 的条目改写为 developer,
+// 文本按序拼接后前置进 instructions(已有非空 instructions 时垫底)。
+func hoistSystemMessages(body map[string]any) {
+	input, ok := body["input"].([]any)
+	if !ok {
+		return
+	}
+	var texts []string
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok || m["role"] != "system" {
+			continue
+		}
+		if t := contentText(m["content"]); t != "" {
+			texts = append(texts, t)
+		}
+		m["role"] = "developer"
+	}
+	if len(texts) == 0 {
+		return
+	}
+	joined := strings.Join(texts, "\n\n")
+	if existing, _ := body["instructions"].(string); strings.TrimSpace(existing) != "" {
+		body["instructions"] = joined + "\n\n" + existing
+	} else {
+		body["instructions"] = joined
+	}
+}
+
+// contentText 提取消息内容文本:字符串直取,分段列表拼接 text/
+// input_text/output_text 段的 text,其余形态返回空。
+func contentText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var b strings.Builder
+		for _, part := range v {
+			m, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch m["type"] {
+			case "text", "input_text", "output_text":
+				if t, ok := m["text"].(string); ok {
+					b.WriteString(t)
+				}
+			}
+		}
+		return b.String()
+	}
+	return ""
 }
 
 func appendStringSet(v any, s string) []any {

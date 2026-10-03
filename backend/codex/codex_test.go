@@ -70,6 +70,58 @@ func TestShapeBodyKeepsClientInstructions(t *testing.T) {
 	}
 }
 
+// Qoder 等 BYOK 客户端把系统提示放 input(role=system),订阅端点恒 400
+// "System messages are not allowed":文本须镜像进 instructions,条目改写
+// 为 developer。
+func TestShapeBodyHoistsSystemMessages(t *testing.T) {
+	// 字符串 content:改写 developer + 进 instructions(官方 prompt 不再注入)。
+	out := ShapeBody(map[string]any{
+		"input": []any{
+			map[string]any{"type": "message", "role": "system", "content": "你是助手"},
+			map[string]any{"type": "message", "role": "user", "content": "hi"},
+		},
+	}, "gpt-5-codex")
+	items, _ := out["input"].([]any)
+	sys, _ := items[0].(map[string]any)
+	if sys["role"] != "developer" {
+		t.Errorf("system item role = %v, want developer", sys["role"])
+	}
+	if out["instructions"] != "你是助手" {
+		t.Errorf("instructions = %v, want hoisted system text", out["instructions"])
+	}
+	user, _ := items[1].(map[string]any)
+	if user["role"] != "user" {
+		t.Errorf("user item rewritten: %v", user)
+	}
+
+	// 分段 content + 已有 instructions:文本拼接后前置,已有内容垫底。
+	out = ShapeBody(map[string]any{
+		"instructions": "be terse",
+		"input": []any{
+			map[string]any{"type": "message", "role": "system", "content": []any{
+				map[string]any{"type": "input_text", "text": "甲"},
+				map[string]any{"type": "input_text", "text": "乙"},
+			}},
+		},
+	}, "gpt-5-codex")
+	if out["instructions"] != "甲乙\n\nbe terse" {
+		t.Errorf("instructions = %v, want hoisted text prepended", out["instructions"])
+	}
+
+	// 无 system 消息:instructions 仍为官方注入,条目不动。
+	out = ShapeBody(map[string]any{
+		"input": []any{map[string]any{"type": "message", "role": "user", "content": "hi"}},
+	}, "gpt-5-codex")
+	items, _ = out["input"].([]any)
+	msg, _ := items[0].(map[string]any)
+	if msg["role"] != "user" {
+		t.Errorf("non-system item rewritten: %v", msg)
+	}
+	if out["instructions"] == "" || out["instructions"] == "hi" {
+		t.Errorf("official instructions missing: %v", out["instructions"])
+	}
+}
+
 func TestShapeBodyReasoningInclude(t *testing.T) {
 	out := ShapeBody(map[string]any{"reasoning": map[string]any{"effort": "high"}}, "gpt-5-codex")
 	inc, _ := out["include"].([]any)
