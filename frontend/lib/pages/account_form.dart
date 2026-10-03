@@ -369,7 +369,6 @@ class _AccountFormState extends State<AccountForm> {
               controller: _name,
               enabled: !_isEdit,
               decoration: const InputDecoration(
-                hintText: 'kimi-1',
                 border: OutlineInputBorder(),
               ),
               validator: (v) => (v == null || v.trim().isEmpty)
