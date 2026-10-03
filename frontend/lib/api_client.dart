@@ -372,11 +372,13 @@ class ApiClient {
 
   /// 发送一轮对话：用户消息落库 → 服务端带上游补全 → 返回整段消息。
   /// images 为内嵌图片附件（base64，纯图消息 content 可为空）。
+  /// effort 为推理档（空=默认，仅 responses/chat_completions 协议生效）。
   /// 超时放宽到 200s：长回复模型的整轮补全远超默认 15s。
   Future<List<ChatMessage>> sendChatMessage(
     String id, {
     required String modelId,
     required String content,
+    String effort = '',
     List<ChatAttachment> images = const [],
   }) async {
     final body = await _send(
@@ -385,6 +387,7 @@ class ApiClient {
       body: {
         'model_id': modelId,
         'content': content,
+        if (effort.isNotEmpty) 'effort': effort,
         if (images.isNotEmpty) 'images': images.map((e) => e.toJson()).toList(),
       },
       timeout: const Duration(seconds: 200),

@@ -574,4 +574,111 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('codex-1/gpt-6.1-sol'), findsOneWidget);
   });
+
+  testWidgets('推理档选择器仅对支持协议的模型可见,选择后随发送上行', (tester) async {
+    // anthropic 模型没有通用 effort 语义:选择器不露面;切到 codex(responses)
+    // 出现,选「高」后 POST body 带 effort=high。
+    final sent = <Map<String, dynamic>>[];
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final p = request.url.path;
+        Object? payload;
+        if (request.method == 'GET' && p == '/admin/chat/sessions') {
+          payload = {
+            'sessions': [
+              {
+                'id': 's1',
+                'title': '旧对话',
+                'model_id': 'kimi-1/k2',
+                'updated_at': '2026-09-16T10:00:00Z',
+              },
+            ],
+          };
+        } else if (request.method == 'GET' && p == '/admin/models') {
+          payload = {
+            'models': [
+              ..._Stub.models,
+              {
+                'id': 'codex-1/gpt-6.1-sol',
+                'account': 'codex-1',
+                'native_model': 'gpt-6.1-sol',
+                'protocol': 'responses',
+                'context_window': 0,
+                'defaults': <String, dynamic>{},
+                'overrides': <String, dynamic>{},
+                'enabled': true,
+              },
+            ],
+          };
+        } else if (request.method == 'GET' &&
+            p == '/admin/chat/sessions/s1/messages') {
+          payload = {
+            'session': {
+              'id': 's1',
+              'title': '旧对话',
+              'model_id': 'kimi-1/k2',
+              'updated_at': '2026-09-16T10:00:00Z',
+            },
+            'messages': <dynamic>[],
+          };
+        } else if (request.method == 'POST' &&
+            p == '/admin/chat/sessions/s1/messages') {
+          sent.add(jsonDecode(utf8.decode(request.bodyBytes)));
+          payload = {
+            'messages': [
+              {
+                'id': 1,
+                'session_id': 's1',
+                'role': 'user',
+                'content': 'hi',
+                'created_at': '2026-10-03T18:00:00Z',
+              },
+              {
+                'id': 2,
+                'session_id': 's1',
+                'role': 'assistant',
+                'content': 'ok',
+                'created_at': '2026-10-03T18:00:05Z',
+              },
+            ],
+          };
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: ChatPage(client: client, imageSource: _FakeImageSource()),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // 会话回显 kimi-1/k2(anthropic):推理档选择器不出现。
+    expect(find.text('默认'), findsNothing);
+
+    // 模型切到 codex-1/gpt-6.1-sol(responses):选择器出现。
+    await tester.tap(find.text('kimi-1/k2'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('codex-1/gpt-6.1-sol'));
+    await tester.pumpAndSettle();
+    expect(find.text('默认'), findsOneWidget);
+
+    // 选「高」并发送。
+    await tester.tap(find.text('默认'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('高'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'hi');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pumpAndSettle();
+
+    expect(sent.single['model_id'], 'codex-1/gpt-6.1-sol');
+    expect(sent.single['effort'], 'high');
+  });
 }

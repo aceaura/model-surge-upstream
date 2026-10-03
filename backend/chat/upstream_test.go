@@ -340,7 +340,7 @@ func TestCompleteCodexShapingAndSSE(t *testing.T) {
 	target := codexTarget(srv.URL)
 	target.Overrides = json.RawMessage(`{"temperature":0.9,"store":true}`)
 	history := []Message{{Role: RoleUser, Content: "hi"}}
-	reply, u, status, err := Complete(context.Background(), target, "sess-1", history)
+	reply, u, status, err := Complete(context.Background(), target, "sess-1", "", history)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestCompleteCodexSSEWithPlainContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	reply, u, _, err := Complete(context.Background(), codexTarget(srv.URL), "s",
+	reply, u, _, err := Complete(context.Background(), codexTarget(srv.URL), "s", "",
 		[]Message{{Role: RoleUser, Content: "hi"}})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -406,7 +406,7 @@ func TestCompleteCodexSSEDeltaFallback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	reply, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s",
+	reply, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s", "",
 		[]Message{{Role: RoleUser, Content: "hi"}})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -424,7 +424,7 @@ func TestCompleteCodexSSEEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s",
+	_, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s", "",
 		[]Message{{Role: RoleUser, Content: "hi"}})
 	if err == nil {
 		t.Fatal("empty stream must be an error")
@@ -450,7 +450,7 @@ func TestCompleteNonCodexUnchanged(t *testing.T) {
 		BaseURL:     srv.URL,
 		NativeModel: "b",
 	}
-	reply, u, _, err := Complete(context.Background(), target, "s",
+	reply, u, _, err := Complete(context.Background(), target, "s", "",
 		[]Message{{Role: RoleUser, Content: "ping"}})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -480,4 +480,104 @@ func TestCodexSessionIDStablePerSession(t *testing.T) {
 	if !strings.Contains(a, "-") {
 		t.Errorf("id %q should look like a UUID", a)
 	}
+}
+
+// effort 注入:responses 进 reasoning.effort(不覆盖已有 reasoning 键),
+// chat_completions 用顶层 reasoning_effort,anthropic 忽略;
+// codex 走 ShapeBody 后 reasoning 保留且补 include。
+func TestCompleteEffortInjection(t *testing.T) {
+	hist := []Message{{Role: RoleUser, Content: "hi"}}
+	capture := func(t *testing.T, payload string) (*httptest.Server, *map[string]any) {
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, payload)
+		}))
+		t.Cleanup(srv.Close)
+		return srv, &got
+	}
+
+	t.Run("responses", func(t *testing.T) {
+		srv, got := capture(t, `{"output_text":"ok"}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolResponses,
+			BaseURL: srv.URL, NativeModel: "b",
+			// overrides 里已有的 reasoning 键不能被 effort 覆盖丢失。
+			Overrides: json.RawMessage(`{"reasoning":{"summary":"auto"}}`),
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		reasoning, _ := (*got)["reasoning"].(map[string]any)
+		if reasoning["effort"] != "high" {
+			t.Errorf("reasoning.effort = %v, want high", reasoning["effort"])
+		}
+		if reasoning["summary"] != "auto" {
+			t.Errorf("reasoning.summary = %v, want preserved auto", reasoning["summary"])
+		}
+	})
+
+	t.Run("chat_completions", func(t *testing.T) {
+		srv, got := capture(t, `{"choices":[{"message":{"content":"ok"}}]}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolChatCompletions,
+			BaseURL: srv.URL, NativeModel: "b",
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "low", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if (*got)["reasoning_effort"] != "low" {
+			t.Errorf("reasoning_effort = %v, want low", (*got)["reasoning_effort"])
+		}
+	})
+
+	t.Run("anthropic_ignored", func(t *testing.T) {
+		srv, got := capture(t, `{"content":[{"type":"text","text":"ok"}]}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolAnthropic,
+			BaseURL: srv.URL, NativeModel: "b",
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if _, ok := (*got)["reasoning"]; ok {
+			t.Error("anthropic must not get a reasoning key")
+		}
+	})
+
+	t.Run("codex_keeps_reasoning_and_include", func(t *testing.T) {
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"ok\"}}\n\n")
+		}))
+		defer srv.Close()
+		if _, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s", "medium", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		reasoning, _ := got["reasoning"].(map[string]any)
+		if reasoning["effort"] != "medium" {
+			t.Errorf("reasoning.effort = %v, want medium after ShapeBody", reasoning["effort"])
+		}
+		inc, _ := got["include"].([]any)
+		if len(inc) != 1 || inc[0] != "reasoning.encrypted_content" {
+			t.Errorf("include = %v, want reasoning.encrypted_content", got["include"])
+		}
+	})
+
+	t.Run("empty_effort_untouched", func(t *testing.T) {
+		srv, got := capture(t, `{"output_text":"ok"}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolResponses,
+			BaseURL: srv.URL, NativeModel: "b",
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if _, ok := (*got)["reasoning"]; ok {
+			t.Error("empty effort must not inject reasoning")
+		}
+	})
 }

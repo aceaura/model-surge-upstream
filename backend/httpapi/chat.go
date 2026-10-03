@@ -72,6 +72,7 @@ func (h handler) sendChatMessage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ModelID string                 `json:"model_id"`
 		Content string                 `json:"content"`
+		Effort  string                 `json:"effort"`
 		Images  []chat.ImageAttachment `json:"images"`
 	}
 	if ok := decodeBody(w, r, &in); !ok {
@@ -81,7 +82,7 @@ func (h handler) sendChatMessage(w http.ResponseWriter, r *http.Request) {
 		writeCode(w, apperr.InvalidRequest, "model_id is required")
 		return
 	}
-	msgs, err := h.Chat.Send(r.Context(), r.PathValue("id"), in.ModelID, in.Content, in.Images)
+	msgs, err := h.Chat.Send(r.Context(), r.PathValue("id"), in.ModelID, in.Content, in.Effort, in.Images)
 	if err != nil {
 		writeError(w, err)
 		return

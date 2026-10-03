@@ -343,12 +343,25 @@ func (s *Service) ClearMessages(ctx context.Context, id string) error {
 	return s.repo.ClearMessages(ctx, id)
 }
 
+// efforts 是对话页可选的推理档白名单（空=默认不下发）。
+var efforts = map[string]bool{
+	"minimal": true,
+	"low":     true,
+	"medium":  true,
+	"high":    true,
+}
+
 // Send 追加用户消息 → 带整段历史上游补全 → 追加助手回复。
-// images 为用户消息内嵌的图片（可为空）。上游失败时用户消息已落库
+// images 为用户消息内嵌的图片（可为空）；effort 为推理档（空=默认，
+// 仅 responses/chat_completions 协议生效）。上游失败时用户消息已落库
 // （对话页可见自己发出去的话），错误原样返回。
-func (s *Service) Send(ctx context.Context, sessionID, modelID, content string, images []ImageAttachment) ([]Message, error) {
+func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effort string, images []ImageAttachment) ([]Message, error) {
 	if err := validateImages(content, images); err != nil {
 		return nil, err
+	}
+	if effort != "" && !efforts[effort] {
+		return nil, apperr.New(apperr.InvalidRequest,
+			fmt.Sprintf("unknown reasoning effort %q", effort))
 	}
 	if _, err := s.repo.GetSession(ctx, sessionID); err != nil {
 		return nil, err
@@ -368,7 +381,7 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content string, 
 	history = append(history, user)
 
 	start := time.Now()
-	reply, u, status, err := Complete(ctx, target, sessionID, history)
+	reply, u, status, err := Complete(ctx, target, sessionID, effort, history)
 	elapsed := time.Since(start)
 	if s.record != nil {
 		errMsg := ""

@@ -73,7 +73,7 @@ type Chat interface {
 	DeleteSession(ctx context.Context, id string) error
 	Messages(ctx context.Context, id string) (chat.Session, []chat.Message, error)
 	ClearMessages(ctx context.Context, id string) error
-	Send(ctx context.Context, sessionID, modelID, content string, images []chat.ImageAttachment) ([]chat.Message, error)
+	Send(ctx context.Context, sessionID, modelID, content, effort string, images []chat.ImageAttachment) ([]chat.Message, error)
 }
 
 // Health 报告依赖就绪状态。Redis 只是缓存，不影响 ready。

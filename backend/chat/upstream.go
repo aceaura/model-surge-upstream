@@ -33,11 +33,17 @@ const respSnippet = 300
 // codex(openai-codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
 // 这里把整段事件流读完后聚合回整轮（见 extractReplySSE），对外仍是非流式语义。
 // sessionKey 用于派生 codex 的 session_id/conversation_id 头（转发面同款，
-// 按账号+会话稳定），其余协议忽略。
-func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey string, history []Message) (string, usage.Usage, int, error) {
+// 按账号+会话稳定），其余协议忽略。effort 是对话页选定的推理档（空=默认），
+// 见 applyEffort。
+func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, effort string, history []Message) (string, usage.Usage, int, error) {
 	suffix, body, err := buildRequest(target, history)
 	if err != nil {
 		return "", usage.Usage{}, 0, err
+	}
+	// 每条消息的显式选择压过模型 defaults/overrides,且先于 codex 整形
+	// (ShapeBody 看到 reasoning 会补 include)。
+	if effort != "" {
+		applyEffort(target.Protocol, body, effort)
 	}
 	// codex 硬约束(store/stream/剥采样参数/instructions)与路径映射最后应用，
 	// 压过 defaults/overrides——与转发面、连通性检测同一顺序。
@@ -144,6 +150,23 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 	body = mergeParams(rawObject(target.Defaults), body)
 	body = mergeParams(body, rawObject(target.Overrides))
 	return suffix, body, nil
+}
+
+// applyEffort 把对话页选定的推理档写进请求体：responses 进 reasoning.effort
+// （不覆盖 overrides 里已有的其他 reasoning 键），chat_completions 用
+// 顶层 reasoning_effort；anthropic/gemini 没有通用的 effort 语义，忽略。
+func applyEffort(protocol string, body map[string]any, effort string) {
+	switch protocol {
+	case provider.ProtocolResponses:
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = map[string]any{}
+			body["reasoning"] = reasoning
+		}
+		reasoning["effort"] = effort
+	case provider.ProtocolChatCompletions:
+		body["reasoning_effort"] = effort
+	}
 }
 
 // messageList 生成 [{role, content}] 形态；content 由 perMessage 决定。
