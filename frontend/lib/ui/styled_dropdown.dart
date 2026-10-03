@@ -59,6 +59,28 @@ class _StyledDropdownState extends State<StyledDropdown> {
     final dy = widget.dropUp
         ? -(menuHeight + 6.0)
         : box.size.height + 6.0;
+    // 菜单宽取触发器宽与选项自然宽的较大者(封顶 420):选项比触发器长
+    // (如模型 id codex-1/gpt-6.1-sol 配 200px 触发器)时完整显示,
+    // 行内省略只作更极端值的兜底。按 w600 量:选中项加粗,取最宽。
+    var maxText = 0.0;
+    for (final o in widget.options) {
+      final tp = TextPainter(
+        text: TextSpan(
+            text: _label(o),
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontFamily: AppConst.fontFamily,
+                fontFamilyFallback: AppConst.fontFallback)),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      maxText = math.max(maxText, tp.width);
+      tp.dispose();
+    }
+    // 行横向 padding 20 + check 位 24 + 菜单 padding 12 + 描边 2。
+    final menuWidth = math.max(
+        box.size.width, math.min(maxText + 58, 420.0));
     _entry = OverlayEntry(
       builder: (_) => Stack(children: [
         // 透明屏障:点外部收菜单
@@ -78,7 +100,7 @@ class _StyledDropdownState extends State<StyledDropdown> {
             // 底色必须画在 Material 上:InkWell 的 hover 墨水绘在最近 Material 层,
             // 若底色由子级 Container 画会盖住墨水,悬停永远不可见
             child: Container(
-              width: box.size.width,
+              width: menuWidth,
               constraints: const BoxConstraints(maxHeight: 360),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
@@ -141,7 +163,7 @@ class _StyledDropdownState extends State<StyledDropdown> {
                     color: t.primarySoft, borderRadius: BorderRadius.circular(8))
                 : null,
             child: Row(children: [
-              // 与触发器同款省略:长选项(如 codex-1/gpt-6.1-sol)不撑破行宽
+              // 菜单已按选项自然宽展开,这里的省略只是超 420 封顶的兜底
               Expanded(
                 child: Text(_label(o),
                     overflow: TextOverflow.ellipsis,
@@ -153,7 +175,6 @@ class _StyledDropdownState extends State<StyledDropdown> {
                       fontFamilyFallback: AppConst.fontFallback,
                     )),
               ),
-              const Spacer(),
               if (sel) Icon(Icons.check, size: 15, color: t.primary),
             ]),
           ),
