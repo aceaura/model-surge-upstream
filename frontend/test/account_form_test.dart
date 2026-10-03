@@ -655,7 +655,7 @@ void main() {
         reason: '服务端标记登录态终态失效时提示重新粘贴');
   });
 
-  // ── 本机登录态一键填入(codex CLI auth.json / CC Switch 保管库)──
+  // ── 本机登录态获取:codex CLI 与 Codex App 两个独立入口 ──
 
   /// 建一个临时用户目录并覆写探测根,返回可写相对路径的辅助函数。
   String Function(String) useTempHome() {
@@ -672,9 +672,9 @@ void main() {
     };
   }
 
-  Future<void> tapAutofill(WidgetTester tester) async {
-    await tester.ensureVisible(find.byKey(const ValueKey('oauth-autofill-codex')));
-    await tester.tap(find.byKey(const ValueKey('oauth-autofill-codex')));
+  Future<void> tapAutofill(WidgetTester tester, String key) async {
+    await tester.ensureVisible(find.byKey(ValueKey(key)));
+    await tester.tap(find.byKey(ValueKey(key)));
     await tester.pump();
   }
 
@@ -684,15 +684,23 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('autofill fills both fields from codex CLI auth.json',
+  void writeCliAuth(String Function(String) at, String content) =>
+      File(at('.codex${Platform.pathSeparator}auth.json'))
+          .writeAsStringSync(content);
+
+  void writeAppAuth(String Function(String) at, String content) =>
+      File(at('.cc-switch${Platform.pathSeparator}codex_oauth_auth.json'))
+          .writeAsStringSync(content);
+
+  testWidgets('cli button fills both fields from codex CLI auth.json',
       (tester) async {
     final at = useTempHome();
-    File(at('.codex${Platform.pathSeparator}auth.json')).writeAsStringSync(
+    writeCliAuth(at,
         '{"tokens":{"refresh_token":"rt-from-file","account_id":"acc-from-file"}}');
     await pumpForm(tester);
     await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
 
-    await tapAutofill(tester);
+    await tapAutofill(tester, 'oauth-autofill-cli');
 
     expect(fieldText(tester, 'account-refresh-token'), 'rt-from-file');
     expect(fieldText(tester, 'account-account-id'), 'acc-from-file');
@@ -700,81 +708,78 @@ void main() {
     await drainToast(tester);
   });
 
-  testWidgets('autofill falls back to CC Switch vault when CLI is api-key login',
+  testWidgets('cli button reports api-key login as no subscription auth',
       (tester) async {
     final at = useTempHome();
     // 你本机的真实形态:CLI 被 CC Switch 接管成 API Key 登录
-    File(at('.codex${Platform.pathSeparator}auth.json'))
-        .writeAsStringSync('{"OPENAI_API_KEY":"sk-x"}');
-    File(at('.cc-switch${Platform.pathSeparator}codex_oauth_auth.json'))
-        .writeAsStringSync(
-            '{"default_account_id":"internal-1",'
-            '"accounts":{"internal-1":{'
-            '"account_id":"internal-1",'
-            '"chatgpt_account_id":"chatgpt-acc-9",'
-            '"refresh_token":"rt-cc"}}}');
+    writeCliAuth(at, '{"OPENAI_API_KEY":"sk-x"}');
     await pumpForm(tester);
     await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
 
-    await tapAutofill(tester);
+    await tapAutofill(tester, 'oauth-autofill-cli');
+
+    expect(fieldText(tester, 'account-refresh-token'), isEmpty);
+    expect(find.textContaining('codex CLI: '), findsOneWidget);
+    expect(find.textContaining('API Key 登录'), findsOneWidget);
+    await drainToast(tester);
+  });
+
+  testWidgets('app button fills from Codex App vault (CC Switch store)',
+      (tester) async {
+    final at = useTempHome();
+    writeAppAuth(at,
+        '{"default_account_id":"internal-1",'
+        '"accounts":{"internal-1":{'
+        '"account_id":"internal-1",'
+        '"chatgpt_account_id":"chatgpt-acc-9",'
+        '"refresh_token":"rt-cc"}}}');
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+
+    await tapAutofill(tester, 'oauth-autofill-app');
 
     expect(fieldText(tester, 'account-refresh-token'), 'rt-cc');
     expect(fieldText(tester, 'account-account-id'), 'chatgpt-acc-9',
         reason: '取 chatgpt_account_id 而非 CC Switch 内部 account_id');
-    expect(find.text('已填入 CC Switch 的登录态'), findsOneWidget);
+    expect(find.text('已填入 Codex App 的登录态'), findsOneWidget);
     await drainToast(tester);
   });
 
-  testWidgets('autofill reports all misses and keeps fields blank',
-      (tester) async {
+  testWidgets('each button reports only its own source', (tester) async {
     useTempHome(); // 空目录:两个来源都不存在
     await pumpForm(tester);
     await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
 
-    await tapAutofill(tester);
+    await tapAutofill(tester, 'oauth-autofill-app');
+    expect(find.textContaining('未找到 Codex App 的登录态'), findsOneWidget);
+    expect(find.textContaining('未找到 codex CLI 的登录态'), findsNothing,
+        reason: 'Codex App 入口不探测、也不汇报 CLI 来源');
+    await drainToast(tester);
 
+    await tapAutofill(tester, 'oauth-autofill-cli');
+    expect(find.textContaining('未找到 codex CLI 的登录态'), findsOneWidget);
     expect(fieldText(tester, 'account-refresh-token'), isEmpty);
-    expect(fieldText(tester, 'account-account-id'), isEmpty);
-    expect(find.textContaining('codex CLI: '), findsOneWidget);
-    expect(find.textContaining('CC Switch: '), findsOneWidget);
-    expect(find.textContaining('不存在'), findsNWidgets(2));
     await drainToast(tester);
   });
 
-  testWidgets('autofill skips malformed CLI auth and reports CC Switch miss',
+  testWidgets('parse helpers handle their own shape and reject garbage',
       (tester) async {
-    final at = useTempHome();
-    File(at('.codex${Platform.pathSeparator}auth.json'))
-        .writeAsStringSync('{"tokens":{"refresh_token":"rt-only"}}');
-    await pumpForm(tester);
-    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
-
-    await tapAutofill(tester);
-
-    expect(fieldText(tester, 'account-refresh-token'), isEmpty,
-        reason: '缺 account_id 视为格式错误,两个字段都不半填');
-    expect(find.textContaining('缺少 tokens.refresh_token'), findsOneWidget);
-    expect(find.textContaining('CC Switch: '), findsOneWidget,
-        reason: '第一个来源坏掉后继续探测第二个并一并汇报');
-    await drainToast(tester);
-  });
-
-  testWidgets('parseCodexAuthJson handles both shapes and rejects garbage',
-      (tester) async {
-    expect(() => parseCodexAuthJson('"just a string"'),
-        throwsA(isA<FormatException>()));
     expect(
-        parseCodexAuthJson(
+        parseCodexCliAuth(
             '{"tokens":{"refresh_token":"rt","account_id":"acc","access_token":"at"}}'),
         ('rt', 'acc'),
-        reason: 'codex CLI 形态:多余字段忽略,只取登录续期所需两项');
+        reason: '多余字段忽略,只取登录续期所需两项');
+    expect(() => parseCodexCliAuth('"just a string"'),
+        throwsA(isA<FormatException>()));
+    expect(() => parseCodexCliAuth('{"OPENAI_API_KEY":"sk-x"}'),
+        throwsA(isA<FormatException>()),
+        reason: '纯 API Key 登录没有订阅登录态');
     expect(
-        parseCodexAuthJson('{"default_account_id":"i1","accounts":{"i1":'
+        parseCodexAppAuth('{"default_account_id":"i1","accounts":{"i1":'
             '{"refresh_token":"rt2","chatgpt_account_id":"cg-2"}}}'),
         ('rt2', 'cg-2'),
-        reason: 'CC Switch 形态:按 default_account_id 取默认账号');
-    expect(() => parseCodexAuthJson('{"OPENAI_API_KEY":"sk-x"}'),
-        throwsA(isA<FormatException>()),
-        reason: '纯 API Key 登录没有订阅登录态,报格式错误让调用方换下一个来源');
+        reason: '按 default_account_id 取默认账号');
+    expect(() => parseCodexAppAuth('{"accounts":{}}'),
+        throwsA(isA<FormatException>()));
   });
 }
