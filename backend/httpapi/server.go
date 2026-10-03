@@ -37,6 +37,9 @@ type Models interface {
 type Resolver interface {
 	Resolve(ctx context.Context, modelID string) (resolve.ResolvedTarget, error)
 	List(ctx context.Context) ([]resolve.Listing, error)
+	// HeadersFor 供连通性检测构造与转发面一致的上游头(oauth 账号
+	// 含活体 token 与 codex 身份头)。
+	HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error)
 }
 
 type Quota interface {

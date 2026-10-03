@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -70,6 +72,40 @@ func TestCheckProbeShapes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// codex 订阅端点:探针与转发面同契约——路径 /v1/responses 映射 /responses,
+// 体强制 store=false/stream=true 且 instructions 非空,采样参数被剥除。
+func TestCheckCodexShaping(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	tg := target(provider.ProtocolResponses, srv.URL)
+	tg.ProviderID = codex.ProviderID
+	res := Check(context.Background(), tg)
+	if !res.OK {
+		t.Fatalf("result = %+v, want ok", res)
+	}
+	if gotPath != "/responses" {
+		t.Errorf("path = %q, want codex-mapped /responses", gotPath)
+	}
+	if gotBody["store"] != false || gotBody["stream"] != true {
+		t.Errorf("store/stream = %v/%v, codex contract forces false/true", gotBody["store"], gotBody["stream"])
+	}
+	if s, _ := gotBody["instructions"].(string); strings.TrimSpace(s) == "" {
+		t.Error("instructions must be injected when absent")
+	}
+	if _, has := gotBody["max_output_tokens"]; has {
+		t.Error("max_output_tokens must be dropped for codex")
 	}
 }
 

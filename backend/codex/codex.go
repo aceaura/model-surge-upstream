@@ -27,6 +27,10 @@ var droppedFields = []string{
 //
 // originator/version 必须成对且 version 不能太旧:上游按这对值路由模型
 // 队列,过旧版本请求新模型直接 404(sub2api 实测下限 0.144.0)。
+//
+// sec-fetch-*/priority 是过 Cloudflare 的硬条件:chatgpt.com 对 backend-api
+// 开了挑战,裸 Go 请求恒 403 挑战页,带这组浏览器头才放行(sub2api
+// buildCodexCommonHeaders 同款,2026-10-03 额度脚本实测验证)。
 func Headers(accessToken, accountID string) map[string]string {
 	return map[string]string{
 		"Authorization":      "Bearer " + accessToken,
@@ -36,6 +40,11 @@ func Headers(accessToken, accountID string) map[string]string {
 		"User-Agent":         oauth.Originator + "/" + oauth.ClientVersion,
 		"OpenAI-Beta":        "responses=experimental",
 		"Accept":             "text/event-stream",
+		"oai-language":       "zh-CN",
+		"sec-fetch-site":     "none",
+		"sec-fetch-mode":     "no-cors",
+		"sec-fetch-dest":     "empty",
+		"priority":           "u=4, i",
 	}
 }
 
@@ -44,6 +53,8 @@ func Headers(accessToken, accountID string) map[string]string {
 //
 //   - store=false、stream=true 是订阅端点的强制契约;
 //   - 剥掉上游不认的采样参数;
+//   - input 字符串规范化为单条 user 消息列表(Responses 规范允许字符串,
+//     订阅端点只收列表,裸字符串恒 400 "Input must be a list");
 //   - 带 reasoning 时补 include: reasoning.encrypted_content(否则推理
 //     内容不回传,多轮上下文断链);
 //   - instructions 空缺时注入 codex 官方 prompt(上游要求非空)。
@@ -52,6 +63,15 @@ func ShapeBody(body map[string]any, nativeModel string) map[string]any {
 	body["stream"] = true
 	for _, f := range droppedFields {
 		delete(body, f)
+	}
+	if s, ok := body["input"].(string); ok {
+		body["input"] = []any{map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": s},
+			},
+		}}
 	}
 	if _, ok := body["reasoning"]; ok {
 		body["include"] = appendStringSet(body["include"], "reasoning.encrypted_content")

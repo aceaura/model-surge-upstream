@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -53,6 +54,12 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 	suffix, body, err := probeRequest(target)
 	if err != nil {
 		return Result{Error: err.Error()}
+	}
+	// codex 订阅端点的硬约束与路径映射同转发面(proxyplane)口径:
+	// 不测真实契约的探针会把配置正确误判成上游 400。
+	if target.ProviderID == codex.ProviderID {
+		body = codex.ShapeBody(body, target.NativeModel)
+		suffix = codex.MapSuffix(suffix)
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {

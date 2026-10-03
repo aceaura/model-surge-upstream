@@ -175,6 +175,10 @@ func (l loggedResolver) List(ctx context.Context) ([]resolve.Listing, error) {
 	return l.inner.List(ctx)
 }
 
+func (l loggedResolver) HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error) {
+	return l.inner.HeadersFor(ctx, spec, acc)
+}
+
 // saveUsage 把旁路用量异步落库。统计失败只进进程日志：
 // 丢一条统计远好于让转发或对话主路径报错。
 func saveUsage(db *store.Store, l store.UsageLog) {

@@ -34,6 +34,30 @@ func TestShapeBodyForcesContract(t *testing.T) {
 	}
 }
 
+func TestShapeBodyStringInputNormalizedToList(t *testing.T) {
+	out := ShapeBody(map[string]any{"input": "ping"}, "gpt-5-codex")
+	items, ok := out["input"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("input = %v, want single-item list", out["input"])
+	}
+	msg, _ := items[0].(map[string]any)
+	if msg["type"] != "message" || msg["role"] != "user" {
+		t.Errorf("item = %v, want user message", msg)
+	}
+	content, _ := msg["content"].([]any)
+	first, _ := content[0].(map[string]any)
+	if first["type"] != "input_text" || first["text"] != "ping" {
+		t.Errorf("content = %v, want input_text carrying the original string", content)
+	}
+
+	// 已是列表的客户端输入原样保留。
+	list := []any{map[string]any{"type": "message", "role": "user"}}
+	out = ShapeBody(map[string]any{"input": list}, "gpt-5-codex")
+	if got, _ := out["input"].([]any); len(got) != 1 {
+		t.Errorf("list input rewritten: %v", out["input"])
+	}
+}
+
 func TestShapeBodyKeepsClientInstructions(t *testing.T) {
 	out := ShapeBody(map[string]any{"instructions": "be terse"}, "gpt-5-codex")
 	if out["instructions"] != "be terse" {
@@ -131,5 +155,10 @@ func TestHeaders(t *testing.T) {
 	}
 	if !strings.Contains(h["User-Agent"], h["originator"]) {
 		t.Errorf("UA %q should carry originator", h["User-Agent"])
+	}
+	for _, k := range []string{"sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "priority"} {
+		if h[k] == "" {
+			t.Errorf("header %q must be set: bare Go requests get a Cloudflare 403 challenge", k)
+		}
 	}
 }

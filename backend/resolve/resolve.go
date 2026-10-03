@@ -143,6 +143,13 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 	}, nil
 }
 
+// HeadersFor 把 authHeaders 暴露给管理面连通性检测等旁路调用:它们刻意
+// 不走 Resolve(启用态校验会挡住未启用模型),但 oauth 账号的头构造
+// (取活体 token、套 codex 头集)离不开 token 来源。
+func (r *Resolver) HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error) {
+	return r.authHeaders(ctx, spec, acc)
+}
+
 // authHeaders 按凭据形态分派:oauth_refresh 走 token 来源取活体
 // access_token 并套 codex 头集(订阅登录态目前只有 codex 一种);
 // 其余沿用 provider 声明的静态认证头形态。

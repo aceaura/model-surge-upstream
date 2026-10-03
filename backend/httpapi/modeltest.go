@@ -32,6 +32,14 @@ func (h handler) testModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 头集与转发面同一路径构造:oauth 账号(codex 订阅)才有活体 token
+	// 与 codex 身份头;静态密钥账号等价于 resolve.AuthHeaders。
+	headers, err := h.Resolver.HeadersFor(r.Context(), spec, acc)
+	if err != nil {
+		writeJSON(w, http.StatusOK, modelcheck.Result{Error: err.Error()})
+		return
+	}
+
 	target := resolve.ResolvedTarget{
 		ModelID:     m.ID,
 		Account:     acc.Name,
@@ -39,7 +47,7 @@ func (h handler) testModel(w http.ResponseWriter, r *http.Request) {
 		Protocol:    m.Protocol,
 		BaseURL:     acc.EffectiveBaseURL(spec),
 		NativeModel: m.NativeModel,
-		Headers:     resolve.AuthHeaders(spec, acc),
+		Headers:     headers,
 	}
 	writeJSON(w, http.StatusOK, modelcheck.Check(r.Context(), target))
 }

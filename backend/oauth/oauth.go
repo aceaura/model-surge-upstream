@@ -35,8 +35,9 @@ const (
 	// Originator 标识 codex CLI 来源,授权侧与 backend-api 请求都要带。
 	Originator = "codex_cli_rs"
 	// ClientVersion 伪装的 codex CLI 版本;backend-api 按 originator+version
-	// 路由模型队列,过低新版本模型直接 404(sub2api 实测下限 0.144.0)。
-	ClientVersion = "0.153.4"
+	// 路由模型队列,过低新版本模型直接 404(sub2api 实测下限 0.144.0;
+	// 2026-10-03 实测 0.160.0 起才下发 gpt-6.1-sol,钉 0.160.0)。
+	ClientVersion = "0.160.0"
 
 	refreshWindow = 5 * time.Minute
 	defaultTTL    = time.Hour
