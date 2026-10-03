@@ -82,22 +82,25 @@ class _ModelFormState extends State<ModelForm> {
   late final bool _enabled = _source?.enabled ?? true;
 
   // 推理档支持列表:只允许显式声明(名+值动态行,空列表即声明不支持),
-  // 没有自动跟随上游的模式。新建默认带一行「关闭思考」;编辑/拷贝存量
-  // 自动档(null)的模型时用当前有效列表预填并补上「关闭思考」,保存即
-  // 落为显式声明。
-  late final List<_EffortRow> _effortRows = _initialEffortRows();
+  // 没有自动跟随上游的模式。「关闭思考」是常驻开关(上行值 none),开即在
+  // 有效列表最前面加一条 {关闭思考, none},新建默认开;编辑/拷贝存量
+  // 自动档(null)的模型时用当前有效列表预填并默认开,保存即落为显式声明。
+  late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
+  late bool _disableThinking = _effortInit.off;
+  late final List<_EffortRow> _effortRows = _effortInit.rows;
 
-  List<_EffortRow> _initialEffortRows() {
+  ({bool off, List<_EffortRow> rows}) _initialEffort() {
     final source = _source;
-    if (source == null) return [_EffortRow('关闭思考', 'none')];
-    if (source.efforts != null) {
-      return [for (final e in source.efforts!) _EffortRow(e.name, e.value)];
-    }
-    final prefill = source.effortsEffective;
-    return [
-      for (final e in prefill) _EffortRow(e.name, e.value),
-      if (!prefill.any((e) => e.value == 'none')) _EffortRow('关闭思考', 'none'),
-    ];
+    if (source == null) return (off: true, rows: <_EffortRow>[]);
+    final entries = source.efforts ?? source.effortsEffective;
+    return (
+      // 显式声明按原值判断;存量自动(null)默认开,与新建一致。
+      off: source.efforts == null || entries.any((e) => e.value == 'none'),
+      rows: [
+        for (final e in entries)
+          if (e.value != 'none') _EffortRow(e.name, e.value),
+      ],
+    );
   }
 
   bool _defaultsValid = true;
@@ -455,12 +458,14 @@ class _ModelFormState extends State<ModelForm> {
     );
   }
 
-  // ── 推理档(显式名+值档位,无自动模式)──
+  // ── 推理档(关闭思考开关 + 显式名+值档位,无自动模式)──
 
-  /// 收集当前行态为提交条目:值是档位的身份(去重/上行都靠它),空值行
-  /// 视为未填丢弃;名留空由服务端按值自动命名。删掉所有行即声明不支持。
+  /// 收集提交条目:关闭思考开关开时最前面固定一条 {关闭思考, none};
+  /// 值是档位的身份(去重/上行都靠它),空值行视为未填丢弃;名留空由服务端
+  /// 按值自动命名。开关关且删掉所有行即声明不支持。
   List<EffortEntry> get _efforts {
     return [
+      if (_disableThinking) const EffortEntry(name: '关闭思考', value: 'none'),
       for (final r in _effortRows)
         if (r.value.text.trim().isNotEmpty)
           EffortEntry(name: r.name.text.trim(), value: r.value.text.trim()),
@@ -469,6 +474,7 @@ class _ModelFormState extends State<ModelForm> {
 
   String get _effortSubtitle {
     final names = [
+      if (_disableThinking) '关闭思考',
       for (final r in _effortRows)
         if (r.value.text.trim().isNotEmpty)
           r.name.text.trim().isNotEmpty
@@ -489,10 +495,24 @@ class _ModelFormState extends State<ModelForm> {
       child: LabeledField(
         key: const ValueKey('model-effort-mode-field'),
         label: '支持档位',
-        hint: '每行一个档位：名是显示名（留空按值命名），值是发上游的档位字符串；删掉所有行即声明不支持推理档',
+        hint: '关闭思考开关=提供不思考选项（上行值 none）；每行一个档位：名是显示名（留空按值命名），值是发上游的档位字符串；开关关且删掉所有行即声明不支持推理档',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Row(
+              children: [
+                Switch(
+                  key: const ValueKey('model-effort-off'),
+                  value: _disableThinking,
+                  onChanged: (v) => setState(() => _disableThinking = v),
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
             for (var i = 0; i < rows.length; i++)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),

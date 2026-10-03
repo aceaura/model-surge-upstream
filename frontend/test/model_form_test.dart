@@ -282,7 +282,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('推理档:新建默认带关闭思考行,名+值行动态增删随提交上行',
+  testWidgets('推理档:新建默认开关开且无档位行,名+值行动态增删随提交上行',
       (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
@@ -296,25 +296,16 @@ void main() {
     );
     await pumpForm(tester, client: client);
 
-    // 没有自动模式:分区默认展开,副标题即首行显示名;首行预填 关闭思考/none。
+    // 没有自动模式:分区默认展开;关闭思考常驻开关默认开,档位行初始为空。
     expect(find.text('推理档'), findsOneWidget);
     expect(find.text('关闭思考'), findsAtLeastNWidgets(1));
     expect(find.text('自动（跟随上游声明）'), findsNothing);
     expect(
         tester
-            .widget<TextFormField>(
-                find.byKey(const ValueKey('model-effort-name-0')))
-            .controller!
-            .text,
-        '关闭思考');
-    expect(
-        tester
-            .widget<TextFormField>(
-                find.byKey(const ValueKey('model-effort-value-0')))
-            .controller!
-            .text,
-        'none');
-    expect(find.byKey(const ValueKey('model-effort-name-1')), findsNothing);
+            .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
+            .value,
+        isTrue);
+    expect(find.byKey(const ValueKey('model-effort-name-0')), findsNothing);
 
     // 加一行填 私有/ultra;再加一行留空(空值行提交时丢弃)。
     await tester.ensureVisible(find.byKey(const ValueKey('model-effort-add')));
@@ -322,9 +313,9 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.byKey(const ValueKey('model-effort-name-1')), '私有');
+        find.byKey(const ValueKey('model-effort-name-0')), '私有');
     await tester.enterText(
-        find.byKey(const ValueKey('model-effort-value-1')), 'ultra');
+        find.byKey(const ValueKey('model-effort-value-0')), 'ultra');
     await tester.ensureVisible(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));
@@ -349,7 +340,8 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('推理档:编辑回显显式条目,删行后提交', (tester) async {
+  testWidgets('推理档:编辑显式条目(无 none)开关关,删行与拨开关随提交',
+      (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -380,7 +372,12 @@ void main() {
     });
     await pumpForm(tester, editing: editing, client: client);
 
-    // 显式配置:分区默认展开,副标题列显示名,两行的名/值回显。
+    // 显式列表无 none:开关关,副标题不含关闭思考,两行的名/值回显。
+    expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
+            .value,
+        isFalse);
     expect(find.text('低 / 高'), findsOneWidget);
     expect(
         tester
@@ -397,15 +394,20 @@ void main() {
             .text,
         'high');
 
-    // 删掉首行(低)再保存:只剩高档一条。
+    // 删掉首行(低)并拨开关闭思考再保存:关闭思考在最前。
     await tester.ensureVisible(find.byKey(const ValueKey('model-effort-del-0')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-del-0')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('model-effort-off')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('model-effort-off')));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
     expect(sentBody, isNotNull);
     expect(sentBody!['efforts'], [
+      {'name': '关闭思考', 'value': 'none'},
       {'name': '高', 'value': 'high'},
     ]);
 
@@ -413,7 +415,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('推理档:存量自动(null)模型编辑时用有效列表预填并补关闭思考,保存落为显式',
+  testWidgets('推理档:存量自动(null)模型编辑时开关开+有效列表预填,保存落为显式',
       (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
@@ -442,25 +444,30 @@ void main() {
     });
     await pumpForm(tester, editing: editing, client: client);
 
-    // 预填=有效列表两条+补一行 关闭思考/none,副标题三个显示名。
-    expect(find.text('低 / ultra / 关闭思考'), findsOneWidget);
-    expect(find.byKey(const ValueKey('model-effort-name-2')), findsOneWidget);
-    expect(find.byKey(const ValueKey('model-effort-name-3')), findsNothing);
+    // 开关默认开,行=有效列表两条(无 none 行),副标题开关名在前。
+    expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
+            .value,
+        isTrue);
+    expect(find.text('关闭思考 / 低 / ultra'), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-effort-name-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-effort-name-2')), findsNothing);
     expect(
         tester
             .widget<TextFormField>(
-                find.byKey(const ValueKey('model-effort-value-2')))
+                find.byKey(const ValueKey('model-effort-value-0')))
             .controller!
             .text,
-        'none');
+        'low');
 
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
     expect(sentBody, isNotNull);
     expect(sentBody!['efforts'], [
+      {'name': '关闭思考', 'value': 'none'},
       {'name': '低', 'value': 'low'},
       {'name': 'ultra', 'value': 'ultra'},
-      {'name': '关闭思考', 'value': 'none'},
     ]);
 
     await tester.pump(const Duration(seconds: 3));
