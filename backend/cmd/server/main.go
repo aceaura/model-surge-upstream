@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
+	"github.com/aceaura/model-surge-upstream/backend/activity"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/cache"
 	"github.com/aceaura/model-surge-upstream/backend/chat"
@@ -71,12 +72,15 @@ func run() error {
 	// 额度脚本的 {{accessToken}} 复用同一个 token 生命周期管理。
 	quotas.SetTokenSource(tokens)
 	upstream := upmodels.New(accounts, cfg.QuotaTTL)
+	// 账号活动追踪:转发面/对话面每服务一次请求触活一次,额度定时轮询
+	// 据此跳过 5 分钟无请求的空闲账号,直到下一次请求到达自动恢复。
+	act := activity.New(5 * time.Minute)
 
 	// 代理转发面：独立端口、独立密钥，配置落库、运行期可改。
 	// 启动时按已存配置开监听；应用失败（如端口被占）只告警，
 	// 管理面不可用才是致命问题，转发面不是。
 	proxyRepo := proxysettings.NewRepo(db.Pool())
-	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db), compact.NewRunner(cfg.Compact), tokens)}
+	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db, act), compact.NewRunner(cfg.Compact), tokens)}
 	defer proxySup.inner.Close()
 	if s, err := proxyRepo.Get(ctx); err != nil {
 		log.Printf("proxyplane: load settings: %v", err)
@@ -85,7 +89,7 @@ func run() error {
 	}
 
 	// 对话页：会话与消息落库，补全走解析出的上游目标。
-	chats := chat.NewService(chat.NewRepo(db.Pool()), resolver, chatUsage(db))
+	chats := chat.NewService(chat.NewRepo(db.Pool()), resolver, chatUsage(db, act))
 
 	handler := withRequestLog(httpapi.NewServer(httpapi.Deps{
 		Accounts:       accounts,
@@ -99,6 +103,7 @@ func run() error {
 		Usage:          db,
 		Health:         health{db: db, cache: c},
 		OAuth:          tokens,
+		Activity:       act,
 		AdminKey:       cfg.AdminKey,
 		DeliveryKey:    cfg.DeliveryKey,
 	}))
@@ -192,8 +197,9 @@ func saveUsage(db *store.Store, l store.UsageLog) {
 }
 
 // proxyUsage 转发面的用量 sink：成功失败都记一行，失败请求用量为 0。
-func proxyUsage(db *store.Store) proxyplane.UsageSink {
+func proxyUsage(db *store.Store, act *activity.Tracker) proxyplane.UsageSink {
 	return func(_ context.Context, rec proxyplane.UsageRecord) {
+		act.Touch(rec.Account)
 		latency, duration := rec.LatencyMS, rec.DurationMS
 		saveUsage(db, store.UsageLog{
 			RequestID:      rec.Usage.MessageID,
@@ -216,8 +222,9 @@ func proxyUsage(db *store.Store) proxyplane.UsageSink {
 }
 
 // chatUsage 对话面的用量记录器：非流式整轮等待，首字时延即整轮时延。
-func chatUsage(db *store.Store) chat.UsageRecorder {
+func chatUsage(db *store.Store, act *activity.Tracker) chat.UsageRecorder {
 	return func(_ context.Context, rec chat.UsageRecord) {
+		act.Touch(rec.Target.Account)
 		duration := rec.DurationMS
 		saveUsage(db, store.UsageLog{
 			RequestID:      rec.Usage.MessageID,

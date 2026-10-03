@@ -273,9 +273,13 @@ class ApiClient {
 
   /// force=true 让服务端丢弃进程内额度缓存再查(行内刷新钮手动重查);
   /// 默认走缓存,自动轮询与首次加载不必每次都打上游。
-  Future<QuotaReport> queryQuota(String account, {bool force = false}) async {
-    final body = await _send(
-        'GET', '/admin/accounts/$account/quota${force ? '?refresh=1' : ''}');
+  /// auto=true 标记这是定时轮询:账号空闲(窗口内无转发/对话请求)时
+  /// 服务端直接回过缓存不打上游,直到下一次请求到达自动恢复。
+  Future<QuotaReport> queryQuota(String account,
+      {bool force = false, bool auto = false}) async {
+    final params = [if (force) 'refresh=1', if (auto) 'auto=1'];
+    final qs = params.isEmpty ? '' : '?${params.join('&')}';
+    final body = await _send('GET', '/admin/accounts/$account/quota$qs');
     return QuotaReport.fromJson(body);
   }
 

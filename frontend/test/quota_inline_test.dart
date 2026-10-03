@@ -176,12 +176,12 @@ void main() {
   });
 
   testWidgets('auto interval re-queries on schedule', (tester) async {
-    var calls = 0;
+    final urls = <String>[];
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
       adminKey: 'adm',
-      httpClient: MockClient((_) async {
-        calls++;
+      httpClient: MockClient((req) async {
+        urls.add(req.url.toString());
         return http.Response(
             jsonEncode({
               'account': 'ds-1',
@@ -206,11 +206,15 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
-    expect(calls, 1, reason: '挂载即查一次');
+    expect(urls, hasLength(1), reason: '挂载即查一次');
+    expect(urls.single, isNot(contains('auto=1')),
+        reason: '首次加载是用户看页触发,非定时轮询');
 
     await tester.pump(const Duration(minutes: 1, seconds: 1));
     await tester.pumpAndSettle();
-    expect(calls, 2, reason: '到间隔自动重查');
+    expect(urls, hasLength(2), reason: '到间隔自动重查');
+    expect(urls.last, contains('auto=1'),
+        reason: '定时轮询带 auto=1,服务端据此对空闲账号短路不打上游');
   });
 
   testWidgets('refresh icon forces a cache-bypassing re-query', (tester) async {

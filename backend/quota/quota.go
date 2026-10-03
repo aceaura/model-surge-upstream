@@ -344,6 +344,16 @@ func (q *Quota) store(name string, r Report) {
 	q.cached[name] = entry{report: r, expires: time.Now().Add(q.ttl)}
 }
 
+// Cached 返回缓存报告(无视存活期):额度定时轮询对空闲账号只回过缓存,
+// 不触发上游查询,报告自带的查询时刻自然变老以表达"已停刷"。
+// 无缓存返回 ok=false。
+func (q *Quota) Cached(name string) (Report, bool) {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	e, ok := q.cached[name]
+	return e.report, ok
+}
+
 // Forget 丢弃某账号的缓存，供账号更新后调用。
 func (q *Quota) Forget(name string) {
 	q.mu.Lock()

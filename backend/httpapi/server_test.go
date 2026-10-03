@@ -162,9 +162,13 @@ type stubQuota struct {
 	testCode string
 	testErr  error
 	forgot   []string
+	queries  int
+	cached   quota.Report
+	hasCache bool
 }
 
 func (s *stubQuota) Query(context.Context, string) (quota.Report, error) {
+	s.queries++
 	return s.report, s.err
 }
 
@@ -176,7 +180,13 @@ func (s *stubQuota) TestScript(_ context.Context, _ string, code string, _ int) 
 	return quota.Report{Account: "kimi-1", Queryable: true, Meters: []quota.Meter{}}, nil
 }
 
+func (s *stubQuota) Cached(string) (quota.Report, bool) { return s.cached, s.hasCache }
+
 func (s *stubQuota) Forget(name string) { s.forgot = append(s.forgot, name) }
+
+type stubActivity struct{ active bool }
+
+func (s stubActivity) Active(string) bool { return s.active }
 
 type stubUpstreamModels struct {
 	report upmodels.Report
@@ -219,6 +229,7 @@ type fixture struct {
 	upstream *stubUpstreamModels
 	health   *stubHealth
 	oauth    *stubOAuth
+	activity *stubActivity
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -245,6 +256,7 @@ func newFixture(t *testing.T) *fixture {
 	}}
 	h := &stubHealth{cacheReady: true}
 	oa := &stubOAuth{reauth: map[string]bool{}}
+	act := &stubActivity{active: true}
 
 	return &fixture{
 		server: NewServer(Deps{
@@ -255,10 +267,12 @@ func newFixture(t *testing.T) *fixture {
 			UpstreamModels: up,
 			Health:         h,
 			OAuth:          oa,
+			Activity:       act,
 			AdminKey:       adminKey,
 			DeliveryKey:    deliveryKey,
 		}),
 		accounts: accounts, models: models, quota: q, upstream: up, health: h, oauth: oa,
+		activity: act,
 	}
 }
 
@@ -715,6 +729,69 @@ func TestQuotaRefreshParamDropsCache(t *testing.T) {
 	}
 	if len(f.quota.forgot) != 0 {
 		t.Errorf("plain query must keep the cache, forgot = %v", f.quota.forgot)
+	}
+}
+
+func TestQuotaAutoSkipsIdleAccount(t *testing.T) {
+	f := newFixture(t)
+	f.activity.active = false
+	used := 64.0
+	f.quota.cached = quota.Report{Account: "kimi-1", Queryable: true, Meters: []quota.Meter{
+		{Kind: provider.MeterUsage, Unit: provider.UnitPercent, Used: &used},
+	}}
+	f.quota.hasCache = true
+
+	rec := f.do(t, "GET", "/admin/accounts/kimi-1/quota?auto=1", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auto quota = %d: %s", rec.Code, rec.Body)
+	}
+	if f.quota.queries != 0 {
+		t.Errorf("空闲账号的定时轮询不应打上游, Query 被调 %d 次", f.quota.queries)
+	}
+	var report quota.Report
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(report.Meters) != 1 || report.Meters[0].Used == nil || *report.Meters[0].Used != 64 {
+		t.Errorf("应回过缓存报告, got %+v", report)
+	}
+
+	// 账号恢复活跃后,同一轮询路径重新真实查询。
+	f.activity.active = true
+	rec = f.do(t, "GET", "/admin/accounts/kimi-1/quota?auto=1", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("active auto quota = %d: %s", rec.Code, rec.Body)
+	}
+	if f.quota.queries != 1 {
+		t.Errorf("活跃账号的定时轮询应恢复真实查询, Query 被调 %d 次", f.quota.queries)
+	}
+}
+
+func TestQuotaAutoWithoutCacheFallsThrough(t *testing.T) {
+	f := newFixture(t)
+	f.activity.active = false
+	// 空闲但无任何缓存(如进程重启后首轮轮询):照常真实查询一次。
+	rec := f.do(t, "GET", "/admin/accounts/kimi-1/quota?auto=1", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auto quota = %d: %s", rec.Code, rec.Body)
+	}
+	if f.quota.queries != 1 {
+		t.Errorf("无缓存时轮询应回落真实查询, Query 被调 %d 次", f.quota.queries)
+	}
+}
+
+func TestQuotaPlainQueryUnaffectedByIdle(t *testing.T) {
+	f := newFixture(t)
+	f.activity.active = false
+	// 首次加载/手动刷新不带 auto=1,空闲账号也照常查询。
+	for _, path := range []string{"/admin/accounts/kimi-1/quota", "/admin/accounts/kimi-1/quota?refresh=1"} {
+		rec := f.do(t, "GET", path, adminKey, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d: %s", path, rec.Code, rec.Body)
+		}
+	}
+	if f.quota.queries != 2 {
+		t.Errorf("非轮询路径不受空闲短路影响, Query 被调 %d 次", f.quota.queries)
 	}
 }
 

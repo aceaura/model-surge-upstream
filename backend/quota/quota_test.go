@@ -57,6 +57,34 @@ func TestQueryAccountNotFound(t *testing.T) {
 	}
 }
 
+func TestCachedReturnsStaleReport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}`))
+	}))
+	defer srv.Close()
+
+	// TTL 调到极短,查完即过期:验证 Cached 无视存活期回过缓存。
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek", srv.URL)}, time.Nanosecond)
+	if _, err := q.Query(context.Background(), "ds-1"); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if _, ok := q.lookup("ds-1"); ok {
+		t.Fatal("lookup 应按 TTL 判过期")
+	}
+	got, ok := q.Cached("ds-1")
+	if !ok {
+		t.Fatal("过期缓存 Cached 仍应命中")
+	}
+	if len(got.Meters) != 1 || got.Meters[0].Remaining == nil || *got.Meters[0].Remaining != 12.34 {
+		t.Errorf("Cached 报告内容不符: %+v", got)
+	}
+	if _, ok := q.Cached("ghost"); ok {
+		t.Error("从未缓存的账号 Cached 应返回 ok=false")
+	}
+}
+
 func TestQuerySuccess(t *testing.T) {
 	var gotPath, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -63,18 +63,19 @@ class _QuotaInlineState extends State<QuotaInline> {
   void _scheduleAuto() {
     final m = widget.autoIntervalMinutes;
     if (m <= 0) return;
-    _autoTimer = Timer.periodic(Duration(minutes: m), (_) => _query());
+    // 定时轮询带 auto=1:账号空闲时服务端回过缓存不打上游。
+    _autoTimer = Timer.periodic(Duration(minutes: m), (_) => _query(auto: true));
   }
 
-  Future<void> _query({bool force = false}) async {
+  Future<void> _query({bool force = false, bool auto = false}) async {
     if (_busy) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final report =
-          await widget.client.queryQuota(widget.accountName, force: force);
+      final report = await widget.client
+          .queryQuota(widget.accountName, force: force, auto: auto);
       if (!mounted) return;
       setState(() => _report = report);
     } catch (e) {

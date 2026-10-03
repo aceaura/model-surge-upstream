@@ -45,7 +45,15 @@ type Resolver interface {
 type Quota interface {
 	Query(ctx context.Context, accountName string) (quota.Report, error)
 	TestScript(ctx context.Context, accountName, code string, timeoutSeconds int) (quota.Report, error)
+	// Cached 无视存活期回缓存报告,供 auto=1 轮询对空闲账号短路。
+	Cached(accountName string) (quota.Report, bool)
 	Forget(name string)
+}
+
+// Activity 报告账号近期是否有数据面/对话面请求,供额度定时轮询跳过
+// 空闲账号。nil 表示不装配,轮询行为与此前一致(始终真实查询)。
+type Activity interface {
+	Active(accountName string) bool
 }
 
 // UpstreamModels 查询上游账号实际可用的模型清单。
@@ -110,6 +118,7 @@ type Deps struct {
 	Usage          UsageStats
 	Health         Health
 	OAuth          OAuthState
+	Activity       Activity
 	AdminKey       string
 	DeliveryKey    string
 }

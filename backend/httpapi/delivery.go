@@ -45,6 +45,15 @@ func (h handler) quota(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("refresh") == "1" {
 		h.Quota.Forget(name)
 	}
+	// auto=1 是行内额度的定时轮询:账号空闲(窗口内无转发/对话请求)就
+	// 不再打上游,回过缓存(含过期),报告时刻自然变老表达"已停刷";账号
+	// 再来请求,下一轮自动恢复真实查询。首次加载与手动刷新不走此路。
+	if r.URL.Query().Get("auto") == "1" && h.Activity != nil && !h.Activity.Active(name) {
+		if report, ok := h.Quota.Cached(name); ok {
+			writeJSON(w, http.StatusOK, report)
+			return
+		}
+	}
 	report, err := h.Quota.Query(r.Context(), name)
 	if err != nil {
 		writeError(w, err)
