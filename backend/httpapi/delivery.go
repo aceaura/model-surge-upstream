@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"net/http"
+	"time"
 
+	"github.com/aceaura/model-surge-upstream/backend/activity"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
@@ -45,10 +47,10 @@ func (h handler) quota(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("refresh") == "1" {
 		h.Quota.Forget(name)
 	}
-	// auto=1 是行内额度的定时轮询:账号空闲(窗口内无转发/对话请求)就
-	// 不再打上游,回过缓存(含过期),报告时刻自然变老表达"已停刷";账号
-	// 再来请求,下一轮自动恢复真实查询。首次加载与手动刷新不走此路。
-	if r.URL.Query().Get("auto") == "1" && h.Activity != nil && !h.Activity.Active(name) {
+	// auto=1 是行内额度的定时轮询:账号空闲(停止查询间隔内无转发/对话
+	// 请求)就不再打上游,回过缓存(含过期),报告时刻自然变老表达"已停刷";
+	// 账号再来请求,下一轮自动恢复真实查询。首次加载与手动刷新不走此路。
+	if r.URL.Query().Get("auto") == "1" && h.Activity != nil && !h.Activity.Active(name, h.stopWindow(r, name)) {
 		if report, ok := h.Quota.Cached(name); ok {
 			writeJSON(w, http.StatusOK, report)
 			return
@@ -60,6 +62,16 @@ func (h handler) quota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+// stopWindow 取账号配置的停止查询间隔(额度脚本 stop_interval_minutes),
+// 未配置或账号不可读走默认窗口。
+func (h handler) stopWindow(r *http.Request, name string) time.Duration {
+	acc, err := h.Accounts.Get(r.Context(), name)
+	if err != nil || acc.QuotaScript == nil || acc.QuotaScript.StopIntervalMinutes <= 0 {
+		return activity.DefaultIdleWindow
+	}
+	return time.Duration(acc.QuotaScript.StopIntervalMinutes) * time.Minute
 }
 
 func (h handler) upstreamModels(w http.ResponseWriter, r *http.Request) {

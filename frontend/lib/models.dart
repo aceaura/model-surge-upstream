@@ -119,19 +119,24 @@ class ProviderSpec {
 }
 
 /// 账号级额度查询脚本(仿 CC Switch usage_script):enabled+code 生效,
-/// 其余两项为 0 时走后端默认(超时 10s,不自动刷新)。
+/// 其余三项为 0 时走后端默认(超时 10s,不自动刷新,停刷间隔 5 分钟)。
 class QuotaScript {
   const QuotaScript({
     required this.enabled,
     required this.code,
     this.timeoutSeconds = 0,
     this.autoIntervalMinutes = 0,
+    this.stopIntervalMinutes = 0,
   });
 
   final bool enabled;
   final String code;
   final int timeoutSeconds;
   final int autoIntervalMinutes;
+
+  /// 账号无请求超过该间隔后自动刷新停打上游,下一次请求到达恢复;
+  /// 0 走后端默认 5 分钟。
+  final int stopIntervalMinutes;
 
   /// 与后端 Active 同口径:启用且代码非空才真正接管额度查询。
   bool get active => enabled && code.isNotEmpty;
@@ -142,6 +147,8 @@ class QuotaScript {
         timeoutSeconds: (json['timeout_seconds'] as num?)?.toInt() ?? 0,
         autoIntervalMinutes:
             (json['auto_interval_minutes'] as num?)?.toInt() ?? 0,
+        stopIntervalMinutes:
+            (json['stop_interval_minutes'] as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -149,6 +156,7 @@ class QuotaScript {
         'code': code,
         'timeout_seconds': timeoutSeconds,
         'auto_interval_minutes': autoIntervalMinutes,
+        'stop_interval_minutes': stopIntervalMinutes,
       };
 }
 

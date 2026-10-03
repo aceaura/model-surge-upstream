@@ -8,16 +8,17 @@ import (
 	"time"
 )
 
-type Tracker struct {
-	idle time.Duration
+// DefaultIdleWindow 账号未配置停止查询间隔(quota_script
+// stop_interval_minutes)时的空闲窗口。
+const DefaultIdleWindow = 5 * time.Minute
 
+type Tracker struct {
 	mu   sync.Mutex
 	last map[string]time.Time
 }
 
-// New 以 idle 为空闲窗口建追踪器:窗口内无请求即视为空闲。
-func New(idle time.Duration) *Tracker {
-	return &Tracker{idle: idle, last: map[string]time.Time{}}
+func New() *Tracker {
+	return &Tracker{last: map[string]time.Time{}}
 }
 
 // Touch 记录账号刚服务了一次请求(转发面/对话面,成败都算:请求到达即激活)。
@@ -27,10 +28,11 @@ func (t *Tracker) Touch(account string) {
 	t.last[account] = time.Now()
 }
 
-// Active 报告账号在空闲窗口内是否有请求。从未有请求的账号视为空闲。
-func (t *Tracker) Active(account string) bool {
+// Active 报告账号在给定空闲窗口内是否有请求。从未有请求的账号视为空闲。
+// 窗口按账号传入(额度脚本的停止查询间隔),不同账号可不同。
+func (t *Tracker) Active(account string, idle time.Duration) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	at, ok := t.last[account]
-	return ok && time.Since(at) < t.idle
+	return ok && time.Since(at) < idle
 }

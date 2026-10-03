@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
+	"github.com/aceaura/model-surge-upstream/backend/activity"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/model"
@@ -184,9 +185,15 @@ func (s *stubQuota) Cached(string) (quota.Report, bool) { return s.cached, s.has
 
 func (s *stubQuota) Forget(name string) { s.forgot = append(s.forgot, name) }
 
-type stubActivity struct{ active bool }
+type stubActivity struct {
+	active bool
+	idle   time.Duration
+}
 
-func (s stubActivity) Active(string) bool { return s.active }
+func (s *stubActivity) Active(_ string, idle time.Duration) bool {
+	s.idle = idle
+	return s.active
+}
 
 type stubUpstreamModels struct {
 	report upmodels.Report
@@ -764,6 +771,24 @@ func TestQuotaAutoSkipsIdleAccount(t *testing.T) {
 	}
 	if f.quota.queries != 1 {
 		t.Errorf("活跃账号的定时轮询应恢复真实查询, Query 被调 %d 次", f.quota.queries)
+	}
+}
+
+func TestQuotaAutoUsesAccountStopWindow(t *testing.T) {
+	f := newFixture(t)
+	// 未配置停止查询间隔:走默认窗口。
+	f.do(t, "GET", "/admin/accounts/kimi-1/quota?auto=1", adminKey, "")
+	if f.activity.idle != activity.DefaultIdleWindow {
+		t.Errorf("未配置时窗口 = %v, want 默认 %v", f.activity.idle, activity.DefaultIdleWindow)
+	}
+
+	// 账号额度脚本配置了 stop_interval_minutes:按账号窗口判空闲。
+	acc := f.accounts.data["kimi-1"]
+	acc.QuotaScript = &account.QuotaScript{Enabled: true, Code: "x", StopIntervalMinutes: 10}
+	f.accounts.data["kimi-1"] = acc
+	f.do(t, "GET", "/admin/accounts/kimi-1/quota?auto=1", adminKey, "")
+	if f.activity.idle != 10*time.Minute {
+		t.Errorf("配置后窗口 = %v, want 10m", f.activity.idle)
 	}
 }
 

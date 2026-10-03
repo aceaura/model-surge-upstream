@@ -261,6 +261,9 @@ func validate(in Input) (Account, error) {
 		if s.AutoIntervalMinutes < 0 || s.AutoIntervalMinutes > 1440 {
 			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script auto_interval_minutes must be between 0 and 1440")
 		}
+		if s.StopIntervalMinutes < 0 || s.StopIntervalMinutes > 1440 {
+			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script stop_interval_minutes must be between 0 and 1440")
+		}
 		in.QuotaScript = &s
 	}
 	return Account{

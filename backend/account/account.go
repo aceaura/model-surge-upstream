@@ -21,6 +21,9 @@ type QuotaScript struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// AutoIntervalMinutes 客户端自动刷新间隔,0 表示不自动刷。
 	AutoIntervalMinutes int `json:"auto_interval_minutes,omitempty"`
+	// StopIntervalMinutes 账号无请求超过该间隔后,自动刷新停打上游
+	// (0 走默认 5 分钟),下一次请求到达自动恢复。
+	StopIntervalMinutes int `json:"stop_interval_minutes,omitempty"`
 }
 
 // Active 判定脚本是否参与额度查询:启用且代码非空。

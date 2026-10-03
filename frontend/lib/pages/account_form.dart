@@ -132,6 +132,10 @@ class _AccountFormState extends State<AccountForm> {
       text: (_initialScript?.autoIntervalMinutes ?? 0) > 0
           ? '${_initialScript!.autoIntervalMinutes}'
           : '');
+  late final TextEditingController _scriptStopInterval = TextEditingController(
+      text: (_initialScript?.stopIntervalMinutes ?? 0) > 0
+          ? '${_initialScript!.stopIntervalMinutes}'
+          : '');
   bool _testingScript = false;
   String? _scriptTestResult;
   bool? _scriptTestOk;
@@ -154,6 +158,7 @@ class _AccountFormState extends State<AccountForm> {
     _scriptCode.dispose();
     _scriptTimeout.dispose();
     _scriptInterval.dispose();
+    _scriptStopInterval.dispose();
     super.dispose();
   }
 
@@ -207,6 +212,7 @@ class _AccountFormState extends State<AccountForm> {
       code: code,
       timeoutSeconds: int.tryParse(_scriptTimeout.text.trim()) ?? 0,
       autoIntervalMinutes: int.tryParse(_scriptInterval.text.trim()) ?? 0,
+      stopIntervalMinutes: int.tryParse(_scriptStopInterval.text.trim()) ?? 0,
     ).toJson();
   }
 
@@ -683,29 +689,51 @@ class _AccountFormState extends State<AccountForm> {
                 : null,
           ),
           const SizedBox(height: 14),
-          FormRow2(
-            TextFormField(
-              key: const ValueKey('quota-script-timeout'),
-              controller: _scriptTimeout,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: '超时(秒)',
-                hintText: '默认 10,上限 120',
-                border: OutlineInputBorder(),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextFormField(
+                  key: const ValueKey('quota-script-timeout'),
+                  controller: _scriptTimeout,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '超时(秒)',
+                    hintText: '默认 10,上限 120',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: _intRangeValidator(0, 120),
+                ),
               ),
-              validator: _intRangeValidator(0, 120),
-            ),
-            TextFormField(
-              key: const ValueKey('quota-script-interval'),
-              controller: _scriptInterval,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: '自动查询间隔(分钟)',
-                hintText: '0 表示不自动刷新',
-                border: OutlineInputBorder(),
+              const SizedBox(width: 18),
+              Expanded(
+                child: TextFormField(
+                  key: const ValueKey('quota-script-interval'),
+                  controller: _scriptInterval,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '自动查询间隔(分钟)',
+                    hintText: '0 表示不自动刷新',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: _intRangeValidator(0, 1440),
+                ),
               ),
-              validator: _intRangeValidator(0, 1440),
-            ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: TextFormField(
+                  key: const ValueKey('quota-script-stop-interval'),
+                  controller: _scriptStopInterval,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '停止查询间隔(分钟)',
+                    hintText: '默认 5,无请求超时停刷',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: _intRangeValidator(0, 1440),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           Row(

@@ -89,6 +89,7 @@ final accountWithScript = Account.fromJson(const {
     'code': '({request: {url: "{{baseUrl}}/x"}, extractor: function(r) { return {remaining: r.b, unit: "USD"}; }})',
     'timeout_seconds': 15,
     'auto_interval_minutes': 5,
+    'stop_interval_minutes': 8,
   },
 });
 
@@ -407,6 +408,7 @@ void main() {
         accountWithScript.quotaScript!.code);
     expect(fieldText(tester, 'quota-script-timeout'), '15');
     expect(fieldText(tester, 'quota-script-interval'), '5');
+    expect(fieldText(tester, 'quota-script-stop-interval'), '8');
     expect(
         tester
             .widget<Switch>(find.byKey(const ValueKey('quota-script-enabled')))
@@ -426,6 +428,8 @@ void main() {
     expect(script['code'], accountWithScript.quotaScript!.code);
     expect(script['timeout_seconds'], 15);
     expect(script['auto_interval_minutes'], 5);
+    expect(script['stop_interval_minutes'], 8,
+        reason: '停止查询间隔随脚本配置全量提交,0 走后端默认 5 分钟');
   });
 
   testWidgets('create without touching script section omits the key',

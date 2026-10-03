@@ -73,8 +73,8 @@ func run() error {
 	quotas.SetTokenSource(tokens)
 	upstream := upmodels.New(accounts, cfg.QuotaTTL)
 	// 账号活动追踪:转发面/对话面每服务一次请求触活一次,额度定时轮询
-	// 据此跳过 5 分钟无请求的空闲账号,直到下一次请求到达自动恢复。
-	act := activity.New(5 * time.Minute)
+	// 据此跳过停止查询间隔内无请求的空闲账号,直到下一次请求到达自动恢复。
+	act := activity.New()
 
 	// 代理转发面：独立端口、独立密钥，配置落库、运行期可改。
 	// 启动时按已存配置开监听；应用失败（如端口被占）只告警，

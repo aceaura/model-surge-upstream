@@ -5,6 +5,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/chat"
@@ -50,10 +51,10 @@ type Quota interface {
 	Forget(name string)
 }
 
-// Activity 报告账号近期是否有数据面/对话面请求,供额度定时轮询跳过
-// 空闲账号。nil 表示不装配,轮询行为与此前一致(始终真实查询)。
+// Activity 报告账号在给定空闲窗口内是否有数据面/对话面请求,供额度定时
+// 轮询跳过空闲账号。nil 表示不装配,轮询行为与此前一致(始终真实查询)。
 type Activity interface {
-	Active(accountName string) bool
+	Active(accountName string, idle time.Duration) bool
 }
 
 // UpstreamModels 查询上游账号实际可用的模型清单。
