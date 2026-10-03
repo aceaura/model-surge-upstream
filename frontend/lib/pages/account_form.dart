@@ -330,7 +330,7 @@ class _AccountFormState extends State<AccountForm> {
           _region = null;
           _resolveProvider();
         }),
-        validator: (v) => v == null ? '请选择厂商' : null,
+        validator: (v) => v == null ? '请选择提供商' : null,
       );
 
   Widget _billingDropdown() => StyledDropdownFormField(
@@ -429,7 +429,7 @@ class _AccountFormState extends State<AccountForm> {
             ),
           ),
           const SizedBox(height: 20),
-          LabeledField(label: '厂商', child: _vendorDropdown()),
+          LabeledField(label: '提供商', child: _vendorDropdown()),
           const SizedBox(height: 20),
           LabeledField(label: '计费模式', child: _billingDropdown()),
           const SizedBox(height: 20),

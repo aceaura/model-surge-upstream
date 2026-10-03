@@ -1,14 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
-/// 供应商头像:圆形 + id 首字母,配色按 id 哈希从柔和色板取,
-/// 同一 provider 在任何页面颜色一致(CC Switch 式供应商图标位)。
+/// 提供商头像:内置厂商用官方 Logo(白底圆+细描边,深浅主题下都清晰),
+/// 未知厂商回落 id 首字母 + 哈希配色圆(CC Switch 式供应商图标位)。
 class ProviderAvatar extends StatelessWidget {
   const ProviderAvatar({super.key, required this.providerId, this.size = 40});
 
   final String providerId;
   final double size;
 
-  /// (底色, 字色) 柔和色板,明暗两套。
+  /// 内置厂商 id → Logo 资源;currentColor 单色 SVG 给品牌色,
+  /// null 表示资源自带颜色(多色 Logo 或 PNG)。
+  static const _logos = <String, (String, Color?)>{
+    'anthropic': ('assets/providers/anthropic.svg', Color(0xFFD97757)),
+    'openai': ('assets/providers/openai.svg', Color(0xFF161C28)),
+    'openai-codex': ('assets/providers/openai.svg', Color(0xFF161C28)),
+    'gemini': ('assets/providers/gemini.svg', Color(0xFF1C72E0)),
+    'kimi': ('assets/providers/kimi.svg', Color(0xFF161C28)),
+    'deepseek': ('assets/providers/deepseek.svg', Color(0xFF4D6BFE)),
+    'ark': ('assets/providers/ark.png', null),
+  };
+
+  /// (底色, 字色) 柔和色板,明暗两套,供未知厂商字母头像与
+  /// 摘要带计数 chips 共用,同一 key 在任何页面/任何控件颜色一致。
   static const _light = [
     (Color(0xFFDDF2E4), Color(0xFF15803D)), // 绿
     (Color(0xFFE0ECFD), Color(0xFF2E49D6)), // 蓝
@@ -41,6 +55,33 @@ class ProviderAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final logo = _logos[providerId];
+    if (logo != null) {
+      final (asset, color) = logo;
+      final inner = size * 0.62;
+      final Widget mark = asset.endsWith('.svg')
+          ? SvgPicture.asset(
+              asset,
+              width: inner,
+              height: inner,
+              colorFilter: color != null
+                  ? ColorFilter.mode(color, BlendMode.srcIn)
+                  : null,
+            )
+          : Image.asset(asset, width: inner, height: inner);
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFFE3E6EE)),
+        ),
+        alignment: Alignment.center,
+        child: mark,
+      );
+    }
+
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (bg, fg) = colorsFor(providerId, dark: dark);
     final letter = providerId.isEmpty ? '?' : providerId[0].toUpperCase();
