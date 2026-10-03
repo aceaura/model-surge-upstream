@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/gestures.dart';
@@ -389,6 +390,89 @@ void main() {
     // 冲刷失败提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('发送等待期间输入框提示切换为思考中,回复后还原', (tester) async {
+    // codex 非流式等待可达几十秒:输入框清空后必须给出等待反馈。
+    final gate = Completer<void>();
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final p = request.url.path;
+        Object? payload;
+        if (request.method == 'GET' && p == '/admin/chat/sessions') {
+          payload = {
+            'sessions': [
+              {
+                'id': 's1',
+                'title': '旧对话',
+                'model_id': 'kimi-1/k2',
+                'updated_at': '2026-09-16T10:00:00Z',
+              },
+            ],
+          };
+        } else if (request.method == 'GET' && p == '/admin/models') {
+          payload = {'models': _Stub.models};
+        } else if (request.method == 'GET' &&
+            p == '/admin/chat/sessions/s1/messages') {
+          payload = {
+            'session': {
+              'id': 's1',
+              'title': '旧对话',
+              'model_id': 'kimi-1/k2',
+              'updated_at': '2026-09-16T10:00:00Z',
+            },
+            'messages': <dynamic>[],
+          };
+        } else if (request.method == 'POST' &&
+            p == '/admin/chat/sessions/s1/messages') {
+          await gate.future;
+          payload = {
+            'messages': [
+              {
+                'id': 1,
+                'session_id': 's1',
+                'role': 'user',
+                'content': '你好',
+                'created_at': '2026-10-03T18:00:00Z',
+              },
+              {
+                'id': 2,
+                'session_id': 's1',
+                'role': 'assistant',
+                'content': '在的',
+                'created_at': '2026-10-03T18:00:05Z',
+              },
+            ],
+          };
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: ChatPage(client: client, imageSource: _FakeImageSource()),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump(); // 进入 _sending,回复未归
+
+    expect(find.text('正在思考，请稍候…'), findsOneWidget);
+    expect(find.text('输入消息… Enter 发送，Shift+Enter 换行'), findsNothing);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('输入消息… Enter 发送，Shift+Enter 换行'), findsOneWidget,
+        reason: '回复落屏后提示还原');
+    expect(find.text('正在思考，请稍候…'), findsNothing);
   });
 
   testWidgets('重新激活(active false→true)静默重拉模型与会话,选择器能看到新建模型',

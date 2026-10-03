@@ -784,10 +784,12 @@ class _ChatPageState extends State<ChatPage> {
               minLines: 1,
               maxLines: 5,
               textInputAction: TextInputAction.newline,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 border: InputBorder.none,
                 isCollapsed: true,
-                hintText: '输入消息… Enter 发送，Shift+Enter 换行',
+                // 发送等待(codex 非流式一等就是几十秒)时把提示切到「思考中」,
+                // 否则输入框清空后毫无等待反馈,像消息没发出去。
+                hintText: _sending ? '正在思考，请稍候…' : '输入消息… Enter 发送，Shift+Enter 换行',
               ),
             ),
             if (_pending.isNotEmpty)
