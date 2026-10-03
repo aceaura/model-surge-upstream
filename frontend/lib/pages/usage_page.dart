@@ -793,35 +793,106 @@ String _fmtTime(DateTime t) {
 }
 
 /// 四序列折线图。纵轴按最大值自适应，横轴标签按桶数抽稀。
-class _TrendChart extends StatelessWidget {
+class _TrendChart extends StatefulWidget {
   const _TrendChart({required this.buckets, required this.granularity});
 
   final List<UsageBucket> buckets;
   final String granularity;
 
   @override
+  State<_TrendChart> createState() => _TrendChartState();
+}
+
+class _TrendChartState extends State<_TrendChart> {
+  Offset? _hover;
+
+  @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final buckets = widget.buckets;
     if (buckets.isEmpty) {
       return Center(child: Text('该区间暂无趋势数据', style: TextStyle(fontSize: 12.5, color: t.faint)));
     }
-    return CustomPaint(
-      painter: _TrendPainter(
-        buckets: buckets,
-        granularity: granularity,
-        ink: t.ink,
-        faint: t.faint,
-        border: t.border,
-        series: [
-          (b) => b.totals.cacheWrite.toDouble(),
-          (b) => b.totals.cacheRead.toDouble(),
-          (b) => b.totals.input.toDouble(),
-          (b) => b.totals.output.toDouble(),
-        ],
-        colors: [t.warn, t.violet, t.primary, t.success],
-      ),
-      size: Size.infinite,
-    );
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = constraints.biggest;
+      final plot = _TrendPainter.plotRect(size);
+      final hover = _hover;
+      final selected = hover != null && plot.contains(hover)
+          ? (buckets.length == 1
+              ? 0
+              : ((hover.dx - plot.left) / plot.width * (buckets.length - 1))
+                  .round().clamp(0, buckets.length - 1))
+          : null;
+      final colors = [t.warn, t.violet, t.primary, t.success];
+      final bucket = selected == null ? null : buckets[selected];
+      final tooltipWidth = size.width.clamp(0.0, 210.0).toDouble();
+      return MouseRegion(
+        key: const ValueKey('usage-trend-chart'),
+        onHover: (event) => setState(() => _hover = event.localPosition),
+        onExit: (_) => setState(() => _hover = null),
+        child: Stack(children: [
+          Positioned.fill(child: CustomPaint(
+            painter: _TrendPainter(
+              buckets: buckets,
+              granularity: widget.granularity,
+              ink: t.ink,
+              faint: t.faint,
+              border: t.border,
+              selected: selected,
+              series: [
+                (b) => b.totals.cacheWrite.toDouble(),
+                (b) => b.totals.cacheRead.toDouble(),
+                (b) => b.totals.input.toDouble(),
+                (b) => b.totals.output.toDouble(),
+              ],
+              colors: colors,
+            ),
+          )),
+          if (bucket != null)
+            Positioned(
+              left: (hover!.dx + 16 + tooltipWidth <= size.width
+                      ? hover.dx + 16
+                      : hover.dx - tooltipWidth - 16)
+                  .clamp(0.0, size.width - tooltipWidth).toDouble(),
+              top: (hover.dy - 70).clamp(0.0, size.height - 150).toDouble(),
+              child: IgnorePointer(child: Container(
+                key: const ValueKey('usage-trend-tooltip'),
+                width: tooltipWidth,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: t.surface,
+                  border: Border.all(color: t.border),
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 16, offset: Offset(0, 4))],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_fmtTime(bucket.bucket).substring(0, 11),
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.ink)),
+                    const SizedBox(height: 8),
+                    for (final row in [
+                      ('输入', bucket.totals.input, colors[2]),
+                      ('输出', bucket.totals.output, colors[3]),
+                      ('缓存创建', bucket.totals.cacheWrite, colors[0]),
+                      ('缓存命中', bucket.totals.cacheRead, colors[1]),
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(children: [
+                          Container(width: 7, height: 7, decoration: BoxDecoration(color: row.$3, shape: BoxShape.circle)),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text('${row.$1}: ${row.$2}', style: TextStyle(fontSize: 12, color: row.$3))),
+                        ]),
+                      ),
+                  ],
+                ),
+              )),
+            ),
+        ]),
+      );
+    });
   }
 }
 
@@ -834,6 +905,7 @@ class _TrendPainter extends CustomPainter {
     required this.border,
     required this.series,
     required this.colors,
+    required this.selected,
   });
 
   final List<UsageBucket> buckets;
@@ -841,11 +913,14 @@ class _TrendPainter extends CustomPainter {
   final Color ink, faint, border;
   final List<double Function(UsageBucket)> series;
   final List<Color> colors;
+  final int? selected;
+
+  static Rect plotRect(Size size) =>
+      Rect.fromLTRB(46, 8, size.width - 8, size.height - 26);
 
   @override
   void paint(Canvas canvas, Size size) {
-    const left = 46.0, right = 8.0, top = 8.0, bottom = 26.0;
-    final plot = Rect.fromLTRB(left, top, size.width - right, size.height - bottom);
+    final plot = plotRect(size);
     if (plot.width <= 0 || plot.height <= 0) return;
 
     double maxV = 1;
@@ -902,6 +977,17 @@ class _TrendPainter extends CustomPainter {
       }
     }
 
+    if (selected != null) {
+      final x = point(selected!, 0).dx;
+      canvas.drawLine(Offset(x, plot.top), Offset(x, plot.bottom),
+          Paint()..color = faint.withValues(alpha: .5)..strokeWidth = 1);
+      for (var s = 0; s < series.length; s++) {
+        final p = point(selected!, series[s](buckets[selected!]));
+        canvas.drawCircle(p, 4, Paint()..color = colors[s]);
+        canvas.drawCircle(p, 4, Paint()..color = border..style = PaintingStyle.stroke..strokeWidth = 1.5);
+      }
+    }
+
     // 横轴标签抽稀：最多 8 个。
     final step = (n / 8).ceil();
     for (var i = 0; i < n; i += step) {
@@ -923,7 +1009,9 @@ class _TrendPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_TrendPainter old) =>
-      old.buckets != buckets || old.granularity != granularity;
+      old.buckets != buckets || old.granularity != granularity ||
+      old.selected != selected || old.ink != ink || old.faint != faint ||
+      old.border != border;
 }
 
 /// 页头过滤器下拉：描边小按钮触发器，菜单用 Overlay 落在触发器正下方、

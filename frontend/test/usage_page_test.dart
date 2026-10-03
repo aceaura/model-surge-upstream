@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -15,7 +16,7 @@ import 'package:msu_admin/theme.dart';
 ///
 /// 接口全部打桩:页面加载只依赖 models/summary/trend/logs 四个端点,
 /// 返回空集合即可把页面渲染出来。
-ApiClient _stubClient({void Function(Uri uri)? onRequest}) {
+ApiClient _stubClient({void Function(Uri uri)? onRequest, List<Map<String, Object>> buckets = const []}) {
   final mock = MockClient((req) async {
     onRequest?.call(req.url);
     final path = req.url.path;
@@ -23,7 +24,7 @@ ApiClient _stubClient({void Function(Uri uri)? onRequest}) {
     if (path.endsWith('/admin/models')) {
       body = {'models': const []};
     } else if (path.endsWith('/usage/trend')) {
-      body = {'granularity': 'hour', 'buckets': const []};
+      body = {'granularity': 'hour', 'buckets': buckets};
     } else if (path.endsWith('/usage/logs')) {
       body = {'logs': const [], 'total': 0};
     } else if (path.endsWith('/usage/accounts')) {
@@ -142,6 +143,57 @@ void main() {
         .map((u) => u.path)
         .toSet();
     expect(filtered, containsAll(['/admin/usage/summary', '/admin/usage/trend', '/admin/usage/logs']));
+
+    await _unmount(tester);
+  });
+
+  testWidgets('趋势图鼠标悬停:显示最近时间桶的四项数据浮动面板,移出隐藏',
+      (tester) async {
+    final buckets = <Map<String, Object>>[
+      {
+        'bucket': '2026-10-03T12:00:00Z',
+        'input_tokens': 100, 'output_tokens': 20,
+        'cache_write_tokens': 0, 'cache_read_tokens': 0,
+      },
+      {
+        'bucket': '2026-10-03T13:00:00Z',
+        'input_tokens': 400, 'output_tokens': 40,
+        'cache_write_tokens': 5, 'cache_read_tokens': 300,
+      },
+      {
+        'bucket': '2026-10-03T14:00:00Z',
+        'input_tokens': 700, 'output_tokens': 60,
+        'cache_write_tokens': 9, 'cache_read_tokens': 500,
+      },
+    ];
+    await _pumpUsage(tester, client: _stubClient(buckets: buckets));
+
+    // 趋势卡在页面中下部,放大测试视口确保图表在可视区内可被悬停命中。
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('usage-trend-tooltip')), findsNothing);
+    final chart = tester.getRect(find.byKey(const ValueKey('usage-trend-chart')));
+
+    // 三个桶按等间距分布,悬停在右端桶(14:00)附近(略入绘图区,右缘为开区间)。
+    final hover = Offset(chart.right - 12, chart.top + 110);
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(gesture.removePointer);
+    await gesture.addPointer();
+    await gesture.moveTo(hover);
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('usage-trend-tooltip')), findsOneWidget);
+    expect(find.text('输入: 700'), findsOneWidget);
+    expect(find.text('输出: 60'), findsOneWidget);
+    expect(find.text('缓存创建: 9'), findsOneWidget);
+    expect(find.text('缓存命中: 500'), findsOneWidget);
+
+    await gesture.moveTo(Offset.zero);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('usage-trend-tooltip')), findsNothing);
 
     await _unmount(tester);
   });
