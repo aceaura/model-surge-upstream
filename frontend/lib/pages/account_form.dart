@@ -865,7 +865,7 @@ class _AccountFormState extends State<AccountForm> {
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
                     labelText: '停止查询间隔(分钟)',
-                    hintText: '默认 5,无请求超时停刷',
+                    hintText: '默认5分钟',
                     border: OutlineInputBorder(),
                   ),
                   validator: _intRangeValidator(0, 1440),
