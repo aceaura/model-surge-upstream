@@ -181,7 +181,13 @@ class _AdminShellState extends State<AdminShell> {
         'chat',
         Icons.chat_bubble_outline_rounded,
         '对话',
-        () => ChatPage(client: client, onOpenSettings: _openSettings),
+        () => ChatPage(
+          client: client,
+          onOpenSettings: _openSettings,
+          // IndexedStack 常驻:切回本页时按 active 沿静默刷新一次,
+          // 否则别处新建的模型进不了会话的模型选择器。
+          active: _page == 'chat',
+        ),
       ),
       _NavItem(
         'usage',

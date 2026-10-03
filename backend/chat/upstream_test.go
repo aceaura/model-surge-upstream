@@ -1,9 +1,15 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -296,5 +302,182 @@ func TestExtractReplyErrors(t *testing.T) {
 	}
 	if _, err := extractReply(provider.ProtocolGemini, []byte(`{}`)); err == nil {
 		t.Fatal("缺少 candidates 应返回错误")
+	}
+}
+
+func codexTarget(baseURL string) resolve.ResolvedTarget {
+	return resolve.ResolvedTarget{
+		ModelID:     "codex-1/gpt-6.1-sol",
+		Account:     "codex-1",
+		ProviderID:  codex.ProviderID,
+		Protocol:    provider.ProtocolResponses,
+		BaseURL:     baseURL,
+		NativeModel: "gpt-6.1-sol",
+		Headers:     map[string]string{"Authorization": "Bearer at"},
+	}
+}
+
+// codex 目标：路径映射 /v1/responses→/responses、体硬约束（store=false、
+// stream=true、instructions 注入、采样参数剥除）、会话头按账号+会话派生，
+// SSE 响应聚合成整轮回复与用量。
+func TestCompleteCodexShapingAndSSE(t *testing.T) {
+	var gotPath, gotSession, gotConversation, gotClientReq string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotSession = r.Header.Get("session_id")
+		gotConversation = r.Header.Get("conversation_id")
+		gotClientReq = r.Header.Get("x-client-request-id")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"好\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"你好\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	target := codexTarget(srv.URL)
+	target.Overrides = json.RawMessage(`{"temperature":0.9,"store":true}`)
+	history := []Message{{Role: RoleUser, Content: "hi"}}
+	reply, u, status, err := Complete(context.Background(), target, "sess-1", history)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if gotPath != "/responses" {
+		t.Errorf("path = %q, want /responses (MapSuffix)", gotPath)
+	}
+	if gotBody["store"] != false || gotBody["stream"] != true {
+		t.Errorf("store/stream = %v/%v, want forced false/true", gotBody["store"], gotBody["stream"])
+	}
+	if _, ok := gotBody["temperature"]; ok {
+		t.Error("sampling params must be stripped")
+	}
+	if inst, _ := gotBody["instructions"].(string); inst == "" {
+		t.Error("instructions should be injected when absent")
+	}
+	if _, ok := gotBody["input"].([]any); !ok {
+		t.Errorf("input must be a list, got %T", gotBody["input"])
+	}
+	wantSID := codex.SessionID("codex-1", "sess-1")
+	if gotSession != wantSID || gotConversation != wantSID {
+		t.Errorf("session headers = %q/%q, want %q", gotSession, gotConversation, wantSID)
+	}
+	if gotClientReq == "" {
+		t.Error("x-client-request-id should be set")
+	}
+	if reply != "你好" {
+		t.Errorf("reply = %q, want completed 事件的整轮文本", reply)
+	}
+	if u.InputTokens != 5 || u.OutputTokens != 2 {
+		t.Errorf("usage = %+v, want 5/2 from response.completed", u)
+	}
+}
+
+// codex 上游事件流的 Content-Type 实测是 text/plain,不能靠响应头判 SSE。
+func TestCompleteCodexSSEWithPlainContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprint(w, "event: response.created\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"ok\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
+	}))
+	defer srv.Close()
+
+	reply, u, _, err := Complete(context.Background(), codexTarget(srv.URL), "s",
+		[]Message{{Role: RoleUser, Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if reply != "ok" || u.InputTokens != 1 {
+		t.Errorf("reply/usage = %q/%+v, want ok/1", reply, u)
+	}
+}
+
+// completed 缺失时回落 delta 拼接，用量为零值但不报错。
+func TestCompleteCodexSSEDeltaFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ab\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"cd\"}\n\n")
+	}))
+	defer srv.Close()
+
+	reply, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s",
+		[]Message{{Role: RoleUser, Content: "hi"}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if reply != "abcd" {
+		t.Errorf("reply = %q, want joined deltas", reply)
+	}
+}
+
+// 流里既无 completed 也无 delta：判上游异常，不静默回空串。
+func TestCompleteCodexSSEEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\n")
+	}))
+	defer srv.Close()
+
+	_, _, _, err := Complete(context.Background(), codexTarget(srv.URL), "s",
+		[]Message{{Role: RoleUser, Content: "hi"}})
+	if err == nil {
+		t.Fatal("empty stream must be an error")
+	}
+}
+
+// 非 codex 目标回归基线：路径不映射、不加会话头、非流式 JSON 照常解析。
+func TestCompleteNonCodexUnchanged(t *testing.T) {
+	var gotPath, gotSession string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotSession = r.Header.Get("session_id")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"pong"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	target := resolve.ResolvedTarget{
+		ModelID:     "a/b",
+		Account:     "a",
+		ProviderID:  "openai",
+		Protocol:    provider.ProtocolChatCompletions,
+		BaseURL:     srv.URL,
+		NativeModel: "b",
+	}
+	reply, u, _, err := Complete(context.Background(), target, "s",
+		[]Message{{Role: RoleUser, Content: "ping"}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("path = %q, want unmapped /v1/chat/completions", gotPath)
+	}
+	if gotSession != "" {
+		t.Errorf("session_id = %q, want unset for non-codex", gotSession)
+	}
+	if reply != "pong" || u.InputTokens != 3 {
+		t.Errorf("reply/usage = %q/%+v, want pong/3", reply, u)
+	}
+}
+
+// 同账号同会话的 session_id 恒定，换会话即变（隔离语义与转发面一致）。
+func TestCodexSessionIDStablePerSession(t *testing.T) {
+	a := codex.SessionID("codex-1", "sess-1")
+	b := codex.SessionID("codex-1", "sess-1")
+	c := codex.SessionID("codex-1", "sess-2")
+	if a != b {
+		t.Error("same account+session must derive the same id")
+	}
+	if a == c {
+		t.Error("different sessions must not share an id")
+	}
+	if !strings.Contains(a, "-") {
+		t.Errorf("id %q should look like a UUID", a)
 	}
 }

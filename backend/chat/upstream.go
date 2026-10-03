@@ -3,6 +3,8 @@ package chat
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -26,10 +29,21 @@ const respSnippet = 300
 // Complete 按目标模型的出站协议构造请求、调用上游并抽取回复文本与用量。
 // history 含本轮用户消息（调用方已追加）。不做流式：对话页整轮等待，
 // 换取四协议一套简单可靠的解析路径。返回上游 HTTP 状态码供用量统计记失败率。
-func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Message) (string, usage.Usage, int, error) {
+//
+// codex(openai-codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
+// 这里把整段事件流读完后聚合回整轮（见 extractReplySSE），对外仍是非流式语义。
+// sessionKey 用于派生 codex 的 session_id/conversation_id 头（转发面同款，
+// 按账号+会话稳定），其余协议忽略。
+func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey string, history []Message) (string, usage.Usage, int, error) {
 	suffix, body, err := buildRequest(target, history)
 	if err != nil {
 		return "", usage.Usage{}, 0, err
+	}
+	// codex 硬约束(store/stream/剥采样参数/instructions)与路径映射最后应用，
+	// 压过 defaults/overrides——与转发面、连通性检测同一顺序。
+	if target.ProviderID == codex.ProviderID {
+		body = codex.ShapeBody(body, target.NativeModel)
+		suffix = codex.MapSuffix(suffix)
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -47,6 +61,13 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Mess
 	for k, v := range target.Headers {
 		req.Header.Set(k, v)
 	}
+	if target.ProviderID == codex.ProviderID {
+		// 会话头由服务端按账号+会话派生（sub2api 同款隔离），不接收客户端值。
+		sid := codex.SessionID(target.Account, sessionKey)
+		req.Header.Set("session_id", sid)
+		req.Header.Set("conversation_id", sid)
+		req.Header.Set("x-client-request-id", randomUUID())
+	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -63,7 +84,14 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, history []Mess
 		return "", u, resp.StatusCode, apperr.New(apperr.UpstreamUnavailable,
 			fmt.Sprintf("上游返回 HTTP %d：%s", resp.StatusCode, snippet(raw)))
 	}
-	reply, err := extractReply(target.Protocol, raw)
+	var reply string
+	// codex 强制 stream=true，响应恒为事件流——但它 Content-Type 报
+	// text/plain（2026-10-03 实测），不能靠响应头判，按请求侧定型。
+	if target.ProviderID == codex.ProviderID || isEventStream(resp.Header) {
+		reply, u, err = extractReplySSE(target.Protocol, raw)
+	} else {
+		reply, err = extractReply(target.Protocol, raw)
+	}
 	if err != nil {
 		return "", u, resp.StatusCode, err
 	}
@@ -302,6 +330,90 @@ func extractReply(protocol string, raw []byte) (string, error) {
 	default:
 		return "", apperr.New(apperr.InvalidProtocol, fmt.Sprintf("unknown protocol %q", protocol))
 	}
+}
+
+// isEventStream 判定响应是否 SSE。codex 强制 stream=true，响应恒走这条。
+func isEventStream(h http.Header) bool {
+	return strings.Contains(strings.ToLower(h.Get("Content-Type")), "text/event-stream")
+}
+
+// extractReplySSE 把 responses 协议的 SSE 流聚合回整轮：回复文本优先取
+// response.completed 里的完整响应（与非流式同一条 extractReply 路径），
+// 没有 completed 时回落 output_text.delta 拼接；用量同样取自 completed。
+func extractReplySSE(protocol string, raw []byte) (string, usage.Usage, error) {
+	if protocol != provider.ProtocolResponses {
+		return "", usage.Usage{}, apperr.New(apperr.UpstreamUnavailable,
+			fmt.Sprintf("protocol %q returned an unexpected event stream", protocol))
+	}
+	var deltas strings.Builder
+	var completed map[string]any
+	for _, ev := range sseDataEvents(raw) {
+		switch ev["type"] {
+		case "response.output_text.delta":
+			if d, _ := ev["delta"].(string); d != "" {
+				deltas.WriteString(d)
+			}
+		case "response.completed":
+			if resp, ok := ev["response"].(map[string]any); ok {
+				completed = resp
+			}
+		}
+	}
+	if completed == nil {
+		if deltas.Len() == 0 {
+			return "", usage.Usage{}, apperr.New(apperr.UpstreamUnavailable,
+				"上游事件流中没有 response.completed 事件："+snippet(raw))
+		}
+		return deltas.String(), usage.Usage{}, nil
+	}
+	enc, err := json.Marshal(completed)
+	if err != nil {
+		return "", usage.Usage{}, apperr.Wrap(apperr.InvalidJSON, "encode completed response", err)
+	}
+	u, _ := usage.FromResponse(protocol, enc)
+	reply, err := extractReply(protocol, enc)
+	if err != nil {
+		return "", u, err
+	}
+	if reply == "" {
+		reply = deltas.String()
+	}
+	return reply, u, nil
+}
+
+// sseDataEvents 抽出事件流里所有 data: 行的 JSON 对象；[DONE] 与
+// 解析失败的行跳过（统计/回复只认完整事件，残行没有可用信息）。
+func sseDataEvents(raw []byte) []map[string]any {
+	var out []map[string]any
+	for _, line := range strings.Split(string(raw), "\n") {
+		data, ok := strings.CutPrefix(strings.TrimSpace(line), "data:")
+		if !ok {
+			continue
+		}
+		data = strings.TrimSpace(data)
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var obj map[string]any
+		if json.Unmarshal([]byte(data), &obj) == nil {
+			out = append(out, obj)
+		}
+	}
+	return out
+}
+
+// randomUUID 生成 v4 形态 UUID，供 x-client-request-id 使用（转发面同款）。
+func randomUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		hex.EncodeToString(b[0:4]), hex.EncodeToString(b[4:6]),
+		hex.EncodeToString(b[6:8]), hex.EncodeToString(b[8:10]),
+		hex.EncodeToString(b[10:16]))
 }
 
 // rawObject 把 defaults/overrides 读成对象；空或 null 视为 {}。

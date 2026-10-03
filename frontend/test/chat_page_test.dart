@@ -9,6 +9,7 @@ import 'package:msu_admin/api_client.dart';
 import 'package:msu_admin/attachments/image_source.dart';
 import 'package:msu_admin/pages/chat_page.dart';
 import 'package:msu_admin/theme.dart';
+import 'package:msu_admin/ui/styled_dropdown.dart';
 
 /// 1×1 透明 PNG：气泡/缩略图渲染断言用，解码必须能真过。
 const kTinyPng =
@@ -388,5 +389,105 @@ void main() {
     // 冲刷失败提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('重新激活(active false→true)静默重拉模型与会话,选择器能看到新建模型',
+      (tester) async {
+    // 页在 IndexedStack 里常驻:别处(模型页/API)新建模型后切回对话页,
+    // 必须重拉模型列表,否则选择器里永远没有新模型。
+    var modelsCalls = 0;
+    var sessionsCalls = 0;
+    final models = <Map<String, dynamic>>[
+      {
+        'id': 'kimi-1/k2',
+        'account': 'kimi-1',
+        'native_model': 'kimi-k2',
+        'protocol': 'anthropic',
+        'context_window': 0,
+        'defaults': <String, dynamic>{},
+        'overrides': <String, dynamic>{},
+        'enabled': true,
+      },
+    ];
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final p = request.url.path;
+        Object? payload;
+        if (request.method == 'GET' && p == '/admin/chat/sessions') {
+          sessionsCalls++;
+          payload = {
+            'sessions': [
+              {
+                'id': 's1',
+                'title': '旧对话',
+                'model_id': 'kimi-1/k2',
+                'updated_at': '2026-09-16T10:00:00Z',
+              },
+            ],
+          };
+        } else if (request.method == 'GET' && p == '/admin/models') {
+          modelsCalls++;
+          payload = {'models': models};
+        } else if (p == '/admin/chat/sessions/s1/messages') {
+          payload = {
+            'session': {
+              'id': 's1',
+              'title': '旧对话',
+              'model_id': 'kimi-1/k2',
+              'updated_at': '2026-09-16T10:00:00Z',
+            },
+            'messages': <dynamic>[],
+          };
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+
+    Widget host(bool active) => MaterialApp(
+          theme: buildAppTheme(),
+          home: Scaffold(
+            body: ChatPage(
+              client: client,
+              active: active,
+              imageSource: _FakeImageSource(),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(host(false));
+    await tester.pumpAndSettle();
+    expect(modelsCalls, 1, reason: '首载一次');
+    expect(sessionsCalls, 1);
+
+    await tester.pumpWidget(host(false));
+    await tester.pumpAndSettle();
+    expect(modelsCalls, 1, reason: '保持后台不重拉');
+    expect(sessionsCalls, 1);
+
+    // 别处新建了模型,切回对话页。
+    models.add({
+      'id': 'codex-1/gpt-6.1-sol',
+      'account': 'codex-1',
+      'native_model': 'gpt-6.1-sol',
+      'protocol': 'responses',
+      'context_window': 0,
+      'defaults': <String, dynamic>{},
+      'overrides': <String, dynamic>{},
+      'enabled': true,
+    });
+    await tester.pumpWidget(host(true));
+    await tester.pumpAndSettle();
+    expect(modelsCalls, 2, reason: '激活沿重拉一次');
+    expect(sessionsCalls, 2);
+
+    // 新模型进了选择器选项。
+    await tester.tap(find.byType(StyledDropdown));
+    await tester.pumpAndSettle();
+    expect(find.text('codex-1/gpt-6.1-sol'), findsOneWidget);
   });
 }

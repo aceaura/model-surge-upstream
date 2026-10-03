@@ -368,7 +368,7 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content string, 
 	history = append(history, user)
 
 	start := time.Now()
-	reply, u, status, err := Complete(ctx, target, history)
+	reply, u, status, err := Complete(ctx, target, sessionID, history)
 	elapsed := time.Since(start)
 	if s.record != nil {
 		errMsg := ""

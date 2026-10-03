@@ -141,14 +141,18 @@ class _StyledDropdownState extends State<StyledDropdown> {
                     color: t.primarySoft, borderRadius: BorderRadius.circular(8))
                 : null,
             child: Row(children: [
-              Text(_label(o),
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: sel ? t.primaryInk : t.ink,
-                    fontWeight: sel ? FontWeight.w600 : null,
-                    fontFamily: AppConst.fontFamily,
-                    fontFamilyFallback: AppConst.fontFallback,
-                  )),
+              // 与触发器同款省略:长选项(如 codex-1/gpt-6.1-sol)不撑破行宽
+              Expanded(
+                child: Text(_label(o),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: sel ? t.primaryInk : t.ink,
+                      fontWeight: sel ? FontWeight.w600 : null,
+                      fontFamily: AppConst.fontFamily,
+                      fontFamilyFallback: AppConst.fontFallback,
+                    )),
+              ),
               const Spacer(),
               if (sel) Icon(Icons.check, size: 15, color: t.primary),
             ]),

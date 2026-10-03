@@ -18,11 +18,20 @@ import '../ui/top_toast.dart';
 /// 补全走服务端：按所选模型的出站协议透传上游，整段历史落库可回看。
 /// 输入区支持图片附件：回形针选图或 Ctrl+V 粘贴截图，随消息内嵌上行。
 class ChatPage extends StatefulWidget {
-  ChatPage({super.key, required this.client, this.onOpenSettings, ImageSource? imageSource})
+  ChatPage(
+      {super.key,
+      required this.client,
+      this.onOpenSettings,
+      this.active = false,
+      ImageSource? imageSource})
       : imageSource = imageSource ?? SystemImageSource();
 
   final ApiClient client;
   final VoidCallback? onOpenSettings;
+
+  /// 是否正处于前台(由主壳按当前导航传入)。页在 IndexedStack 里常驻,
+  /// 别处新建的模型/会话不会触发本页重建,重新激活时静默刷新一次。
+  final bool active;
 
   /// 取图途径：生产用系统实现，widget 测试注入 fake。
   final ImageSource imageSource;
@@ -51,6 +60,31 @@ class _ChatPageState extends State<ChatPage> {
     super.initState();
     _inputFocus.onKeyEvent = _onInputKey;
     _load();
+  }
+
+  @override
+  void didUpdateWidget(ChatPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 重新激活(false→true)时静默刷新:别处的改动(新建模型/会话等)
+    // 不会触发常驻页重建,不刷新会在选择器里看不到新模型。
+    if (!oldWidget.active && widget.active) _refreshQuiet();
+  }
+
+  /// 激活沿刷新:只重拉会话与模型列表,不翻 _loadingSessions——
+  /// 每次切页都闪整页加载态比旧快照更伤体验;当前会话与消息不动。
+  Future<void> _refreshQuiet() async {
+    try {
+      final sessions = await widget.client.listChatSessions();
+      final models = await widget.client.listModels();
+      if (!mounted) return;
+      setState(() {
+        _sessions = sessions;
+        _models = models.where((m) => m.enabled).toList();
+      });
+      _syncModelChoice();
+    } catch (_) {
+      // 静默刷新失败不打扰:保留旧快照,显式重试走 _load 的错误路径。
+    }
   }
 
   @override
