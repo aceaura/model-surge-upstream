@@ -206,6 +206,11 @@ ThemeData _build(AppTokens t, Brightness brightness) {
         borderRadius: BorderRadius.circular(AppConst.radiusCtrl),
         borderSide: BorderSide(color: t.border),
       ),
+      // 禁用态沿用启用态边框(如编辑表单账号名灰框),只留灰字作不可改提示
+      disabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppConst.radiusCtrl),
+        borderSide: BorderSide(color: t.border),
+      ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppConst.radiusCtrl),
         borderSide: BorderSide(color: t.primary, width: 1.5),
