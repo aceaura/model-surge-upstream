@@ -182,6 +182,10 @@ void main() {
         reason: '基本信息副标题不再拼接具体访问地址');
     expect(find.byKey(const ValueKey('account-api-key')), findsOneWidget,
         reason: '主信息默认展开,字段直接可见');
+    expect(find.text('ds-1'), findsOneWidget,
+        reason: '编辑态账号名只读展示');
+    expect(find.byKey(const ValueKey('account-name')), findsNothing,
+        reason: '资源键不可改,不渲染可编辑名框');
 
     // 折叠再展开,已填内容不丢(分栏只裁剪不卸载)。
     await tester.tap(find.text('基本信息'));

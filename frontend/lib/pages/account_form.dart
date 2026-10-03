@@ -332,11 +332,26 @@ class _AccountFormState extends State<AccountForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 编辑时账号名不可改(标题已含),厂商独占整行;
-          // 新建时厂商与账号名并排(CC Switch 式双列);
+          // 编辑时账号名是资源键不可改,只读展示(不套禁用框)与厂商并排;
+          // 新建时厂商与账号名输入框并排(CC Switch 式双列);
           // 计费模式/服务区域是级联的下两级,并排一行,从上至下依次解锁
           if (_isEdit)
-            LabeledField(label: '厂商', child: _vendorDropdown())
+            FormRow2(
+              LabeledField(label: '厂商', child: _vendorDropdown()),
+              LabeledField(
+                label: '账号名',
+                child: SizedBox(
+                  // 与左侧下拉触发器同高,两侧齐平
+                  height: 48,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(widget.editing!.name,
+                        key: const ValueKey('account-name-readonly'),
+                        style: const TextStyle(fontSize: 13)),
+                  ),
+                ),
+              ),
+            )
           else
             FormRow2(
               LabeledField(label: '厂商', child: _vendorDropdown()),
