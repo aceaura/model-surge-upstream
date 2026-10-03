@@ -149,7 +149,7 @@ func fromOpenAIObject(obj map[string]any) (Usage, bool) {
 	return Usage{
 		InputTokens:     num(u, "prompt_tokens"),
 		OutputTokens:    num(u, "completion_tokens"),
-		CacheReadTokens: openaiCachedTokens(u),
+		CacheReadTokens: openaiCachedTokens(u, "prompt_tokens_details"),
 		Semantics:       SemanticsTotal,
 		Model:           str(obj, "model"),
 		MessageID:       str(obj, "id"),
@@ -165,38 +165,38 @@ func fromResponsesObject(obj map[string]any) (Usage, bool) {
 	return Usage{
 		InputTokens:     num(u, "input_tokens"),
 		OutputTokens:    num(u, "output_tokens"),
-		CacheReadTokens: openaiCachedTokens(u),
+		CacheReadTokens: openaiCachedTokens(u, "input_tokens_details"),
 		Semantics:       SemanticsTotal,
 		Model:           str(obj, "model"),
 		MessageID:       str(obj, "id"),
 	}, true
 }
 
-// openaiCachedTokens 取缓存读取数：chat 族在 prompt_tokens_details.cached_tokens，
-// responses 族在 input_tokens_details.cached_tokens，两处都认。
-func openaiCachedTokens(u map[string]any) int64 {
-	for _, key := range []string{"prompt_tokens_details", "input_tokens_details"} {
-		if d := sub(u, key); d != nil {
-			if c := num(d, "cached_tokens"); c > 0 {
-				return c
-			}
-		}
+func openaiCachedTokens(u map[string]any, detailsKey string) int64 {
+	if d := sub(u, detailsKey); has(d, "cached_tokens") {
+		return num(d, "cached_tokens")
+	}
+	if detailsKey == "prompt_tokens_details" && has(u, "prompt_cache_hit_tokens") {
+		return num(u, "prompt_cache_hit_tokens")
 	}
 	return num(u, "cached_tokens")
 }
 
-// fromGeminiObject：usageMetadata.promptTokenCount 含缓存读取；
-// 输出 = total - prompt（含 thoughts），与 CC Switch 口径一致。
+// fromGeminiObject：usageMetadata.promptTokenCount 含缓存读取。
 func fromGeminiObject(obj map[string]any) (Usage, bool) {
 	m := sub(obj, "usageMetadata")
 	if m == nil || !has(m, "promptTokenCount") {
 		return Usage{}, false
 	}
 	prompt := num(m, "promptTokenCount")
-	total := num(m, "totalTokenCount")
-	out := total - prompt
-	if out < 0 {
-		out = num(m, "candidatesTokenCount")
+	out := int64(0)
+	if has(m, "candidatesTokenCount") || has(m, "thoughtsTokenCount") {
+		out = num(m, "candidatesTokenCount") + num(m, "thoughtsTokenCount")
+	} else {
+		out = num(m, "totalTokenCount") - prompt
+		if out < 0 {
+			out = 0
+		}
 	}
 	model := str(obj, "modelVersion")
 	return Usage{
@@ -213,9 +213,7 @@ func fromGeminiObject(obj map[string]any) (Usage, bool) {
 type Accumulator struct {
 	protocol string
 	u        Usage
-	// anthropic 的 message_delta 可能报修正后的净输入，标记输入来源。
-	inputFromDelta bool
-	seen           bool
+	seen     bool
 }
 
 func NewAccumulator(protocol string) *Accumulator {
@@ -253,8 +251,15 @@ func (a *Accumulator) anthropicEvent(obj map[string]any) {
 			if has(mu, "input_tokens") {
 				a.u.InputTokens = num(mu, "input_tokens")
 			}
-			a.u.CacheReadTokens = num(mu, "cache_read_input_tokens")
-			a.u.CacheWriteTokens = num(mu, "cache_creation_input_tokens")
+			if has(mu, "output_tokens") {
+				a.u.OutputTokens = num(mu, "output_tokens")
+			}
+			if has(mu, "cache_read_input_tokens") {
+				a.u.CacheReadTokens = num(mu, "cache_read_input_tokens")
+			}
+			if has(mu, "cache_creation_input_tokens") {
+				a.u.CacheWriteTokens = num(mu, "cache_creation_input_tokens")
+			}
 			a.u.Semantics = SemanticsFresh
 			a.seen = true
 		}
@@ -266,31 +271,16 @@ func (a *Accumulator) anthropicEvent(obj map[string]any) {
 		if has(du, "output_tokens") {
 			a.u.OutputTokens = num(du, "output_tokens")
 		}
-		// 部分 Anthropic 兼容上游在 message_delta 报修正后的净输入：
-		// 更小的正数即采用，缓存计数若同帧带上则一并采用。
-		deltaInput, hasInput := du["input_tokens"]
-		if hasInput && deltaInput != nil {
-			di := num(du, "input_tokens")
-			use := di > 0 && (a.u.InputTokens == 0 || di < a.u.InputTokens ||
-				(a.inputFromDelta && di <= a.u.InputTokens))
-			if use {
-				a.u.InputTokens = di
-				a.inputFromDelta = true
-				a.u.Semantics = SemanticsFresh
-				if has(du, "cache_read_input_tokens") {
-					a.u.CacheReadTokens = num(du, "cache_read_input_tokens")
-				}
-				if has(du, "cache_creation_input_tokens") {
-					a.u.CacheWriteTokens = num(du, "cache_creation_input_tokens")
-				}
-			}
+		if has(du, "input_tokens") {
+			a.u.InputTokens = num(du, "input_tokens")
 		}
-		if a.u.CacheReadTokens == 0 && has(du, "cache_read_input_tokens") {
+		if has(du, "cache_read_input_tokens") {
 			a.u.CacheReadTokens = num(du, "cache_read_input_tokens")
 		}
-		if a.u.CacheWriteTokens == 0 && has(du, "cache_creation_input_tokens") {
+		if has(du, "cache_creation_input_tokens") {
 			a.u.CacheWriteTokens = num(du, "cache_creation_input_tokens")
 		}
+		a.u.Semantics = SemanticsFresh
 		a.seen = true
 	}
 }

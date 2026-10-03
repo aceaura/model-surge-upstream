@@ -16,7 +16,12 @@ import 'package:msu_admin/theme.dart';
 ///
 /// 接口全部打桩:页面加载只依赖 models/summary/trend/logs 四个端点,
 /// 返回空集合即可把页面渲染出来。
-ApiClient _stubClient({void Function(Uri uri)? onRequest, List<Map<String, Object>> buckets = const []}) {
+ApiClient _stubClient({
+  void Function(Uri uri)? onRequest,
+  List<Map<String, Object>> buckets = const [],
+  List<Map<String, Object>> logs = const [],
+  List<Map<String, Object>> groups = const [],
+}) {
   final mock = MockClient((req) async {
     onRequest?.call(req.url);
     final path = req.url.path;
@@ -26,11 +31,11 @@ ApiClient _stubClient({void Function(Uri uri)? onRequest, List<Map<String, Objec
     } else if (path.endsWith('/usage/trend')) {
       body = {'granularity': 'hour', 'buckets': buckets};
     } else if (path.endsWith('/usage/logs')) {
-      body = {'logs': const [], 'total': 0};
+      body = {'logs': logs, 'total': logs.length};
     } else if (path.endsWith('/usage/accounts')) {
-      body = {'accounts': const []};
+      body = {'accounts': groups};
     } else if (path.endsWith('/usage/models')) {
-      body = {'models': const []};
+      body = {'models': groups};
     } // summary 缺字段走 fromJson 的 0 默认
     return http.Response(jsonEncode(body), 200,
         headers: {'content-type': 'application/json'});
@@ -57,6 +62,105 @@ Future<void> _unmount(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('卡片与趋势图例依次展示输入、缓存创建、缓存命中、输出',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _pumpUsage(tester);
+
+    final cards = [
+      find.text('新增输入'),
+      find.text('缓存创建').first,
+      find.text('缓存命中').first,
+      find.text('输出').first,
+    ];
+    final legends = [
+      find.text('输入').first,
+      find.text('缓存创建').at(1),
+      find.text('缓存命中').at(1),
+      find.text('输出').at(1),
+    ];
+    for (final items in [cards, legends]) {
+      for (var i = 1; i < items.length; i++) {
+        expect(tester.getTopLeft(items[i]).dx,
+            greaterThan(tester.getTopLeft(items[i - 1]).dx));
+        expect(tester.getTopLeft(items[i]).dy,
+            tester.getTopLeft(items[0]).dy);
+      }
+    }
+
+    await _unmount(tester);
+  });
+
+  testWidgets('请求日志及账号、模型统计的标题和数据列保持四桶顺序',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _pumpUsage(tester, client: _stubClient(
+      logs: const [
+        {
+          'created_at': '2026-10-03T12:00:00Z',
+          'source': 'proxy',
+          'account': 'log-account',
+          'model_id': 'log-model',
+          'input_tokens': 111,
+          'cache_write_tokens': 222,
+          'cache_read_tokens': 333,
+          'output_tokens': 444,
+          'status_code': 200,
+        },
+      ],
+      groups: const [
+        {
+          'key': 'group-key',
+          'requests': 7,
+          'input_tokens': 555,
+          'cache_write_tokens': 666,
+          'cache_read_tokens': 777,
+          'output_tokens': 888,
+          'cache_hit_rate': 0.25,
+        },
+      ],
+    ));
+
+    for (final tab in ['请求日志', '账号统计', '模型统计']) {
+      await tester.tap(find.text(tab));
+      await tester.pumpAndSettle();
+      final header = find.ancestor(
+        of: find.text(tab == '请求日志' ? '时间' : (tab == '账号统计' ? '账号' : '模型')),
+        matching: find.byType(Row),
+      ).first;
+      final data = find.ancestor(
+        of: find.text(tab == '请求日志' ? 'log-account' : 'group-key'),
+        matching: find.byType(Row),
+      ).first;
+      final headers = tester.widgetList<Text>(
+          find.descendant(of: header, matching: find.byType(Text)))
+          .map((text) => text.data).toList();
+      final values = tester.widgetList<Text>(
+          find.descendant(of: data, matching: find.byType(Text)))
+          .map((text) => text.data).toList();
+      if (tab == '请求日志') {
+        expect(headers, ['时间', '来源', '账号', '模型', '输入', '缓存创建', '缓存命中', '输出', '用时', '状态']);
+        expect(values.sublist(4, 8), ['111', '222', '333', '444']);
+      } else {
+        expect(headers, [tab == '账号统计' ? '账号' : '模型', '请求', '新增输入', '缓存创建', '缓存命中', '输出', '命中率']);
+        expect(values, ['group-key', '7', '555', '666', '777', '888', '25.0%']);
+      }
+      final start = tab == '请求日志' ? 4 : 2;
+      for (var i = start; i < start + 4; i++) {
+        expect(tester.getTopLeft(find.descendant(
+            of: header, matching: find.text(headers[i]!))).dx,
+            tester.getTopLeft(find.descendant(
+                of: data, matching: find.text(values[i]!))).dx);
+      }
+    }
+
+    await _unmount(tester);
+  });
+
   testWidgets('区间下拉展开:菜单在触发器正下方、同宽左对齐,不遮挡触发器',
       (tester) async {
     await _pumpUsage(tester);
@@ -187,9 +291,23 @@ void main() {
 
     expect(find.byKey(const ValueKey('usage-trend-tooltip')), findsOneWidget);
     expect(find.text('输入: 700'), findsOneWidget);
-    expect(find.text('输出: 60'), findsOneWidget);
     expect(find.text('缓存创建: 9'), findsOneWidget);
     expect(find.text('缓存命中: 500'), findsOneWidget);
+    expect(find.text('输出: 60'), findsOneWidget);
+    final tooltipTexts = tester.widgetList<Text>(find.descendant(
+      of: find.byKey(const ValueKey('usage-trend-tooltip')),
+      matching: find.byType(Text),
+    )).map((text) => text.data).toList();
+    expect(tooltipTexts.skip(1).toList(),
+        ['输入: 700', '缓存创建: 9', '缓存命中: 500', '输出: 60']);
+    for (final pair in [
+      ('输入: 700', '缓存创建: 9'),
+      ('缓存创建: 9', '缓存命中: 500'),
+      ('缓存命中: 500', '输出: 60'),
+    ]) {
+      expect(tester.getTopLeft(find.text(pair.$2)).dy,
+          greaterThan(tester.getTopLeft(find.text(pair.$1)).dy));
+    }
 
     await gesture.moveTo(Offset.zero);
     await tester.pump();

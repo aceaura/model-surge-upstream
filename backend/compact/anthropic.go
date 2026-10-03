@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
@@ -116,12 +117,6 @@ func (anthropicImpl) ExtractSummary(raw []byte) (string, usage.Usage, error) {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		Usage struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
-			CacheRead    int64 `json:"cache_read_input_tokens"`
-			CacheWrite   int64 `json:"cache_creation_input_tokens"`
-		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", usage.Usage{}, err
@@ -136,13 +131,8 @@ func (anthropicImpl) ExtractSummary(raw []byte) (string, usage.Usage, error) {
 	if text == "" {
 		return "", usage.Usage{}, errors.New("summary response has no text content")
 	}
-	return text, usage.Usage{
-		InputTokens:      resp.Usage.InputTokens,
-		OutputTokens:     resp.Usage.OutputTokens,
-		CacheReadTokens:  resp.Usage.CacheRead,
-		CacheWriteTokens: resp.Usage.CacheWrite,
-		Semantics:        usage.SemanticsFresh, // Anthropic 输入已是净输入
-	}, nil
+	u, _ := usage.FromResponse(provider.ProtocolAnthropic, raw)
+	return text, u, nil
 }
 
 // Splice 把摘要与 tail 拼回请求体。Anthropic 约束：首条必须 user 且

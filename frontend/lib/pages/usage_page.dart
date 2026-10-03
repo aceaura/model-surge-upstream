@@ -9,7 +9,7 @@ import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import 'all_models_page.dart' show SearchSeed;
 
-/// 用量统计页：四桶 token（新增输入/输出/缓存创建/缓存命中）的总指标、
+/// 用量统计页：四桶 token（新增输入/缓存创建/缓存命中/输出）的总指标、
 /// 按小时或按天的趋势、以及请求日志/账号/模型三个维度的明细。
 /// 口径与 CC Switch 使用统计对齐：输入为扣缓存后的净输入，
 /// 真实消耗 = 净输入 + 输出 + 缓存创建 + 缓存命中。
@@ -438,12 +438,12 @@ class _UsagePageState extends State<UsagePage> {
     final cards = [
       _statCard(t, '新增输入', Icons.arrow_downward, t.primary,
           s == null ? '—' : _fmtTokens(s.input)),
-      _statCard(t, '输出', Icons.arrow_upward, t.success,
-          s == null ? '—' : _fmtTokens(s.output)),
       _statCard(t, '缓存创建', Icons.storage_outlined, t.warn,
           s == null ? '—' : _fmtTokens(s.cacheWrite)),
       _statCard(t, '缓存命中', Icons.flash_on_outlined, t.violet,
           s == null ? '—' : _fmtTokens(s.cacheRead)),
+      _statCard(t, '输出', Icons.arrow_upward, t.success,
+          s == null ? '—' : _fmtTokens(s.output)),
       _hitRateCard(t, s),
     ];
     return Row(children: [
@@ -539,7 +539,7 @@ class _UsagePageState extends State<UsagePage> {
     );
   }
 
-  /// 趋势卡：四条折线（缓存创建/缓存命中/输入/输出）。
+  /// 趋势卡：四条折线（输入/缓存创建/缓存命中/输出）。
   Widget _trendCard(AppTokens t) {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -580,9 +580,9 @@ class _UsagePageState extends State<UsagePage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              _legend(t, '输入', t.primary),
               _legend(t, '缓存创建', t.warn),
               _legend(t, '缓存命中', t.violet),
-              _legend(t, '输入', t.primary),
               _legend(t, '输出', t.success),
             ],
           ),
@@ -635,9 +635,9 @@ class _UsagePageState extends State<UsagePage> {
         (keyLabel, 2.2),
         ('请求', 1),
         ('新增输入', 1.2),
-        ('输出', 1.2),
         ('缓存创建', 1.2),
         ('缓存命中', 1.2),
+        ('输出', 1.2),
         ('命中率', 1),
       ]),
       if (groups.isEmpty) _emptyRow(t, '该区间暂无数据'),
@@ -646,9 +646,9 @@ class _UsagePageState extends State<UsagePage> {
           _cell(t, g.key, mono: true, flex: 2.2),
           _cell(t, '${g.totals.requests}', flex: 1),
           _cell(t, _fmtTokens(g.totals.input), flex: 1.2),
-          _cell(t, _fmtTokens(g.totals.output), flex: 1.2),
           _cell(t, _fmtTokens(g.totals.cacheWrite), flex: 1.2),
           _cell(t, _fmtTokens(g.totals.cacheRead), flex: 1.2),
+          _cell(t, _fmtTokens(g.totals.output), flex: 1.2),
           _cell(t, '${(g.totals.hitRate * 100).toStringAsFixed(1)}%', flex: 1),
         ]),
     ]);
@@ -666,9 +666,9 @@ class _UsagePageState extends State<UsagePage> {
             ('账号', 1.4),
             ('模型', 1.8),
             ('输入', 1),
-            ('输出', 1),
             ('缓存创建', 1),
             ('缓存命中', 1),
+            ('输出', 1),
             ('用时', 0.9),
             ('状态', 0.8),
           ]),
@@ -680,9 +680,9 @@ class _UsagePageState extends State<UsagePage> {
               _cell(t, l.account, flex: 1.4),
               _cell(t, l.modelId, mono: true, flex: 1.8),
               _cell(t, _fmtTokens(l.input), flex: 1),
-              _cell(t, _fmtTokens(l.output), flex: 1),
               _cell(t, _fmtTokens(l.cacheWrite), flex: 1),
               _cell(t, _fmtTokens(l.cacheRead), flex: 1),
+              _cell(t, _fmtTokens(l.output), flex: 1),
               _cell(t, l.durationMs == null ? '—' : '${(l.durationMs! / 1000).toStringAsFixed(1)}s', flex: 0.9),
               _statusCell(t, l.statusCode, flex: 0.8),
             ]),
@@ -874,9 +874,9 @@ class _TrendChartState extends State<_TrendChart> {
                     const SizedBox(height: 8),
                     for (final row in [
                       ('输入', bucket.totals.input, colors[2]),
-                      ('输出', bucket.totals.output, colors[3]),
                       ('缓存创建', bucket.totals.cacheWrite, colors[0]),
                       ('缓存命中', bucket.totals.cacheRead, colors[1]),
+                      ('输出', bucket.totals.output, colors[3]),
                     ])
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 2),

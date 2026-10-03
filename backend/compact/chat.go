@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
@@ -81,13 +82,6 @@ func (chatImpl) ExtractSummary(raw []byte) (string, usage.Usage, error) {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			PromptDetails    struct {
-				CachedTokens int64 `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", usage.Usage{}, err
@@ -99,12 +93,8 @@ func (chatImpl) ExtractSummary(raw []byte) (string, usage.Usage, error) {
 	if err != nil {
 		return "", usage.Usage{}, err
 	}
-	return text, usage.Usage{
-		InputTokens:     resp.Usage.PromptTokens,
-		OutputTokens:    resp.Usage.CompletionTokens,
-		CacheReadTokens: resp.Usage.PromptDetails.CachedTokens,
-		Semantics:       usage.SemanticsTotal, // OpenAI 输入含缓存
-	}, nil
+	u, _ := usage.FromResponse(provider.ProtocolChatCompletions, raw)
+	return text, u, nil
 }
 
 func chatContentText(raw json.RawMessage) (string, error) {

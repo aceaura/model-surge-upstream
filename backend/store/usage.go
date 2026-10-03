@@ -63,8 +63,8 @@ type UsageGroup struct {
 	UsageTotals
 }
 
-// freshInput 把存储的输入 token 归一为净输入：total 语义扣缓存两桶，
-// 且只在够扣时扣（防御上游报数自相矛盾）。与 CC Switch 的 fresh_input_sql 同口径。
+// freshInput 把存储的输入 token 归一为净输入：total 扣缓存两桶并截断到 0，
+// fresh 与未知语义保留原始输入，与 usage.FreshInput 同口径。
 func freshInput(alias string) string {
 	p := ""
 	if alias != "" {
@@ -72,8 +72,8 @@ func freshInput(alias string) string {
 	}
 	return fmt.Sprintf(
 		"CASE WHEN %[1]sinput_semantics = 2 THEN %[1]sinput_tokens "+
-			"WHEN %[1]sinput_semantics = 1 AND %[1]sinput_tokens >= %[1]scache_read_tokens + %[1]scache_write_tokens "+
-			"THEN %[1]sinput_tokens - %[1]scache_read_tokens - %[1]scache_write_tokens "+
+			"WHEN %[1]sinput_semantics = 1 "+
+			"THEN GREATEST(%[1]sinput_tokens - %[1]scache_read_tokens - %[1]scache_write_tokens, 0) "+
 			"ELSE %[1]sinput_tokens END", p)
 }
 
@@ -277,10 +277,10 @@ func (s *Store) UsageLogs(ctx context.Context, f UsageFilter, limit, offset int)
 	}
 	q := fmt.Sprintf(
 		`SELECT id, request_id, source, protocol, model_id, account, native_model,
-		        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+		        %s, output_tokens, cache_read_tokens, cache_write_tokens,
 		        input_semantics, status_code, is_streaming, latency_ms, duration_ms, error_message, created_at
 		 FROM usage_logs%s ORDER BY created_at DESC, id DESC LIMIT $%s OFFSET $%s`,
-		where, itoa(len(args)+1), itoa(len(args)+2))
+		freshInput(""), where, itoa(len(args)+1), itoa(len(args)+2))
 	args = append(args, limit, offset)
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {

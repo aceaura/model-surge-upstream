@@ -3,6 +3,9 @@ package compact
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/aceaura/model-surge-upstream/backend/provider"
+	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
 // 构造 n 轮普通对话（user/assistant 交替）。
@@ -196,6 +199,25 @@ func TestAnthropicExtractSummary(t *testing.T) {
 	}
 	if u.InputTokens != 1000 || u.OutputTokens != 200 || u.CacheReadTokens != 50 || u.CacheWriteTokens != 30 {
 		t.Fatalf("usage = %+v", u)
+	}
+}
+
+func TestAnthropicSummaryUsageMatchesParser(t *testing.T) {
+	for _, fields := range []string{
+		`"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":40`,
+		`"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0`,
+		"",
+	} {
+		raw := []byte(`{"id":"summary-id","model":"arbitrary-model","content":[{"type":"thinking","text":"ignored"},{"type":"text","text":" 摘要正文 "}]`)
+		if fields != "" {
+			raw = append(raw, []byte(`,"usage":{`+fields+`}`)...)
+		}
+		raw = append(raw, '}')
+		text, got, err := (anthropicImpl{}).ExtractSummary(raw)
+		want, _ := usage.FromResponse(provider.ProtocolAnthropic, raw)
+		if err != nil || text != "摘要正文" || got != want {
+			t.Fatalf("fields=%s text=%q got=%+v want=%+v err=%v", fields, text, got, want, err)
+		}
 	}
 }
 

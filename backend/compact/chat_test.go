@@ -1,6 +1,11 @@
 package compact
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/aceaura/model-surge-upstream/backend/provider"
+	"github.com/aceaura/model-surge-upstream/backend/usage"
+)
 
 func chatTurns(n int) []any {
 	msgs := []any{map[string]any{"role": "system", "content": "你是助手"}}
@@ -119,6 +124,27 @@ func TestChatExtractSummaryContentParts(t *testing.T) {
 	}
 	if text != "块形态" {
 		t.Fatalf("text = %q", text)
+	}
+}
+
+func TestChatSummaryUsageMatchesParser(t *testing.T) {
+	for _, fields := range []string{
+		`"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":0},"input_tokens_details":{"cached_tokens":80},"prompt_cache_hit_tokens":40,"cached_tokens":60`,
+		`"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":40,"prompt_cache_miss_tokens":60,"cached_tokens":70`,
+		`"prompt_tokens":100,"completion_tokens":20,"cached_tokens":30,"completion_tokens_details":{"reasoning_tokens":7}`,
+		`"prompt_tokens":0,"completion_tokens":0,"prompt_tokens_details":{"cached_tokens":0}`,
+		"",
+	} {
+		raw := []byte(`{"id":"summary-id","model":"arbitrary-model","choices":[{"message":{"content":" 摘要正文 "}}]`)
+		if fields != "" {
+			raw = append(raw, []byte(`,"usage":{`+fields+`}`)...)
+		}
+		raw = append(raw, '}')
+		text, got, err := (chatImpl{}).ExtractSummary(raw)
+		want, _ := usage.FromResponse(provider.ProtocolChatCompletions, raw)
+		if err != nil || text != "摘要正文" || got != want {
+			t.Fatalf("fields=%s text=%q got=%+v want=%+v err=%v", fields, text, got, want, err)
+		}
 	}
 }
 
