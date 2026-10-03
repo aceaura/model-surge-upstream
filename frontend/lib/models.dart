@@ -17,28 +17,21 @@ String tokensToK(int tokens) {
 /// k 单位输入串 → token 数(1k = 1000 tokens,四舍五入到个位)。
 int kToTokens(String kText) => (double.parse(kText.trim()) * 1000).round();
 
-/// 推理档词表,与后端 effort.Levels 同序同集;UI 选择器与表单编辑器共用。
-const effortLevels = [
-  'none',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-];
+/// 推理档条目:name=显示名(对话页档位菜单),value=发上游的档位字符串。
+/// value 不设固定词表——各家上游的私有档(如 ultra)也能声明。
+class EffortEntry {
+  const EffortEntry({required this.name, required this.value});
 
-/// 推理档中文名;空串是「默认(不下发)」档,仅对话页选择器用。
-const effortLevelLabels = {
-  '': '默认',
-  'none': '无',
-  'minimal': '最小',
-  'low': '低',
-  'medium': '中',
-  'high': '高',
-  'xhigh': '超高',
-  'max': '最大',
-};
+  final String name;
+  final String value;
+
+  factory EffortEntry.fromJson(Map<String, dynamic> json) => EffortEntry(
+        name: json['name'] as String? ?? '',
+        value: json['value'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {'name': name, 'value': value};
+}
 
 class ProviderSpec {
   const ProviderSpec({
@@ -264,11 +257,11 @@ class UpstreamModel {
   final bool enabled;
 
   /// 推理档支持列表的管理员覆盖:null=自动(跟随上游声明),
-  /// 数组=显式声明(空数组即不支持)。
-  final List<String>? efforts;
+  /// 数组=显式声明的 [{name,value}] 条目(空数组即不支持)。
+  final List<EffortEntry>? efforts;
 
   /// 服务端算好的有效支持列表(自动模式=上游声明),空列表=不支持。
-  final List<String> effortsEffective;
+  final List<EffortEntry> effortsEffective;
 
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
         id: json['id'] as String,
@@ -280,10 +273,13 @@ class UpstreamModel {
         overrides: json['overrides'] as Map<String, dynamic>? ?? const {},
         compact: json['compact'] as Map<String, dynamic>? ?? const {},
         enabled: json['enabled'] as bool? ?? false,
-        efforts: (json['efforts'] as List<dynamic>?)?.cast<String>(),
+        efforts: (json['efforts'] as List<dynamic>?)
+            ?.map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
         effortsEffective:
             (json['efforts_effective'] as List<dynamic>? ?? const [])
-                .cast<String>(),
+                .map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
+                .toList(),
       );
 }
 

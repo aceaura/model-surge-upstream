@@ -3,12 +3,14 @@ package resolve
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/oauth"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
@@ -87,27 +89,32 @@ func (f *fakeDecls) DeclaredEfforts(_ context.Context, accountName, nativeModel 
 }
 
 // TestResolveEfforts 锁定有效档位的声明式语义:自动模式跟随上游声明(未装配
-// 声明来源即无声明=不支持);显式数组本地归一且不查声明来源。
+// 声明来源即无声明=不支持);显式 [{name,value}] 条目本地校验且不查声明来源。
 func TestResolveEfforts(t *testing.T) {
 	t.Run("自动模式跟随上游声明", func(t *testing.T) {
 		accounts, models, _ := fixture()
-		decls := &fakeDecls{data: map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "low"}}}
+		decls := &fakeDecls{data: map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "low", "ultra"}}}
 		r := NewResolver(accounts, models).WithEffortDeclarations(decls)
 		got, err := r.Resolve(context.Background(), "kimi-1/k2")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Efforts) != 2 || got.Efforts[0] != "low" || got.Efforts[1] != "high" {
-			t.Errorf("efforts = %v, want [low high](声明归一升序)", got.Efforts)
+		want := []effort.Entry{
+			{Name: "高", Value: "high"},
+			{Name: "低", Value: "low"},
+			{Name: "ultra", Value: "ultra"}, // 私有档原值保留(声明序)
+		}
+		if !slices.Equal(got.Efforts, want) {
+			t.Errorf("efforts = %v, want %v(原值声明序)", got.Efforts, want)
 		}
 		if decls.calls != 1 {
 			t.Errorf("声明来源调用 = %d, want 1", decls.calls)
 		}
 	})
-	t.Run("显式数组压过声明且不查上游", func(t *testing.T) {
+	t.Run("显式条目压过声明且不查上游", func(t *testing.T) {
 		accounts, models, _ := fixture()
 		m := models["kimi-1/k2"]
-		m.Efforts = json.RawMessage(`["xhigh","medium"]`)
+		m.Efforts = json.RawMessage(`[{"name":"超","value":"xhigh"},{"name":"","value":"medium"}]`)
 		models["kimi-1/k2"] = m
 		decls := &fakeDecls{data: map[string][]string{"kimi-1/kimi-k2-turbo": {"low"}}}
 		r := NewResolver(accounts, models).WithEffortDeclarations(decls)
@@ -115,11 +122,15 @@ func TestResolveEfforts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got.Efforts) != 2 || got.Efforts[0] != "medium" || got.Efforts[1] != "xhigh" {
-			t.Errorf("efforts = %v, want [medium xhigh](显式声明)", got.Efforts)
+		want := []effort.Entry{
+			{Name: "超", Value: "xhigh"},
+			{Name: "中", Value: "medium"}, // 名留空按值自动命名
+		}
+		if !slices.Equal(got.Efforts, want) {
+			t.Errorf("efforts = %v, want %v(显式声明)", got.Efforts, want)
 		}
 		if decls.calls != 0 {
-			t.Errorf("显式数组不应查声明来源,调用 = %d", decls.calls)
+			t.Errorf("显式条目不应查声明来源,调用 = %d", decls.calls)
 		}
 	})
 	t.Run("未装配声明来源=无声明=不支持", func(t *testing.T) {

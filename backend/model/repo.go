@@ -214,7 +214,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
-	// 显式数组的词表合法性在写路径统一校验;有效列表(自动模式跟随上游
+	// 显式数组的形态合法性在写路径统一校验;有效列表(自动模式跟随上游
 	// 声明)由能访问上游的层(httpapi/resolve)现算,仓储不拼凑。
 	if _, err := effort.Effective(efforts, nil); err != nil {
 		return Model{}, err
@@ -235,7 +235,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 }
 
 // normalizeEfforts 把空值补成 JSON null（自动=跟随上游声明）；数组形态的
-// 词表合法性在 effort.Effective 里统一校验。
+// 条目合法性在 effort.Effective 里统一校验。
 func normalizeEfforts(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.RawMessage(`null`), nil
@@ -245,7 +245,7 @@ func normalizeEfforts(raw json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`null`), nil
 	}
 	if !strings.HasPrefix(s, "[") {
-		return nil, apperr.New(apperr.InvalidJSON, "efforts must be a json array of strings")
+		return nil, apperr.New(apperr.InvalidJSON, "efforts must be a json array of {name,value} entries")
 	}
 	return json.RawMessage(s), nil
 }

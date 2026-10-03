@@ -60,7 +60,7 @@ type Activity interface {
 // UpstreamModels 查询上游账号实际可用的模型清单。
 type UpstreamModels interface {
 	List(ctx context.Context, accountName string) (upmodels.Report, error)
-	// DeclaredEfforts 取账号某原生模型在上游声明的推理档(词表内升序);
+	// DeclaredEfforts 取账号某原生模型在上游声明的推理档(原值,声明序);
 	// 不可查/查询失败/未声明都回 nil(无声明即不支持)。
 	DeclaredEfforts(ctx context.Context, accountName, nativeModel string) []string
 	Forget(name string)

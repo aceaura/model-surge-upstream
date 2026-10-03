@@ -695,7 +695,12 @@ void main() {
                 'defaults': <String, dynamic>{},
                 'overrides': <String, dynamic>{},
                 'efforts': null,
-                'efforts_effective': ['minimal', 'low', 'medium', 'high'],
+                'efforts_effective': [
+                  {'name': '最小', 'value': 'minimal'},
+                  {'name': '低', 'value': 'low'},
+                  {'name': '中', 'value': 'medium'},
+                  {'name': '高', 'value': 'high'},
+                ],
                 'enabled': true,
               },
             ],

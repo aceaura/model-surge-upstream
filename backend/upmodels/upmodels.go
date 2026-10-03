@@ -19,7 +19,6 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
-	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -35,7 +34,7 @@ type Entry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name,omitempty"`
 	// Efforts 是上游为该模型声明的推理档(supported_reasoning_levels,
-	// 已按词表归一升序)。nil 表示上游未声明——不等于不支持由本地判定,
+	// 原值,声明序)。nil 表示上游未声明——不等于不支持由本地判定,
 	// 调用方按「无声明即不支持」处置。
 	Efforts []string `json:"efforts,omitempty"`
 }
@@ -210,7 +209,8 @@ func parseEntries(body []byte) []Entry {
 
 // parseDeclaredEfforts 提取条目的 supported_reasoning_levels。两种形态都认:
 // codex 订阅端点是 [{effort, description}] 对象数组,OpenAI 兼容网关是
-// 字符串数组(sub2api 同款双形态解析)。未声明回 nil;名字归一走 effort 包。
+// 字符串数组(sub2api 同款双形态解析)。未声明回 nil;值按上游原样保留
+// (去空白去空),去重与显示名推导在 effort.Effective 统一收口。
 func parseDeclaredEfforts(obj map[string]any) []string {
 	raw, ok := obj["supported_reasoning_levels"].([]any)
 	if !ok || len(raw) == 0 {
@@ -220,17 +220,21 @@ func parseDeclaredEfforts(obj map[string]any) []string {
 	for _, item := range raw {
 		switch v := item.(type) {
 		case string:
-			levels = append(levels, v)
+			if s := strings.TrimSpace(v); s != "" {
+				levels = append(levels, s)
+			}
 		case map[string]any:
 			if s, ok := v["effort"].(string); ok {
-				levels = append(levels, s)
+				if s = strings.TrimSpace(s); s != "" {
+					levels = append(levels, s)
+				}
 			}
 		}
 	}
-	return effort.NormalizeList(levels)
+	return levels
 }
 
-// DeclaredEfforts 返回账号某原生模型在上游声明的推理档(词表内,升序)。
+// DeclaredEfforts 返回账号某原生模型在上游声明的推理档(原值,声明序)。
 // 上游不可查、查询失败或该模型未声明都回 nil——无声明即不支持,
 // 这是正常答案而非错误,调用方按此隐藏档位入口。
 func (l *Lister) DeclaredEfforts(ctx context.Context, accountName, nativeModel string) []string {

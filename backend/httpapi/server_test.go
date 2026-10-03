@@ -15,6 +15,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/activity"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/quota"
@@ -632,7 +633,8 @@ func TestListModelsFiltersByAccount(t *testing.T) {
 }
 
 // TestModelEffortsEffectiveDecoration 锁定模型响应的有效档位现算:
-// 自动模式(efforts=null)跟随声明源;显式数组本地归一;显式空数组=不支持。
+// 自动模式(efforts=null)跟随声明源;显式 [{name,value}] 条目本地校验;
+// 显式空数组=不支持。
 func TestModelEffortsEffectiveDecoration(t *testing.T) {
 	f := newFixture(t)
 	f.upstream.efforts = map[string][]string{"kimi-1/kimi-k2-turbo": {"high", "low"}}
@@ -652,15 +654,17 @@ func TestModelEffortsEffectiveDecoration(t *testing.T) {
 		return body.Model
 	}
 
-	if got := get().EffortsEffective; !slices.Equal(got, []string{"low", "high"}) {
-		t.Errorf("自动模式 efforts_effective = %v, want [low high](声明源)", got)
+	wantAuto := []effort.Entry{{Name: "高", Value: "high"}, {Name: "低", Value: "low"}}
+	if got := get().EffortsEffective; !slices.Equal(got, wantAuto) {
+		t.Errorf("自动模式 efforts_effective = %v, want %v(声明源,原值声明序)", got, wantAuto)
 	}
 
 	m := f.models.data["kimi-1/k2"]
-	m.Efforts = json.RawMessage(`["xhigh","medium"]`)
+	m.Efforts = json.RawMessage(`[{"name":"超","value":"xhigh"},{"name":"","value":"medium"}]`)
 	f.models.data["kimi-1/k2"] = m
-	if got := get().EffortsEffective; !slices.Equal(got, []string{"medium", "xhigh"}) {
-		t.Errorf("显式数组 efforts_effective = %v, want [medium xhigh](归一升序)", got)
+	wantExplicit := []effort.Entry{{Name: "超", Value: "xhigh"}, {Name: "中", Value: "medium"}}
+	if got := get().EffortsEffective; !slices.Equal(got, wantExplicit) {
+		t.Errorf("显式条目 efforts_effective = %v, want %v", got, wantExplicit)
 	}
 
 	m.Efforts = json.RawMessage(`[]`)

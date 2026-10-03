@@ -211,7 +211,7 @@ func TestParseEntriesShapes(t *testing.T) {
 
 // TestParseDeclaredEfforts 锁定 supported_reasoning_levels 双形态解析:
 // codex 订阅端点是 [{effort,description}] 对象数组,OpenAI 兼容网关是
-// 字符串数组;名字按词表归一升序,未声明回 nil。
+// 字符串数组;值按上游原样保留(声明序,词表外私有档不丢),未声明回 nil。
 func TestParseDeclaredEfforts(t *testing.T) {
 	cases := map[string]struct {
 		body string
@@ -219,15 +219,15 @@ func TestParseDeclaredEfforts(t *testing.T) {
 	}{
 		"对象数组形态(codex)": {
 			`{"data":[{"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"high","description":"x"},{"effort":"low"}]}]}`,
-			[]string{"low", "high"},
+			[]string{"high", "low"},
 		},
 		"字符串数组形态(网关)": {
 			`{"data":[{"id":"o4-mini","supported_reasoning_levels":["medium","low","high"]}]}`,
-			[]string{"low", "medium", "high"},
+			[]string{"medium", "low", "high"},
 		},
-		"词表外与别名归一": {
+		"原值保留(词表外不丢,去空白)": {
 			`{"data":[{"id":"m","supported_reasoning_levels":["ultra","extra-high"," High "]}]}`,
-			[]string{"high", "xhigh"},
+			[]string{"ultra", "extra-high", "High"},
 		},
 		"未声明回 nil": {
 			`{"data":[{"id":"m"}]}`,

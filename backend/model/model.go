@@ -5,6 +5,8 @@ package model
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 )
 
 type Model struct {
@@ -20,13 +22,14 @@ type Model struct {
 	// "keep_turns", "max_summary_tokens"}，缺项回落到全局 env 默认。
 	Compact json.RawMessage `json:"compact"`
 	// Efforts 推理档支持列表的原始配置：null=自动（跟随上游 /models 声明的
-	// supported_reasoning_levels），数组=管理员显式声明（空数组即不支持）。
+	// supported_reasoning_levels），数组=管理员显式声明的 [{name,value}]
+	// 条目（空数组即不支持；value 是发上游的档位字符串，不限固定词表）。
 	Efforts json.RawMessage `json:"efforts"`
 	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
 	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
-	// 档位选择器，发送侧按它校验所选档位。
-	EffortsEffective []string `json:"efforts_effective"`
-	Enabled          bool     `json:"enabled"`
+	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。
+	EffortsEffective []effort.Entry `json:"efforts_effective"`
+	Enabled          bool           `json:"enabled"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
 }

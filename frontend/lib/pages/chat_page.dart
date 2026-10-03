@@ -58,16 +58,29 @@ class _ChatPageState extends State<ChatPage> {
   Object? _error;
 
   /// 当前所选模型的推理档选项:''=默认(不下发,上游自己定) + 服务端算好
-  /// 的有效支持列表;空列表=该模型不支持,选择器不露面。
+  /// 的有效支持列表(上行值);空列表=该模型不支持,选择器不露面。
   List<String> get _effortOptions {
     for (final m in _models) {
       if (m.id == _modelId) {
         return m.effortsEffective.isEmpty
             ? const []
-            : ['', ...m.effortsEffective];
+            : ['', ...m.effortsEffective.map((e) => e.value)];
       }
     }
     return const [];
+  }
+
+  /// 档位值 → 显示名:''是「默认(不下发)」,其余取有效列表里的名。
+  String _effortLabel(String value) {
+    if (value == '') return '默认';
+    for (final m in _models) {
+      if (m.id == _modelId) {
+        for (final e in m.effortsEffective) {
+          if (e.value == value) return e.name;
+        }
+      }
+    }
+    return value;
   }
 
   @override
@@ -877,7 +890,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: StyledDropdown(
                       value: _effort,
                       options: _effortOptions,
-                      labelOf: (v) => effortLevelLabels[v] ?? v,
+                      labelOf: _effortLabel,
                       dropUp: true,
                       decoration: InputDecoration(
                         isDense: true,

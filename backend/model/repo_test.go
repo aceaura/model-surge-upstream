@@ -244,7 +244,7 @@ func TestEffortsRoundTrip(t *testing.T) {
 
 	// 未配置 efforts:落库存 null(自动=跟随上游声明)。有效列表不在仓储
 	// 现算——由能访问上游的 httpapi/resolve 层填充,仓储只保证原始配置
-	// 的持久化与显式数组的词表校验。
+	// 的持久化与显式数组的形态校验。
 	in := input()
 	in.ID = "kimi-1/gpt5"
 	in.NativeModel = "gpt-5"
@@ -255,20 +255,20 @@ func TestEffortsRoundTrip(t *testing.T) {
 	}
 	assertRawEfforts(t, created.Efforts, `null`)
 
-	// 显式数组:原样落库(归一排序在消费侧现算)。
-	in.Efforts = json.RawMessage(`["high","low","high","xhigh"]`)
+	// 显式名+值条目:原样落库(去重/命名在消费侧现算);value 不限词表。
+	in.Efforts = json.RawMessage(`[{"name":"高","value":"high"},{"name":"私有","value":"ultra"}]`)
 	updated, err := repo.Update(ctx, in)
 	if err != nil {
 		t.Fatalf("update explicit: %v", err)
 	}
-	assertRawEfforts(t, updated.Efforts, `["high","low","high","xhigh"]`)
+	assertRawEfforts(t, updated.Efforts, `[{"name":"高","value":"high"},{"name":"私有","value":"ultra"}]`)
 
 	// 更新不带 efforts:保留现状。
 	keep, err := repo.Update(ctx, Input{ID: in.ID, Enabled: true})
 	if err != nil {
 		t.Fatalf("update omitted: %v", err)
 	}
-	assertRawEfforts(t, keep.Efforts, `["high","low","high","xhigh"]`)
+	assertRawEfforts(t, keep.Efforts, `[{"name":"高","value":"high"},{"name":"私有","value":"ultra"}]`)
 
 	// 显式空数组 = 管理员声明不支持。
 	in.Efforts = json.RawMessage(`[]`)
@@ -293,10 +293,10 @@ func TestEffortsRoundTrip(t *testing.T) {
 	}
 	assertRawEfforts(t, got.Efforts, `null`)
 
-	// 词表外档位被拒(写路径仍校验显式数组)。
-	in.Efforts = json.RawMessage(`["ultra"]`)
+	// 空 value 条目被拒(写路径仍校验显式数组形态)。
+	in.Efforts = json.RawMessage(`[{"name":"空值","value":""}]`)
 	if _, err := repo.Update(ctx, in); !apperr.Is(err, apperr.InvalidRequest) {
-		t.Errorf("unknown level err = %v, want invalid_request", err)
+		t.Errorf("empty value err = %v, want invalid_request", err)
 	}
 }
 

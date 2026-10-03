@@ -39,7 +39,7 @@ type ResolvedTarget struct {
 	Compact       json.RawMessage   `json:"compact,omitempty"`
 	// Efforts 是模型的有效推理档列表（自动模式=上游声明，显式数组=管理员
 	// 声明），对话页发送侧按它校验所选档位；空列表表示该模型不支持 effort。
-	Efforts []string `json:"efforts,omitempty"`
+	Efforts []effort.Entry `json:"efforts,omitempty"`
 }
 
 // 认证头名。
@@ -164,16 +164,16 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 }
 
 // effectiveEfforts 现算模型的有效档位:显式数组本地归一(写路径已校验,
-// 算错只可能是词表演进后的存量数据,退回空列表比挡住解析安全);
-// 自动模式跟随上游声明,声明来源未装配或查询失败都按无声明(不支持)处置。
-func (r *Resolver) effectiveEfforts(ctx context.Context, accountName string, m model.Model) []string {
+// 算错只可能是存量脏数据,退回空列表比挡住解析安全);自动模式跟随上游
+// 声明,声明来源未装配或查询失败都按无声明(不支持)处置。
+func (r *Resolver) effectiveEfforts(ctx context.Context, accountName string, m model.Model) []effort.Entry {
 	var declared []string
 	if effort.Auto(m.Efforts) && r.efforts != nil {
 		declared = r.efforts.DeclaredEfforts(ctx, accountName, m.NativeModel)
 	}
 	eff, err := effort.Effective(m.Efforts, declared)
 	if err != nil {
-		return []string{}
+		return []effort.Entry{}
 	}
 	return eff
 }

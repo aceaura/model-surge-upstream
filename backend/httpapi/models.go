@@ -52,7 +52,7 @@ func (h handler) decorateEfforts(ctx context.Context, m *model.Model) {
 	}
 	eff, err := effort.Effective(m.Efforts, declared)
 	if err != nil {
-		eff = []string{}
+		eff = []effort.Entry{}
 	}
 	m.EffortsEffective = eff
 }

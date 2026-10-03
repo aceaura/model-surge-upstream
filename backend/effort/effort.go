@@ -1,29 +1,54 @@
-// Package effort 定义推理档的统一词表与「声明式」支持列表判定。
-// 词表与 new-api/sub2api/cc-switch 三家同构;某模型支持哪些档不靠猜——
-// 自动模式跟随上游 /models 响应里声明的 supported_reasoning_levels
-// (sub2api 同款动态适配),上游没声明即不支持;管理员也可在模型上
-// 显式声明(efforts 列存数组),显式声明压过上游声明。
+// Package effort 定义推理档的「名+值」条目与声明式支持列表判定。
+// 某模型支持哪些档不靠猜——自动模式跟随上游 /models 响应里声明的
+// supported_reasoning_levels(sub2api 同款动态适配),上游没声明即不支持;
+// 管理员也可在模型上显式声明(efforts 列存 [{name,value}] 数组),
+// 显式声明压过上游声明。档位值不设固定词表:各家上游的私有档
+// (ultra 等)也能声明,上行时按声明原样发送。
 package effort
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
-// Levels 是全部合法档位,按强度升序。UI 与校验都以这份词表为准。
-var Levels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+// Entry 是一个推理档:Name 是显示名(对话页档位菜单),Value 是
+// 发上游的档位字符串。
+type Entry struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
 
-// Valid 判定是否为词表内档位。
-func Valid(s string) bool {
-	for _, l := range Levels {
-		if s == l {
-			return true
-		}
+// labels 常见档位值的中文显示名;表外的值直接用原值当名。
+var labels = map[string]string{
+	"none":    "无",
+	"minimal": "最小",
+	"low":     "低",
+	"medium":  "中",
+	"high":    "高",
+	"xhigh":   "超高",
+	"max":     "最大",
+}
+
+// aliases 常见别名(sub2api 同款),归一只用于取显示名,不改写上行的值。
+var aliases = map[string]string{
+	"off":        "none",
+	"disabled":   "none",
+	"extra-high": "xhigh",
+	"extra_high": "xhigh",
+}
+
+// Label 给档位值取显示名:别名归一后命中常见词表回中文名,否则回原值。
+func Label(value string) string {
+	key := strings.ToLower(strings.TrimSpace(value))
+	if a, ok := aliases[key]; ok {
+		key = a
 	}
-	return false
+	if l, ok := labels[key]; ok {
+		return l
+	}
+	return strings.TrimSpace(value)
 }
 
 // Auto 判定原始配置是否为自动模式(null/缺省=跟随上游声明)。
@@ -32,79 +57,86 @@ func Auto(raw json.RawMessage) bool {
 	return s == "" || s == "null"
 }
 
-// Normalize 把上游声明的档位名折进词表:大小写与空白归一,常见别名映射
-// (off/disabled→none、extra-high/extra_high→xhigh),词表外的名字回 ""
-// (各家私有档位词表表达不了,丢弃而不是编造)。别名表与 sub2api 同款。
-func Normalize(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "off", "disabled":
-		return "none"
-	case "extra-high", "extra_high":
-		return "xhigh"
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
-		return strings.ToLower(strings.TrimSpace(level))
-	default:
-		return ""
-	}
-}
-
-// NormalizeList 归一一份上游声明列表:逐项 Normalize、丢弃词表外项、
-// 按 Levels 升序去重。
-func NormalizeList(declared []string) []string {
-	seen := map[string]bool{}
-	for _, d := range declared {
-		if n := Normalize(d); n != "" {
-			seen[n] = true
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for _, l := range Levels {
-		if seen[l] {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
 // Effective 算出模型的有效支持列表:
-//   - raw 为自动模式(null/缺省):跟随上游声明,declared 是上游 /models
-//     声明的 supported_reasoning_levels(原始名字,此处归一);无声明即
-//     不支持(回空列表,选择器不露面)。
-//   - raw 为数组:管理员显式声明,逐项校验词表并按 Levels 升序去重,
-//     显式空数组 [] 表示声明该模型不支持 effort。
-func Effective(raw json.RawMessage, declared []string) ([]string, error) {
+//   - raw 为自动模式(null/缺省):跟随上游声明,值按上游原样保留
+//     (声明序,去空去重),名取 Label;无声明即不支持(回空列表,
+//     选择器不露面)。
+//   - raw 为数组:管理员显式声明 [{name,value}](兼容存量纯字符串元素);
+//     value 去空白后必须非空,按 value 去重(保留首个),name 留空按
+//     Label 自动命名;显式空数组 [] 表示声明该模型不支持 effort。
+func Effective(raw json.RawMessage, declared []string) ([]Entry, error) {
 	if Auto(raw) {
-		return NormalizeList(declared), nil
+		return entriesFromValues(declared), nil
 	}
-	var list []string
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, apperr.New(apperr.InvalidJSON, "efforts must be a json array of strings")
+	var items []any
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, apperr.New(apperr.InvalidJSON,
+			"efforts must be a json array of {name,value} entries")
 	}
-	for _, got := range list {
-		if !Valid(got) {
-			return nil, apperr.New(apperr.InvalidRequest,
-				fmt.Sprintf("unknown reasoning effort %q (levels: %s)", got, strings.Join(Levels, ", ")))
-		}
-	}
+	out := make([]Entry, 0, len(items))
 	seen := map[string]bool{}
-	for _, l := range list {
-		seen[l] = true
-	}
-	out := make([]string, 0, len(seen))
-	for _, l := range Levels {
-		if seen[l] {
-			out = append(out, l)
+	for _, item := range items {
+		var name, value string
+		switch v := item.(type) {
+		case string:
+			value = strings.TrimSpace(v)
+		case map[string]any:
+			if s, ok := v["value"].(string); ok {
+				value = strings.TrimSpace(s)
+			}
+			if s, ok := v["name"].(string); ok {
+				name = strings.TrimSpace(s)
+			}
+		default:
+			return nil, apperr.New(apperr.InvalidJSON,
+				"effort entries must be {name,value} objects")
 		}
+		if value == "" {
+			return nil, apperr.New(apperr.InvalidRequest,
+				"effort entry value must not be empty")
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		if name == "" {
+			name = Label(value)
+		}
+		out = append(out, Entry{Name: name, Value: value})
 	}
 	return out, nil
 }
 
-// Contains 判定列表是否含某档位。
-func Contains(list []string, s string) bool {
-	for _, l := range list {
-		if l == s {
+// entriesFromValues 声明值列表 → 条目:去空、按值去重、保留原顺序,名取 Label。
+func entriesFromValues(values []string) []Entry {
+	out := make([]Entry, 0, len(values))
+	seen := map[string]bool{}
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, Entry{Name: Label(v), Value: v})
+	}
+	return out
+}
+
+// ContainsValue 判定条目列表是否含某档位值。
+func ContainsValue(list []Entry, value string) bool {
+	for _, e := range list {
+		if e.Value == value {
 			return true
 		}
 	}
 	return false
+}
+
+// Values 取出条目列表的全部档位值(错误提示用)。
+func Values(list []Entry) []string {
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, e.Value)
+	}
+	return out
 }

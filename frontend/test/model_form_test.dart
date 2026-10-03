@@ -282,7 +282,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('推理档:新建默认自动,自定义勾选按词表序随提交上行',
+  testWidgets('推理档:新建默认自动,自定义名+值行动态增删随提交上行',
       (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
@@ -300,7 +300,7 @@ void main() {
     expect(find.text('推理档'), findsOneWidget);
     expect(find.text('自动（跟随上游声明）'), findsOneWidget);
 
-    // 展开并切到自定义:七个档位的 chip 全渲染(分区在首屏外,先滚入视野)。
+    // 展开并切到自定义:无来源有效列表,给一个空行起步。
     await tester.tap(find.text('推理档'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(dropdownIn('model-effort-mode-field'));
@@ -309,14 +309,22 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('自定义').last);
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('model-effort-none')), findsOneWidget);
-    expect(find.byKey(const ValueKey('model-effort-max')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-effort-name-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-effort-name-1')), findsNothing);
 
-    // 勾选 高/低(乱序点选),提交应去重并按词表升序。
-    await tester.tap(find.byKey(const ValueKey('model-effort-high')));
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('model-effort-low')));
-    await tester.pump();
+    // 首行填 低/low;加一行填 私有/ultra;再加一行留空(空值行提交时丢弃)。
+    await tester.enterText(
+        find.byKey(const ValueKey('model-effort-name-0')), '低');
+    await tester.enterText(
+        find.byKey(const ValueKey('model-effort-value-0')), 'low');
+    await tester.tap(find.byKey(const ValueKey('model-effort-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('model-effort-name-1')), '私有');
+    await tester.enterText(
+        find.byKey(const ValueKey('model-effort-value-1')), 'ultra');
+    await tester.tap(find.byKey(const ValueKey('model-effort-add')));
+    await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
     await tester.pumpAndSettle();
@@ -328,13 +336,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(sentBody, isNotNull);
-    expect(sentBody!['efforts'], ['low', 'high']);
+    expect(sentBody!['efforts'], [
+      {'name': '低', 'value': 'low'},
+      {'name': '私有', 'value': 'ultra'},
+    ]);
 
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });
 
-  testWidgets('推理档:编辑回显显式配置,切回自动提交 null', (tester) async {
+  testWidgets('推理档:编辑回显显式条目,删行后提交,切回自动提交 null',
+      (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -353,27 +365,49 @@ void main() {
       'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
-      'efforts': ['low', 'high'],
-      'efforts_effective': ['low', 'high'],
+      'efforts': [
+        {'name': '低', 'value': 'low'},
+        {'name': '高', 'value': 'high'},
+      ],
+      'efforts_effective': [
+        {'name': '低', 'value': 'low'},
+        {'name': '高', 'value': 'high'},
+      ],
       'enabled': true,
     });
     await pumpForm(tester, editing: editing, client: client);
 
-    // 显式配置:分区默认展开,副标题列出档位,chips 选中态一致。
+    // 显式配置:分区默认展开,副标题列显示名,两行的名/值回显。
     expect(find.text('低 / 高'), findsOneWidget);
     expect(
         tester
-            .widget<FilterChip>(find.byKey(const ValueKey('model-effort-low')))
-            .selected,
-        isTrue);
+            .widget<TextFormField>(
+                find.byKey(const ValueKey('model-effort-name-0')))
+            .controller!
+            .text,
+        '低');
     expect(
         tester
-            .widget<FilterChip>(
-                find.byKey(const ValueKey('model-effort-medium')))
-            .selected,
-        isFalse);
+            .widget<TextFormField>(
+                find.byKey(const ValueKey('model-effort-value-1')))
+            .controller!
+            .text,
+        'high');
 
-    // 切回自动并保存:efforts 键仍在但为 null(恢复服务端推导)。
+    // 删掉首行(低)再保存:只剩高档一条。
+    await tester.ensureVisible(find.byKey(const ValueKey('model-effort-del-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('model-effort-del-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(sentBody, isNotNull);
+    expect(sentBody!['efforts'], [
+      {'name': '高', 'value': 'high'},
+    ]);
+
+    // 重开表单切回自动并保存:efforts 键仍在但为 null(恢复跟随上游声明)。
+    await pumpForm(tester, editing: editing, client: client);
     await tester.ensureVisible(dropdownIn('model-effort-mode-field'));
     await tester.pumpAndSettle();
     await tester.tap(dropdownIn('model-effort-mode-field'));
@@ -383,7 +417,6 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
 
-    expect(sentBody, isNotNull);
     expect(sentBody!.containsKey('efforts'), isTrue);
     expect(sentBody!['efforts'], isNull);
 

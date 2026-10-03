@@ -6,35 +6,24 @@ import (
 	"testing"
 )
 
-// TestNormalize 锁定上游档位名的归一与别名映射(sub2api 同款别名表)。
-func TestNormalize(t *testing.T) {
+// TestLabel 锁定显示名推导:常见档回中文名,别名归一取名,词表外的
+// 私有档直接用原值当名(不丢弃不编造)。
+func TestLabel(t *testing.T) {
 	cases := map[string]string{
-		"low":        "low",
-		" High ":     "high",
-		"MAX":        "max",
-		"off":        "none",
-		"disabled":   "none",
-		"extra-high": "xhigh",
-		"extra_high": "xhigh",
-		"ultra":      "", // 各家私有档词表表达不了,丢弃
-		"turbo":      "",
-		"":           "",
+		"low":        "低",
+		" High ":     "高",
+		"MAX":        "最大",
+		"off":        "无",
+		"disabled":   "无",
+		"extra-high": "超高",
+		"extra_high": "超高",
+		"ultra":      "ultra", // 私有档原名上阵
+		"turbo":      "turbo",
 	}
 	for in, want := range cases {
-		if got := Normalize(in); got != want {
-			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		if got := Label(in); got != want {
+			t.Errorf("Label(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-// TestNormalizeList 校验声明列表归一:别名折叠、词表外丢弃、升序去重。
-func TestNormalizeList(t *testing.T) {
-	got := NormalizeList([]string{"high", "Low", "ultra", "extra-high", "high", "minimal"})
-	if !slices.Equal(got, []string{"minimal", "low", "high", "xhigh"}) {
-		t.Errorf("NormalizeList = %v, want [minimal low high xhigh]", got)
-	}
-	if got := NormalizeList(nil); len(got) != 0 {
-		t.Errorf("NormalizeList(nil) = %v, want 空", got)
 	}
 }
 
@@ -45,30 +34,52 @@ func TestAuto(t *testing.T) {
 			t.Errorf("Auto(%q) = false, want true", string(raw))
 		}
 	}
-	for _, raw := range []json.RawMessage{json.RawMessage(`[]`), json.RawMessage(`["low"]`)} {
+	for _, raw := range []json.RawMessage{json.RawMessage(`[]`), json.RawMessage(`[{"name":"低","value":"low"}]`)} {
 		if Auto(raw) {
 			t.Errorf("Auto(%q) = true, want false", string(raw))
 		}
 	}
 }
 
-// TestEffective 校验:自动模式跟随上游声明(无声明即不支持);显式数组按
-// 词表升序去重;非法档位与非数组形态报错;显式空数组=不支持。
-func TestEffective(t *testing.T) {
-	// 自动 + 有声明:归一后的声明即有效列表。
-	got, err := Effective(nil, []string{"high", "low", "extra_high"})
-	if err != nil || !slices.Equal(got, []string{"low", "high", "xhigh"}) {
-		t.Errorf("自动+声明 = %v, %v, want [low high xhigh]", got, err)
+// TestEffectiveAuto 校验自动模式:跟随上游声明,值按原样保留(声明序,
+// 词表外私有档不丢),名取 Label,去空去重;无声明即不支持。
+func TestEffectiveAuto(t *testing.T) {
+	got, err := Effective(nil, []string{"low", "ultra", "extra-high", "low", " "})
+	want := []Entry{
+		{Name: "低", Value: "low"},
+		{Name: "ultra", Value: "ultra"},
+		{Name: "超高", Value: "extra-high"}, // 值原样上行,别名只用于取名
 	}
-	// 自动 + 无声明:不支持,选择器不露面。
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("自动+声明 = %v, %v, want %v(原值声明序)", got, err, want)
+	}
+
 	got, err = Effective(json.RawMessage(`null`), nil)
 	if err != nil || len(got) != 0 {
 		t.Errorf("自动+无声明 = %v, %v, want 空(不支持)", got, err)
 	}
-	// 显式数组压过上游声明。
-	got, err = Effective(json.RawMessage(`["high","low","high","xhigh"]`), []string{"minimal"})
-	if err != nil || !slices.Equal(got, []string{"low", "high", "xhigh"}) {
-		t.Errorf("显式数组 = %v, %v, want 升序去重 [low high xhigh]", got, err)
+}
+
+// TestEffectiveExplicit 校验显式声明:[{name,value}] 条目,name 留空按值
+// 自动命名,按 value 去重(保留首个,顺序不动),压过上游声明;存量纯
+// 字符串元素兼容;空值/坏形态报错;显式空数组=不支持。
+func TestEffectiveExplicit(t *testing.T) {
+	got, err := Effective(
+		json.RawMessage(`[{"name":"超","value":"high"},{"name":"","value":"ultra"},{"name":"重","value":"high"}]`),
+		[]string{"low"})
+	want := []Entry{
+		{Name: "超", Value: "high"},
+		{Name: "ultra", Value: "ultra"},
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("显式条目 = %v, %v, want %v(顺序不动,按值去重)", got, err, want)
+	}
+
+	// 存量纯字符串元素:名按 Label 推导。
+	got, err = Effective(json.RawMessage(`["low","high"]`), nil)
+	want = []Entry{{Name: "低", Value: "low"}, {Name: "高", Value: "high"}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("存量字符串数组 = %v, %v, want %v", got, err, want)
 	}
 
 	got, err = Effective(json.RawMessage(`[]`), []string{"low"})
@@ -76,10 +87,24 @@ func TestEffective(t *testing.T) {
 		t.Errorf("显式空数组 = %v, %v, want 空(不支持)", got, err)
 	}
 
-	if _, err = Effective(json.RawMessage(`["turbo"]`), nil); err == nil {
-		t.Error("词表外档位应报错")
+	if _, err = Effective(json.RawMessage(`[{"name":"空值","value":" "}]`), nil); err == nil {
+		t.Error("空 value 应报错")
+	}
+	if _, err = Effective(json.RawMessage(`[1]`), nil); err == nil {
+		t.Error("非字符串/对象元素应报错")
 	}
 	if _, err = Effective(json.RawMessage(`{"a":1}`), nil); err == nil {
 		t.Error("非数组形态应报错")
+	}
+}
+
+// TestContainsValue 与 Values 锁定发送侧校验的两个辅助。
+func TestContainsValue(t *testing.T) {
+	list := []Entry{{Name: "低", Value: "low"}, {Name: "私有", Value: "ultra"}}
+	if !ContainsValue(list, "ultra") || ContainsValue(list, "high") {
+		t.Errorf("ContainsValue 判定错误: %v", list)
+	}
+	if got := Values(list); !slices.Equal(got, []string{"low", "ultra"}) {
+		t.Errorf("Values = %v, want [low ultra]", got)
 	}
 }
