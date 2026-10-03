@@ -156,8 +156,8 @@ void main() {
     await pumpForm(tester, copyFrom: account);
 
     expect(find.text('拷贝账号 ds-1'), findsOneWidget);
-    expect(find.text('DeepSeek'), findsOneWidget,
-        reason: '厂商级跟随来源账号反推预填');
+    expect(find.text('DeepSeek'), findsNWidgets(2),
+        reason: '厂商级跟随来源账号反推预填(下拉选中值+分栏副标题各一处)');
     expect(find.text('按量计费'), findsOneWidget, reason: '计费模式级预填');
     expect(find.text('全球'), findsOneWidget, reason: '服务区域级预填');
     expect(fieldText(tester, 'account-name'), 'ds-1-copy');
@@ -176,8 +176,10 @@ void main() {
     await pumpForm(tester, editing: account);
 
     expect(find.text('基本信息'), findsOneWidget);
-    expect(find.text('DeepSeek · https://ds.example.com'), findsOneWidget,
-        reason: '收起也能靠副标题辨认当前提供商与地址');
+    expect(find.text('DeepSeek'), findsWidgets,
+        reason: '副标题与厂商下拉选中值都只留厂商名');
+    expect(find.text('DeepSeek · https://ds.example.com'), findsNothing,
+        reason: '基本信息副标题不再拼接具体访问地址');
     expect(find.byKey(const ValueKey('account-api-key')), findsOneWidget,
         reason: '主信息默认展开,字段直接可见');
 

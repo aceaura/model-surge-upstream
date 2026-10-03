@@ -319,9 +319,7 @@ class _AccountFormState extends State<AccountForm> {
     final p =
         widget.providers.where((p) => p.id == _providerId).firstOrNull;
     final name = p?.displayName ?? _providerId ?? '';
-    final url = _baseUrl.text.trim();
-    if (name.isEmpty && url.isEmpty) return '提供商、请求地址与密钥';
-    return [name, url].where((s) => s.isNotEmpty).join(' · ');
+    return name.isEmpty ? '提供商、请求地址与密钥' : name;
   }
 
   Widget _basicSection() {
