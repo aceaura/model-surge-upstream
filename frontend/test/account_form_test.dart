@@ -198,6 +198,28 @@ void main() {
     expect(fieldText(tester, 'account-base-url'), 'https://ds.example.com');
   });
 
+  testWidgets('disabled name field border matches enabled field style',
+      (tester) async {
+    await pumpForm(tester, editing: account);
+
+    InputDecoration decoOf(String key) => tester
+        .widget<InputDecorator>(find
+            .descendant(
+                of: find.byKey(ValueKey(key)),
+                matching: find.byType(InputDecorator))
+            .first)
+        .decoration;
+
+    final name = decoOf('account-name');
+    final url = decoOf('account-base-url');
+    final disabled = name.disabledBorder as OutlineInputBorder;
+    final enabled = url.enabledBorder as OutlineInputBorder;
+    expect(disabled.borderSide, enabled.borderSide,
+        reason: '禁用框描边颜色/宽度与启用框一致');
+    expect(disabled.borderRadius, enabled.borderRadius, reason: '圆角一致');
+    expect(name.fillColor, url.fillColor, reason: '填充色一致');
+  });
+
   testWidgets('edit masks key hint behind asterisks until eye tapped',
       (tester) async {
     await pumpForm(tester, editing: account);
