@@ -155,6 +155,26 @@ void main() {
     expect(spanOf('95%').style?.color, tokens.danger, reason: '≥90 水位为红');
   });
 
+  testWidgets('third meter renders on the same summary line', (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'account': 'ds-1',
+      'queryable': true,
+      'meters': [
+        {'kind': 'usage', 'unit': 'percent', 'label': '5小时', 'used': 20},
+        {'kind': 'usage', 'unit': 'percent', 'label': '7天', 'used': 69},
+        {'kind': 'usage', 'unit': 'percent', 'label': '本月', 'used': 3},
+      ],
+    });
+
+    final line = find.textContaining('5小时:');
+    expect(line, findsOneWidget);
+    final spans =
+        (tester.widget<Text>(line).textSpan! as TextSpan).children!;
+    final texts = spans.whereType<TextSpan>().map((s) => s.text).toList();
+    expect(texts, containsAll(['5小时:', '20%', '7天:', '69%', '本月:', '3%']),
+        reason: '月度计量与速率窗口同行展示,不再被截断到两条');
+  });
+
   testWidgets('auto interval re-queries on schedule', (tester) async {
     var calls = 0;
     final client = ApiClient(

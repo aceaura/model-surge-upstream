@@ -151,7 +151,7 @@ class _QuotaInlineState extends State<QuotaInline> {
   List<InlineSpan> _meterSpans(AppTokens t, List<QuotaMeter> meters) {
     final spans = <InlineSpan>[];
     const gap = WidgetSpan(child: SizedBox(width: 8));
-    for (final (i, m) in meters.take(2).indexed) {
+    for (final (i, m) in meters.take(3).indexed) {
       if (i > 0) spans.add(gap);
       if (m.unit == 'percent' && m.used != null) {
         spans.add(TextSpan(
@@ -199,7 +199,7 @@ class _QuotaInlineState extends State<QuotaInline> {
       );
 
   /// 非 percent 计量的单行摘要:有余量看余量(预付费),否则看已用
-  /// (后付费);最多取前两条计量,避免挤爆行宽。
+  /// (后付费);最多取前三条计量,避免挤爆行宽。
   String _compact(QuotaMeter m) {
     if (m.remaining != null) return '余额 ${m.amount(m.remaining)}';
     if (m.used != null) return '已用 ${m.amount(m.used)}';
