@@ -13,29 +13,59 @@ import '../ui/provider_avatar.dart';
 import '../ui/styled_dropdown.dart';
 import '../ui/top_toast.dart';
 
-/// codex CLI 登录态文件(~/.codex/auth.json)的默认路径。
-String defaultCodexAuthPath() {
-  final home =
-      Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'] ?? '';
-  return '$home${Platform.pathSeparator}.codex${Platform.pathSeparator}auth.json';
+/// 本机用户目录(Windows 取 USERPROFILE,其余取 HOME)。
+String userHomeDir() =>
+    Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'] ?? '';
+
+/// 本机 ChatGPT 登录态探测源,按优先级排列:
+/// codex CLI 原生 auth.json(ChatGPT 登录时带 tokens 段) → CC Switch 接管
+/// CLI 配置后保管的 OAuth 登录态(此时 auth.json 只剩 OPENAI_API_KEY)。
+List<(String, String)> codexAuthCandidates() {
+  final home = debugCodexHomeOverride ?? userHomeDir();
+  final sep = Platform.pathSeparator;
+  return [
+    ('codex CLI', '$home$sep.codex${sep}auth.json'),
+    ('CC Switch', '$home$sep.cc-switch${sep}codex_oauth_auth.json'),
+  ];
 }
 
-/// 从 auth.json 文本取出 (refresh_token, account_id);缺字段即格式错误。
+/// 从登录态文本取出 (refresh_token, account_id),两种形态都认:
+/// codex CLI 的 {tokens:{refresh_token,account_id}} 与 CC Switch 保管库的
+/// {default_account_id,accounts:{<id>:{refresh_token,chatgpt_account_id}}}。
+/// 注意 CC Switch 的 account_id 键是它自己的内部 id,真实 ChatGPT 账号在
+/// chatgpt_account_id;缺字段即格式错误。
 (String, String) parseCodexAuthJson(String text) {
   final decoded = jsonDecode(text);
-  final tokens = decoded is Map ? decoded['tokens'] : null;
-  final rt = tokens is Map ? tokens['refresh_token'] : null;
-  final id = tokens is Map ? tokens['account_id'] : null;
-  if (rt is! String || rt.isEmpty || id is! String || id.isEmpty) {
+  if (decoded is! Map) {
+    throw const FormatException('登录态文件不是 JSON 对象');
+  }
+  final tokens = decoded['tokens'];
+  if (tokens is Map) {
+    final rt = tokens['refresh_token'];
+    final id = tokens['account_id'];
+    if (rt is String && rt.isNotEmpty && id is String && id.isNotEmpty) {
+      return (rt, id);
+    }
     throw const FormatException(
         'auth.json 里缺少 tokens.refresh_token 或 tokens.account_id');
   }
-  return (rt, id);
+  final accounts = decoded['accounts'];
+  if (accounts is Map) {
+    final acc = accounts[decoded['default_account_id']];
+    final rt = acc is Map ? acc['refresh_token'] : null;
+    final id = acc is Map ? acc['chatgpt_account_id'] : null;
+    if (rt is String && rt.isNotEmpty && id is String && id.isNotEmpty) {
+      return (rt, id);
+    }
+    throw const FormatException(
+        'CC Switch 登录态里缺少 refresh_token 或 chatgpt_account_id');
+  }
+  throw const FormatException('缺少 tokens 段(codex CLI 是 API Key 登录,不是订阅登录)');
 }
 
-/// 测试覆写:指向临时 auth.json,避免碰真实用户目录。
+/// 测试覆写:指向临时用户目录,避免碰真实用户目录。
 @visibleForTesting
-String? debugCodexAuthPathOverride;
+String? debugCodexHomeOverride;
 
 /// 账号创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
 /// 侧边栏保持可见;不用居中弹窗)。
@@ -500,7 +530,7 @@ class _AccountFormState extends State<AccountForm> {
     return [
       LabeledField(
         label: 'Refresh Token',
-        hint: 'codex CLI auth.json 的 tokens.refresh_token;'
+        hint: 'codex CLI auth.json 或 CC Switch 保管的登录态;'
             '${_isEdit ? '留空保留原登录态' : '粘贴后由服务端自动续期'}',
         child: TextFormField(
           key: const ValueKey('account-refresh-token'),
@@ -533,7 +563,7 @@ class _AccountFormState extends State<AccountForm> {
       const SizedBox(height: 20),
       LabeledField(
         label: 'Account ID',
-        hint: 'auth.json 的 tokens.account_id',
+        hint: '登录态里的 ChatGPT account_id',
         child: TextFormField(
           key: const ValueKey('account-account-id'),
           controller: _accountId,
@@ -551,33 +581,34 @@ class _AccountFormState extends State<AccountForm> {
         child: OutlinedButton.icon(
           key: const ValueKey('oauth-autofill-codex'),
           icon: const Icon(Icons.bolt_outlined, size: 18),
-          label: const Text('从 codex CLI 自动填入'),
+          label: const Text('自动填入本机登录态'),
           onPressed: _fillFromCodexCli,
         ),
       ),
     ];
   }
 
-  /// 读本机 codex CLI 的 auth.json,一键填入 refresh_token 与 account_id。
+  /// 依次探测本机登录态(codex CLI auth.json → CC Switch 保管库),
+  /// 命中的第一个来源填入 refresh_token 与 account_id。
   /// 本地几 KB 小文件,同步读避免异步缝隙里表单已销毁。
   void _fillFromCodexCli() {
-    final path = debugCodexAuthPathOverride ?? defaultCodexAuthPath();
-    String message;
-    var ok = false;
-    try {
-      final (rt, id) = parseCodexAuthJson(File(path).readAsStringSync());
-      setState(() {
-        _refreshToken.text = rt;
-        _accountId.text = id;
-      });
-      ok = true;
-      message = '已填入 codex CLI 登录态';
-    } on FileSystemException {
-      message = '未找到 $path,请先在终端完成一次 codex 登录';
-    } on FormatException catch (e) {
-      message = e.message;
+    final misses = <String>[];
+    for (final (label, path) in codexAuthCandidates()) {
+      try {
+        final (rt, id) = parseCodexAuthJson(File(path).readAsStringSync());
+        setState(() {
+          _refreshToken.text = rt;
+          _accountId.text = id;
+        });
+        TopToast.show(context, '已填入 $label 的登录态');
+        return;
+      } on FileSystemException {
+        misses.add('$label: $path 不存在');
+      } on FormatException catch (e) {
+        misses.add('$label: ${e.message}');
+      }
     }
-    TopToast.show(context, message, error: !ok);
+    TopToast.show(context, misses.join('\n'), error: true);
   }
 
   // ── 额度脚本区(仿 CC Switch 脚本弹窗,收进可折叠分栏)──
