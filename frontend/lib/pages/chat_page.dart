@@ -369,7 +369,24 @@ class _ChatPageState extends State<ChatPage> {
       _sending = true;
       _input.clear();
       _pending = [];
+      // 乐观上屏:用户消息立刻出现在右侧,不等整轮回复(codex 非流式
+      // 一等几十秒,此前要等 Send 返回才能看到自己发了什么);整轮返回后
+      // 以服务端的落库版本整体替换。
+      _messages = [
+        ..._messages,
+        ChatMessage(
+          id: -1,
+          role: 'user',
+          content: text,
+          attachments: [
+            for (final p in pending)
+              ChatAttachment(mime: p.mime, data: base64Encode(p.bytes)),
+          ],
+          createdAt: DateTime.now(),
+        ),
+      ];
     });
+    _toEnd();
     try {
       final msgs = await widget.client.sendChatMessage(
         id,

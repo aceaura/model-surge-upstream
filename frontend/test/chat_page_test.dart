@@ -475,6 +475,91 @@ void main() {
     expect(find.text('正在思考，请稍候…'), findsNothing);
   });
 
+  testWidgets('发送后用户消息立即上屏,不等回复返回', (tester) async {
+    // codex 非流式整轮等待几十秒:此前用户消息要等 Send 返回才出现,
+    // 等待期间右侧只有思考气泡,像消息没发出去(用户截图点名)。
+    final gate = Completer<void>();
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final p = request.url.path;
+        Object? payload;
+        if (request.method == 'GET' && p == '/admin/chat/sessions') {
+          payload = {
+            'sessions': [
+              {
+                'id': 's1',
+                'title': '旧对话',
+                'model_id': 'kimi-1/k2',
+                'updated_at': '2026-09-16T10:00:00Z',
+              },
+            ],
+          };
+        } else if (request.method == 'GET' && p == '/admin/models') {
+          payload = {'models': _Stub.models};
+        } else if (request.method == 'GET' &&
+            p == '/admin/chat/sessions/s1/messages') {
+          payload = {
+            'session': {
+              'id': 's1',
+              'title': '旧对话',
+              'model_id': 'kimi-1/k2',
+              'updated_at': '2026-09-16T10:00:00Z',
+            },
+            'messages': <dynamic>[],
+          };
+        } else if (request.method == 'POST' &&
+            p == '/admin/chat/sessions/s1/messages') {
+          await gate.future;
+          payload = {
+            'messages': [
+              {
+                'id': 1,
+                'session_id': 's1',
+                'role': 'user',
+                'content': '7×8=?',
+                'created_at': '2026-10-03T18:00:00Z',
+              },
+              {
+                'id': 2,
+                'session_id': 's1',
+                'role': 'assistant',
+                'content': '56',
+                'created_at': '2026-10-03T18:00:05Z',
+              },
+            ],
+          };
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: ChatPage(client: client, imageSource: _FakeImageSource()),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '7×8=?');
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pump(); // 进入 _sending,回复未归
+
+    expect(find.text('7×8=?'), findsOneWidget,
+        reason: '等待回复期间用户消息已乐观上屏');
+    expect(find.text('思考中…'), findsOneWidget);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('7×8=?'), findsOneWidget,
+        reason: '整轮返回后以服务端落库版替换,不重复');
+    expect(find.text('56'), findsOneWidget);
+  });
+
   testWidgets('重新激活(active false→true)静默重拉模型与会话,选择器能看到新建模型',
       (tester) async {
     // 页在 IndexedStack 里常驻:别处(模型页/API)新建模型后切回对话页,
