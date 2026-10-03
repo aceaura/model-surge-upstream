@@ -173,6 +173,7 @@ class Account {
     this.maskedRefreshToken = '',
     this.accountId = '',
     this.needsReauth = false,
+    this.maskedWebRefreshToken = '',
   });
 
   final String name;
@@ -199,6 +200,10 @@ class Account {
   /// oauth_refresh 形态:登录态终态失效,需重新粘贴凭据。
   final bool needsReauth;
 
+  /// kimi 会员月总额度的网页会话 refresh_token(服务端脱敏,仅供显示);
+  /// 空串表示未配置,额度查询不出「本月」计量。
+  final String maskedWebRefreshToken;
+
   factory Account.fromJson(Map<String, dynamic> json) {
     final credential = json['credential'] as Map<String, dynamic>? ?? const {};
     final headers = json['headers'] as Map<String, dynamic>? ?? const {};
@@ -215,6 +220,7 @@ class Account {
       maskedRefreshToken: credential['refresh_token'] as String? ?? '',
       accountId: credential['account_id'] as String? ?? '',
       needsReauth: json['needs_reauth'] as bool? ?? false,
+      maskedWebRefreshToken: credential['web_refresh_token'] as String? ?? '',
     );
   }
 }

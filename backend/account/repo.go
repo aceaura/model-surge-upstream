@@ -111,6 +111,17 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 	}
 	if in.Credential.Kind == "" {
 		in.Credential = existing.Credential
+	} else if in.Credential.Kind == provider.CredAPIKey &&
+		existing.Credential.Kind == provider.CredAPIKey {
+		// api_key 形态的留空保留语义:密钥框留空=不换密钥;网页会话
+		// token 留空=保留原值(kimi 月度额度凭据)。整体替换凭据会误清
+		// 用户没碰的那一半,所以这里按字段合并而不是全量覆盖。
+		if strings.TrimSpace(in.Credential.APIKey) == "" {
+			in.Credential.APIKey = existing.Credential.APIKey
+		}
+		if in.Credential.WebRefreshToken == "" {
+			in.Credential.WebRefreshToken = existing.Credential.WebRefreshToken
+		}
 	}
 	if in.QuotaScript == nil {
 		in.QuotaScript = existing.QuotaScript

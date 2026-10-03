@@ -27,10 +27,28 @@ type Credential struct {
 	AccessToken  string    `json:"access_token,omitempty"`
 	Expiry       time.Time `json:"expiry,omitzero"`
 	AccountID    string    `json:"account_id,omitempty"`
+	// WebRefreshToken 是网页会话刷新令牌(kimi 会员月总额度只在网页
+	// 网关可查,API key 拿不到),api_key 形态账号的可选附加项;配额
+	// 查询链用它换短效 access_token,令牌本体不落库轮换(上游无硬轮换)。
+	WebRefreshToken string `json:"web_refresh_token,omitempty"`
 }
 
 // Decode 两步解码：先取 kind，再按 kind 校验具体字段。
 func Decode(raw []byte) (Credential, error) {
+	c, err := DecodeShaped(raw)
+	if err != nil {
+		return Credential{}, err
+	}
+	if err := c.Validate(); err != nil {
+		return Credential{}, err
+	}
+	return c, nil
+}
+
+// DecodeShaped 只校验 JSON 与 kind 合法性,不校验字段必填。账号更新走
+// 留空保留语义(空 api_key=不换密钥),必填校验在仓储合并后统一进行;
+// 创建路径同样经仓储 validate 兜底,不会放进空密钥。
+func DecodeShaped(raw []byte) (Credential, error) {
 	var probe struct {
 		Kind provider.CredentialKind `json:"kind"`
 	}
@@ -47,9 +65,6 @@ func Decode(raw []byte) (Credential, error) {
 	var c Credential
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return Credential{}, fmt.Errorf("credential is not valid json: %v", err)
-	}
-	if err := c.Validate(); err != nil {
-		return Credential{}, err
 	}
 	return c, nil
 }
@@ -87,26 +102,28 @@ func (c Credential) Encode() ([]byte, error) { return json.Marshal(c) }
 // Redact 转成脱敏视图，用于任何会离开进程且非下发面的路径。
 func (c Credential) Redact() Redacted {
 	return Redacted{
-		Kind:         c.Kind,
-		APIKey:       Mask(c.APIKey),
-		RefreshToken: Mask(c.RefreshToken),
-		AccountID:    c.AccountID,
+		Kind:            c.Kind,
+		APIKey:          Mask(c.APIKey),
+		RefreshToken:    Mask(c.RefreshToken),
+		AccountID:       c.AccountID,
+		WebRefreshToken: Mask(c.WebRefreshToken),
 	}
 }
 
 // String 保证凭据不会因日志格式化而泄露。
 func (c Credential) String() string {
-	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s}",
-		c.Kind, Mask(c.APIKey), Mask(c.RefreshToken), Mask(c.AccessToken))
+	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s WebRefreshToken:%s}",
+		c.Kind, Mask(c.APIKey), Mask(c.RefreshToken), Mask(c.AccessToken), Mask(c.WebRefreshToken))
 }
 
 // Redacted 脱敏视图。AccessToken 是短效续期产物,不下发;AccountID 是标识
 // 不是秘密,明文下发(管理面展示授权归属)。
 type Redacted struct {
-	Kind         provider.CredentialKind `json:"kind"`
-	APIKey       string                  `json:"api_key,omitempty"`
-	RefreshToken string                  `json:"refresh_token,omitempty"`
-	AccountID    string                  `json:"account_id,omitempty"`
+	Kind            provider.CredentialKind `json:"kind"`
+	APIKey          string                  `json:"api_key,omitempty"`
+	RefreshToken    string                  `json:"refresh_token,omitempty"`
+	AccountID       string                  `json:"account_id,omitempty"`
+	WebRefreshToken string                  `json:"web_refresh_token,omitempty"`
 }
 
 // Mask 短值全掩，长值保留前 4 后 4。

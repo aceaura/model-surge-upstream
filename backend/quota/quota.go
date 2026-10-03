@@ -67,6 +67,8 @@ type Quota struct {
 	ttl      time.Duration
 	tokens   TokenSource
 
+	kimiTokens kimiAccessCache
+
 	mu     sync.RWMutex
 	cached map[string]entry
 }
@@ -108,12 +110,14 @@ func (q *Quota) Query(ctx context.Context, accountName string) (Report, error) {
 		if err != nil {
 			return Report{}, err
 		}
+		q.appendKimiMonthly(ctx, spec, acc, &report)
 		q.store(accountName, report)
 		return report, nil
 	}
 	if spec.Quota == nil {
 		// 不可查询是一种正常答案，不是错误。
 		report := Report{Account: acc.Name, Queryable: false, Meters: []Meter{}, At: time.Now().UTC()}
+		q.appendKimiMonthly(ctx, spec, acc, &report)
 		q.store(accountName, report)
 		return report, nil
 	}
@@ -122,6 +126,7 @@ func (q *Quota) Query(ctx context.Context, accountName string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	q.appendKimiMonthly(ctx, spec, acc, &report)
 	q.store(accountName, report)
 	return report, nil
 }
@@ -359,4 +364,5 @@ func (q *Quota) Forget(name string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.cached, name)
+	q.kimiTokens.drop(name)
 }

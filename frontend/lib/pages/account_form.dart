@@ -61,6 +61,60 @@ String codexAppAuthPath() {
 @visibleForTesting
 String? debugCodexHomeOverride;
 
+/// kimi-desktop 本地存储目录(leveldb 里存着网页会话的 refresh/access token)。
+String kimiDesktopLeveldbDir() {
+  final override = debugKimiDesktopDirOverride;
+  if (override != null) return override;
+  final appData = Platform.environment['APPDATA'] ?? '';
+  return '$appData${Platform.pathSeparator}kimi-desktop'
+      '${Platform.pathSeparator}Local Storage${Platform.pathSeparator}leveldb';
+}
+
+/// 测试覆写:指向临时 leveldb 目录,避免碰真实 kimi-desktop 数据。
+@visibleForTesting
+String? debugKimiDesktopDirOverride;
+
+final _jwtPattern =
+    RegExp(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+');
+
+/// 从 kimi-desktop leveldb 文件字节里挑网页会话 refresh_token:JWT 三段、
+/// 载荷 iss=user-center 且 typ=refresh,取 exp 最大者(access token 短效
+/// 且 type 不匹配,刷新链只认 refresh)。找不到即抛 FormatException,
+/// 由调用方报「未找到登录态」。
+String parseKimiWebRefreshToken(Iterable<List<int>> blobs) {
+  String? best;
+  var bestExp = 0;
+  for (final blob in blobs) {
+    final text = utf8.decode(blob, allowMalformed: true);
+    for (final m in _jwtPattern.allMatches(text)) {
+      final token = m.group(0)!;
+      final parts = token.split('.');
+      if (parts.length != 3) continue;
+      Map<String, dynamic> payload;
+      try {
+        final decoded = jsonDecode(
+            utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
+        if (decoded is! Map<String, dynamic>) continue;
+        payload = decoded;
+      } on FormatException {
+        continue;
+      }
+      if (payload['iss'] != 'user-center' || payload['typ'] != 'refresh') {
+        continue;
+      }
+      final exp = (payload['exp'] as num?)?.toInt() ?? 0;
+      if (exp > bestExp) {
+        best = token;
+        bestExp = exp;
+      }
+    }
+  }
+  if (best == null) {
+    throw const FormatException('本地存储里没有网页会话登录态(请先登录 kimi-desktop)');
+  }
+  return best;
+}
+
 /// 账号创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
 /// 侧边栏保持可见;不用居中弹窗)。
 /// editing 非空时为编辑：密钥留空表示保留原凭据。
@@ -101,6 +155,9 @@ class _AccountFormState extends State<AccountForm> {
   late final TextEditingController _refreshToken = TextEditingController();
   late final TextEditingController _accountId = TextEditingController(
       text: widget.editing?.accountId ?? widget.copyFrom?.accountId ?? '');
+  // kimi 网页会话 token(api_key 形态的可选附加凭据):会员月总额度只在
+  // 网页网关可查,API key 拿不到;永不下发明文,编辑态留空表示保留。
+  late final TextEditingController _webRefreshToken = TextEditingController();
 
   late String? _providerId =
       widget.editing?.providerId ?? widget.copyFrom?.providerId;
@@ -154,6 +211,7 @@ class _AccountFormState extends State<AccountForm> {
     _apiKey.dispose();
     _refreshToken.dispose();
     _accountId.dispose();
+    _webRefreshToken.dispose();
     _baseUrl.dispose();
     _scriptCode.dispose();
     _scriptTimeout.dispose();
@@ -255,7 +313,16 @@ class _AccountFormState extends State<AccountForm> {
   /// oauth 凭据提交载荷:null=不是 oauth 形态或编辑态保留原登录态。
   /// 服务端要求 oauth_refresh 必带 refresh_token,所以编辑态只有用户
   /// 重新粘贴了 refresh_token 才整体替换凭据。
+  /// kimi(api_key 形态)走完整 credential 对象以携带网页会话 token;
+  /// 服务端按字段合并,留空的密钥/网页 token 都保留原值。
   Map<String, dynamic>? _credentialPayload() {
+    if (_providerId == 'kimi') {
+      return {
+        'kind': 'api_key',
+        'api_key': _apiKey.text.trim(),
+        'web_refresh_token': _webRefreshToken.text.trim(),
+      };
+    }
     if (!_isOAuth) return null;
     final rt = _refreshToken.text.trim();
     if (_isEdit && rt.isEmpty) return null;
@@ -480,6 +547,10 @@ class _AccountFormState extends State<AccountForm> {
             const SizedBox(height: 20),
           ],
           if (_isOAuth) ..._oauthFields() else _apiKeyField(),
+          if (_providerId == 'kimi') ...[
+            const SizedBox(height: 20),
+            _kimiWebTokenField(),
+          ],
         ],
       ),
     );
@@ -521,6 +592,73 @@ class _AccountFormState extends State<AccountForm> {
         },
       ),
     );
+  }
+
+  /// kimi 网页会话 token:月度会员额度查询链的凭据。与密钥同款交互——
+  /// 默认纯星号、眼睛亮掩码、完整 token 后端从不下发;可选手动粘贴或
+  /// 从本机 kimi-desktop 本地存储自动提取。
+  Widget _kimiWebTokenField() {
+    final masked = widget.editing?.maskedWebRefreshToken ??
+        widget.copyFrom?.maskedWebRefreshToken ??
+        '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LabeledField(
+          label: '网页会话 Token',
+          hint: '可选;填入后额度页可显示会员月总额度。'
+              '${_isEdit ? '留空保留原值' : ''}',
+          child: TextFormField(
+            key: const ValueKey('account-web-refresh-token'),
+            controller: _webRefreshToken,
+            obscureText: !_revealKey,
+            decoration: InputDecoration(
+              hintText: (_isEdit || widget.copyFrom != null)
+                  ? _revealKey
+                      ? masked
+                      : '************'
+                  : null,
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                tooltip: _revealKey ? '隐藏' : '显示',
+                icon: Icon(_revealKey
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined),
+                onPressed: () => setState(() => _revealKey = !_revealKey),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          key: const ValueKey('kimi-autofill-desktop'),
+          icon: const Icon(Icons.desktop_windows_outlined, size: 18),
+          label: const Text('从 kimi-desktop 获取'),
+          onPressed: _fillKimiWebToken,
+        ),
+      ],
+    );
+  }
+
+  /// 扫 kimi-desktop leveldb 的 .log/.ldb 文件,挑出网页会话 refresh_token
+  /// 填入。本地小文件,同步读避免异步缝隙里表单已销毁。
+  void _fillKimiWebToken() {
+    try {
+      final dir = Directory(kimiDesktopLeveldbDir());
+      if (!dir.existsSync()) {
+        throw const FormatException('未找到 kimi-desktop 本地存储(请先安装并登录)');
+      }
+      final blobs = dir
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.log') || f.path.endsWith('.ldb'))
+          .map((f) => f.readAsBytesSync());
+      final token = parseKimiWebRefreshToken(blobs);
+      setState(() => _webRefreshToken.text = token);
+      TopToast.show(context, '已填入 kimi-desktop 的网页会话登录态');
+    } on FormatException catch (e) {
+      TopToast.show(context, 'kimi-desktop: ${e.message}', error: true);
+    }
   }
 
   List<Widget> _oauthFields() {

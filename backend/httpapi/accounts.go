@@ -36,7 +36,9 @@ func (r accountRequest) input(name string) (account.Input, error) {
 	}
 	switch {
 	case len(r.Credential) > 0:
-		cred, err := credential.Decode(r.Credential)
+		// 用宽松解码:更新走留空保留语义(空 api_key=保留原密钥),
+		// 必填校验在仓储合并现有凭据后统一进行。
+		cred, err := credential.DecodeShaped(r.Credential)
 		if err != nil {
 			return account.Input{}, apperr.New(apperr.InvalidCredential, err.Error())
 		}

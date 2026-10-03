@@ -127,8 +127,35 @@ func TestEncodeRoundTripOAuth(t *testing.T) {
 	}
 }
 
-func TestMask(t *testing.T) {
-	cases := map[string]string{
+func TestWebRefreshTokenRoundTripAndRedact(t *testing.T) {
+	c := Credential{Kind: provider.CredAPIKey, APIKey: "sk-abcdefghijkl",
+		WebRefreshToken: "eyJhbGciOiJIUzI1NiJ9.web.refresh"}
+
+	raw, err := c.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back != c {
+		t.Errorf("round trip changed the credential: %+v vs %+v", back, c)
+	}
+
+	redacted, err := json.Marshal(c.Redact())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(redacted), c.WebRefreshToken) {
+		t.Errorf("redacted view leaked web_refresh_token: %s", redacted)
+	}
+	if !strings.Contains(string(redacted), "web_refresh_token") {
+		t.Errorf("redacted view should keep the field shape: %s", redacted)
+	}
+}
+
+func TestMask(t *testing.T) {	cases := map[string]string{
 		"":                "",
 		"sk":              "***",
 		"12345678":        "***",

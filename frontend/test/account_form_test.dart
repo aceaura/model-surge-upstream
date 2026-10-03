@@ -44,6 +44,17 @@ final providers = [
     'billing': 'subscription',
     'region': 'Global',
   }),
+  ProviderSpec.fromJson(const {
+    'id': 'kimi',
+    'display_name': 'Kimi',
+    'website': 'https://www.kimi.com',
+    'base_url': 'https://api.kimi.com',
+    'protocols': ['chat_completions'],
+    'auth': 'bearer',
+    'credential': 'api_key',
+    'billing': 'subscription',
+    'region': 'CN',
+  }),
 ];
 
 /// oauth_refresh(订阅登录态)账号样本。
@@ -91,6 +102,19 @@ final accountWithScript = Account.fromJson(const {
     'auto_interval_minutes': 5,
     'stop_interval_minutes': 8,
   },
+});
+
+/// kimi 账号样本:api_key 形态附带网页会话 token(月度额度凭据)。
+final accountKimi = Account.fromJson(const {
+  'name': 'kimi-1',
+  'provider_id': 'kimi',
+  'credential': {
+    'kind': 'api_key',
+    'api_key': 'sk-k***i',
+    'web_refresh_token': 'eyJh***xyz',
+  },
+  'base_url': '',
+  'enabled': true,
 });
 
 ApiClient stubClient() => ApiClient(
@@ -785,5 +809,108 @@ void main() {
         reason: '按 default_account_id 取默认账号');
     expect(() => parseCodexAppAuth('{"accounts":{}}'),
         throwsA(isA<FormatException>()));
+  });
+
+  // ── kimi 网页会话 token:月度额度凭据的字段与自动获取 ──
+
+  /// 造一个三段假 JWT(载荷自定义),满足 _jwtPattern 的形态。
+  String fakeJwt(Map<String, dynamic> payload) {
+    String seg(Map<String, dynamic> m) =>
+        base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+    return '${seg({'alg': 'RS256', 'typ': 'JWT'})}.${seg(payload)}.sig';
+  }
+
+  String fakeRefreshJwt(int exp) =>
+      fakeJwt({'iss': 'user-center', 'typ': 'refresh', 'exp': exp});
+
+  testWidgets('kimi form shows web token field, other providers do not',
+      (tester) async {
+    await pumpForm(tester, editing: account);
+    expect(find.byKey(const ValueKey('account-web-refresh-token')),
+        findsNothing,
+        reason: 'deepseek 没有网页会话 token 字段');
+  });
+
+  testWidgets('kimi edit shows masked web token field with autofill button',
+      (tester) async {
+    await pumpForm(tester, editing: accountKimi);
+    expect(
+        find.byKey(const ValueKey('account-web-refresh-token')), findsOneWidget);
+    expect(find.byKey(const ValueKey('kimi-autofill-desktop')), findsOneWidget);
+    final field = tester.widget<TextFormField>(
+        find.byKey(const ValueKey('account-web-refresh-token')));
+    expect(field.controller!.text, isEmpty, reason: '编辑态 token 不回显明文');
+    expect(find.textContaining('************'), findsWidgets,
+        reason: '默认纯星号,眼睛才亮掩码');
+    expect(find.textContaining('eyJh***xyz'), findsNothing,
+        reason: '未点眼睛前网页 token 掩码字符一个都不露');
+  });
+
+  testWidgets('kimi create submits credential with web refresh token',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+
+    await selectCascade(tester, vendor: 'Kimi', billing: '订阅', region: '中国');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'kimi-9');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-kimi-9');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-web-refresh-token')), 'web-rt-9');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(captured, hasLength(1));
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    final credential = body['credential'] as Map<String, dynamic>;
+    expect(credential['kind'], 'api_key');
+    expect(credential['api_key'], 'sk-kimi-9');
+    expect(credential['web_refresh_token'], 'web-rt-9',
+        reason: '网页会话 token 随 credential 上行,服务端月度链据此查询');
+  });
+
+  testWidgets('kimi desktop button fills web token from leveldb',
+      (tester) async {
+    final dir = Directory.systemTemp.createTempSync('msu-kimi-test');
+    addTearDown(() {
+      debugKimiDesktopDirOverride = null;
+      dir.deleteSync(recursive: true);
+    });
+    debugKimiDesktopDirOverride = dir.path;
+    final token = fakeRefreshJwt(4102444800);
+    File('${dir.path}${Platform.pathSeparator}000123.log')
+        .writeAsStringSync('noise"$token"noise');
+    await pumpForm(tester, editing: accountKimi);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('kimi-autofill-desktop')));
+    await tester.tap(find.byKey(const ValueKey('kimi-autofill-desktop')));
+    await tester.pump();
+
+    expect(fieldText(tester, 'account-web-refresh-token'), token);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('kimi web token parser picks latest refresh JWT only',
+      (tester) async {
+    final older = fakeRefreshJwt(1000);
+    final newer = fakeRefreshJwt(2000);
+    final access = fakeJwt({'iss': 'user-center', 'typ': 'access', 'exp': 9999});
+    final other = fakeJwt({'iss': 'someone-else', 'typ': 'refresh', 'exp': 9999});
+    // leveldb 里 token 以带引号/二进制前缀的字符串存储,引号即分隔。
+    final blobs = [utf8.encode('x"$older"y"$access"z"$other"w')];
+    expect(parseKimiWebRefreshToken(blobs), older,
+        reason: 'access/异 issuer 一律跳过');
+    expect(parseKimiWebRefreshToken([...blobs, utf8.encode('q"$newer"q')]),
+        newer,
+        reason: '多个 refresh 取 exp 最大者');
+    expect(() => parseKimiWebRefreshToken([utf8.encode('no tokens here')]),
+        throwsA(isA<FormatException>()));
+    expect(
+        () => parseKimiWebRefreshToken(
+            [utf8.encode('prefix"$access"suffix')]),
+        throwsA(isA<FormatException>()),
+        reason: '只有 access token 不算网页登录态');
   });
 }

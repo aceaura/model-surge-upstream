@@ -182,8 +182,50 @@ func TestUpdateKeepsCredentialWhenOmitted(t *testing.T) {
 	}
 }
 
-func TestUpdateNotFound(t *testing.T) {
+func TestUpdateMergesAPIKeyCredentialFields(t *testing.T) {
 	repo := newRepo(t)
+	ctx := context.Background()
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 只给网页 token 不给密钥:密钥保留,token 落库。
+	updated, err := repo.Update(ctx, Input{
+		Name:    "kimi-1",
+		Enabled: true,
+		Credential: credential.Credential{
+			Kind:            provider.CredAPIKey,
+			WebRefreshToken: "web-rt-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Credential.APIKey != "sk-kimi-1-secret" {
+		t.Errorf("密钥留空应保留: %+v", updated.Credential)
+	}
+	if updated.Credential.WebRefreshToken != "web-rt-1" {
+		t.Errorf("web token 应落库: %+v", updated.Credential)
+	}
+
+	// 只换密钥不给 token:token 保留,密钥更新。
+	updated, err = repo.Update(ctx, Input{
+		Name:       "kimi-1",
+		Enabled:    true,
+		Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-new-secret"},
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Credential.APIKey != "sk-new-secret" {
+		t.Errorf("密钥应被更新: %+v", updated.Credential)
+	}
+	if updated.Credential.WebRefreshToken != "web-rt-1" {
+		t.Errorf("web token 留空应保留: %+v", updated.Credential)
+	}
+}
+
+func TestUpdateNotFound(t *testing.T) {	repo := newRepo(t)
 	_, err := repo.Update(context.Background(), input("ghost", "kimi"))
 	if !apperr.Is(err, apperr.NotFound) {
 		t.Errorf("err = %v, want not_found", err)
