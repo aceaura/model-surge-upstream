@@ -5,12 +5,15 @@ package resolve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/model"
+	"github.com/aceaura/model-surge-upstream/backend/oauth"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
@@ -75,13 +78,27 @@ type Models interface {
 	List(ctx context.Context, account string) ([]model.Model, error)
 }
 
+// Tokens 是 OAuth 登录态的 access_token 来源(oauth.Manager 实现):
+// 凭据里 token 临期时由它负责续期并落库。
+type Tokens interface {
+	AccessToken(ctx context.Context, acc account.Account) (string, error)
+}
+
 type Resolver struct {
 	accounts Accounts
 	models   Models
+	tokens   Tokens
 }
 
 func NewResolver(accounts Accounts, models Models) *Resolver {
 	return &Resolver{accounts: accounts, models: models}
+}
+
+// WithTokens 挂上 OAuth token 来源:有 oauth_refresh 形态凭据的账号时
+// 必须装配,否则解析到这类账号报错。
+func (r *Resolver) WithTokens(t Tokens) *Resolver {
+	r.tokens = t
+	return r
 }
 
 func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget, error) {
@@ -106,6 +123,11 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 			fmt.Sprintf("account %q references unknown provider %q", acc.Name, acc.ProviderID))
 	}
 
+	headers, err := r.authHeaders(ctx, spec, acc)
+	if err != nil {
+		return ResolvedTarget{}, err
+	}
+
 	return ResolvedTarget{
 		ModelID:       m.ID,
 		Account:       acc.Name,
@@ -114,11 +136,38 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		BaseURL:       acc.EffectiveBaseURL(spec),
 		NativeModel:   m.NativeModel,
 		ContextWindow: m.ContextWindow,
-		Headers:       AuthHeaders(spec, acc),
+		Headers:       headers,
 		Defaults:      m.Defaults,
 		Overrides:     m.Overrides,
 		Compact:       m.Compact,
 	}, nil
+}
+
+// authHeaders 按凭据形态分派:oauth_refresh 走 token 来源取活体
+// access_token 并套 codex 头集(订阅登录态目前只有 codex 一种);
+// 其余沿用 provider 声明的静态认证头形态。
+func (r *Resolver) authHeaders(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error) {
+	if acc.Credential.Kind != provider.CredOAuthRefresh {
+		return AuthHeaders(spec, acc), nil
+	}
+	if r.tokens == nil {
+		return nil, apperr.New(apperr.InvalidCredential,
+			fmt.Sprintf("account %q uses oauth credential but token source is not wired", acc.Name))
+	}
+	token, err := r.tokens.AccessToken(ctx, acc)
+	if err != nil {
+		if errors.Is(err, oauth.ErrNeedsReauth) {
+			return nil, apperr.New(apperr.InvalidCredential,
+				fmt.Sprintf("account %q login state expired, re-paste credentials", acc.Name))
+		}
+		return nil, apperr.Wrap(apperr.UpstreamUnavailable, "refresh oauth token", err)
+	}
+	out := codex.Headers(token, acc.Credential.AccountID)
+	// 账号自定义头后写,允许运维者覆盖默认头(与静态形态同语义)。
+	for k, v := range acc.Headers {
+		out[k] = v
+	}
+	return out, nil
 }
 
 // AuthHeaders 依 provider 声明的认证头形态生成头，再叠加账号自定义头。

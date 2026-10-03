@@ -3,7 +3,9 @@ package proxyplane
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/compact"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
@@ -38,6 +41,15 @@ type Handler struct {
 	client    *http.Client
 	sink      UsageSink
 	compactor *compact.Runner
+	// invalidator 作废 OAuth 账号当前 access_token;nil 表示未装配
+	// OAuth(遇 oauth 账号 401 时只能透传,不能刷新重试)。
+	invalidator Invalidator
+}
+
+// Invalidator 上游 401 时作废 OAuth 账号的 access_token(oauth.Manager
+// 实现),下次解析强制续期。
+type Invalidator interface {
+	Invalidate(name, accessToken string)
 }
 
 // UsageRecord 转发面旁路统计产出的一次请求记录：不管成功失败都记，
@@ -75,6 +87,13 @@ func NewHandler(apiKey string, resolver Resolver, sink UsageSink) *Handler {
 // passive 模式无操作；响应透传路径不受影响。
 func (h *Handler) WithCompactor(c *compact.Runner) *Handler {
 	h.compactor = c
+	return h
+}
+
+// WithInvalidator 挂上 OAuth token 作废器（nil 表示关闭，默认）:
+// codex 等 OAuth 账号上游 401 时作废旧 token、重解析、原样重放一次。
+func (h *Handler) WithInvalidator(v Invalidator) *Handler {
+	h.invalidator = v
 	return h
 }
 
@@ -236,6 +255,12 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 		}
 		merged = out
 	}
+	// codex 订阅端点的硬约束(store/stream/剥采样参数/instructions)与
+	// 路径映射(/v1/responses→/responses)最后应用:压过 defaults/overrides。
+	if target.ProviderID == codex.ProviderID {
+		merged = codex.ShapeBody(merged, target.NativeModel)
+		suffix = codex.MapSuffix(suffix)
+	}
 	h.forward(w, r, fam, target, suffix, merged)
 }
 
@@ -293,6 +318,8 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 
 // forward 把改写后的请求发往解析出的上游，并把响应（含流式）原样回传。
 // 回传的同时旁路嗅探用量：统计失败或无用量都不影响透传本身。
+// codex 等 OAuth 账号遇 401 时作废旧 token、重解析、原样重放一次:
+// 订阅登录态的 access_token 短命,401 多半是服务端提前作废。
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, target resolve.ResolvedTarget, suffix string, body map[string]any) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -305,24 +332,66 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	if q := stripKeyQuery(r.URL.RawQuery); q != "" {
 		url += "?" + q
 	}
-	up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(encoded))
+	// 请求体字节固定,重试时按新头集重建请求。
+	build := func(headers map[string]string) (*http.Request, error) {
+		up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(encoded))
+		if err != nil {
+			return nil, err
+		}
+		copyHeaders(up.Header, r.Header, stripRequestHeaders)
+		up.Header.Set("Content-Type", "application/json")
+		if target.ProviderID == codex.ProviderID {
+			// 客户端自带的会话头一律作废(sub2api 同款):session 由服务端
+			// 按账号+prompt_cache_key 派生,防串号遥测。
+			for _, k := range []string{"session_id", "conversation_id", "x-client-request-id"} {
+				up.Header.Del(k)
+			}
+			key, _ := body["prompt_cache_key"].(string)
+			sid := codex.SessionID(target.Account, key)
+			up.Header.Set("session_id", sid)
+			up.Header.Set("conversation_id", sid)
+			up.Header.Set("x-client-request-id", randomUUID())
+		}
+		// 认证头最后写：账号形态（含自定义头叠加）压过客户端带来的任何认证痕迹。
+		for k, v := range headers {
+			up.Header.Set(k, v)
+		}
+		return up, nil
+	}
+
+	start := time.Now()
+	up, err := build(target.Headers)
 	if err != nil {
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "build upstream request", err))
 		return
 	}
-	copyHeaders(up.Header, r.Header, stripRequestHeaders)
-	up.Header.Set("Content-Type", "application/json")
-	// 认证头最后写：账号形态（含自定义头叠加）压过客户端带来的任何认证痕迹。
-	for k, v := range target.Headers {
-		up.Header.Set(k, v)
-	}
-
-	start := time.Now()
 	resp, err := h.client.Do(up)
 	if err != nil {
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
 		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 		return
+	}
+
+	// OAuth 账号 401:作废旧 token 重解析重放一次;仍 401 则原样透传给客户端。
+	if resp.StatusCode == http.StatusUnauthorized && h.invalidator != nil && target.ProviderID == codex.ProviderID {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		h.invalidator.Invalidate(target.Account, bearerTokenValue(target.Headers))
+		fresh, rerr := h.resolver.Resolve(r.Context(), target.ModelID)
+		if rerr != nil {
+			writeFamilyError(w, fam, rerr)
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusUnauthorized, 0, time.Since(start))
+			return
+		}
+		if up, err = build(fresh.Headers); err == nil {
+			target = fresh
+			resp, err = h.client.Do(up)
+		}
+		if err != nil {
+			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream retry failed", err))
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
+			return
+		}
 	}
 	defer resp.Body.Close()
 
@@ -336,6 +405,29 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 
 	u, _ := sniffer.Result()
 	h.record(r.Context(), target, isStream, u, resp.StatusCode, out.latency, time.Since(start))
+}
+
+// bearerTokenValue 从头集里取出 Bearer 载荷;取不到返回空串。
+func bearerTokenValue(headers map[string]string) string {
+	auth := headers["Authorization"]
+	if len(auth) < 7 || !strings.EqualFold(auth[:7], "bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(auth[7:])
+}
+
+// randomUUID 生成 v4 形态 UUID,供 x-client-request-id 使用。
+func randomUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		hex.EncodeToString(b[0:4]), hex.EncodeToString(b[4:6]),
+		hex.EncodeToString(b[6:8]), hex.EncodeToString(b[8:10]),
+		hex.EncodeToString(b[10:16]))
 }
 
 // record 把一次转发的用量交给 sink。sink 为 nil（统计未装配）即无操作；

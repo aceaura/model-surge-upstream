@@ -1,0 +1,90 @@
+// Package codex 收口 ChatGPT 订阅(openai-codex provider)的 backend-api
+// 特殊策略:认证与身份头、请求体硬约束、路径映射、官方 instructions 内嵌。
+// 口径取 codex CLI 官方实现与 sub2api/new-api/cc-switch 三家生产网关的交集;
+// 这些约束是上游服务端强制(缺了 400/404),不是风格选择。
+package codex
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
+
+	"github.com/aceaura/model-surge-upstream/backend/oauth"
+)
+
+// ProviderID 是本策略作用的内置 provider。
+const ProviderID = "openai-codex"
+
+// droppedFields 是 backend-api 不接受的采样参数:带了直接 400,
+// 转发前剥掉(new-api/sub2api 实测清单)。
+var droppedFields = []string{
+	"max_output_tokens", "temperature", "top_p",
+	"frequency_penalty", "presence_penalty",
+}
+
+// Headers 生成 backend-api 认证与身份头。accessToken 由 oauth.Manager
+// 续期产出;session_id 依赖请求体,不在这里,由转发面补。
+//
+// originator/version 必须成对且 version 不能太旧:上游按这对值路由模型
+// 队列,过旧版本请求新模型直接 404(sub2api 实测下限 0.144.0)。
+func Headers(accessToken, accountID string) map[string]string {
+	return map[string]string{
+		"Authorization":      "Bearer " + accessToken,
+		"chatgpt-account-id": accountID,
+		"originator":         oauth.Originator,
+		"version":            oauth.ClientVersion,
+		"User-Agent":         oauth.Originator + "/" + oauth.ClientVersion,
+		"OpenAI-Beta":        "responses=experimental",
+		"Accept":             "text/event-stream",
+	}
+}
+
+// ShapeBody 应用 codex 请求体硬约束。必须在 defaults/overrides 合并之后
+// 调用:这些约束压过一切可调参数。body 就地改写并返回。
+//
+//   - store=false、stream=true 是订阅端点的强制契约;
+//   - 剥掉上游不认的采样参数;
+//   - 带 reasoning 时补 include: reasoning.encrypted_content(否则推理
+//     内容不回传,多轮上下文断链);
+//   - instructions 空缺时注入 codex 官方 prompt(上游要求非空)。
+func ShapeBody(body map[string]any, nativeModel string) map[string]any {
+	body["store"] = false
+	body["stream"] = true
+	for _, f := range droppedFields {
+		delete(body, f)
+	}
+	if _, ok := body["reasoning"]; ok {
+		body["include"] = appendStringSet(body["include"], "reasoning.encrypted_content")
+	}
+	if s, _ := body["instructions"].(string); strings.TrimSpace(s) == "" {
+		body["instructions"] = InstructionsForModel(nativeModel)
+	}
+	return body
+}
+
+func appendStringSet(v any, s string) []any {
+	out, _ := v.([]any)
+	for _, item := range out {
+		if item == s {
+			return out
+		}
+	}
+	return append(out, s)
+}
+
+// MapSuffix 把客户端的 OpenAI 标准路径映射到 backend-api 真实路径:
+// provider BaseURL 已含 /backend-api/codex,/v1/responses 落 /responses。
+func MapSuffix(suffix string) string {
+	if suffix == "/v1/responses" {
+		return "/responses"
+	}
+	return suffix
+}
+
+// SessionID 由账号与 prompt_cache_key 派生稳定 UUID:同账号同会话恒定,
+// 跨账号/跨会话隔离(sub2api 同款隔离思路,防客户端自带 session 头串号)。
+// 客户端传来的 session_id/conversation_id 一律不用,转发面先删后写。
+func SessionID(account, promptCacheKey string) string {
+	sum := sha256.Sum256([]byte("msu-codex\x00" + account + "\x00" + promptCacheKey))
+	return fmt.Sprintf("%x-%x-%x-%x-%x", sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
+}

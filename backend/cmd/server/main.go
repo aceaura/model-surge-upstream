@@ -20,6 +20,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/config"
 	"github.com/aceaura/model-surge-upstream/backend/httpapi"
 	"github.com/aceaura/model-surge-upstream/backend/model"
+	"github.com/aceaura/model-surge-upstream/backend/oauth"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/proxyplane"
 	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
@@ -62,7 +63,10 @@ func run() error {
 
 	accounts := account.NewRepo(db.Pool(), c)
 	models := model.NewRepo(db.Pool(), c, accountLookup(accounts))
-	resolver := loggedResolver{inner: resolve.NewResolver(accounts, models)}
+	// OAuth 登录态(ChatGPT 订阅)的 token 生命周期:解析面取活体 token,
+	// 转发面 401 时作废旧 token 触发续期。
+	tokens := oauth.NewManager(accounts)
+	resolver := loggedResolver{inner: resolve.NewResolver(accounts, models).WithTokens(tokens)}
 	quotas := quota.New(accounts, cfg.QuotaTTL)
 	upstream := upmodels.New(accounts, cfg.QuotaTTL)
 
@@ -70,7 +74,7 @@ func run() error {
 	// 启动时按已存配置开监听；应用失败（如端口被占）只告警，
 	// 管理面不可用才是致命问题，转发面不是。
 	proxyRepo := proxysettings.NewRepo(db.Pool())
-	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db), compact.NewRunner(cfg.Compact))}
+	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db), compact.NewRunner(cfg.Compact), tokens)}
 	defer proxySup.inner.Close()
 	if s, err := proxyRepo.Get(ctx); err != nil {
 		log.Printf("proxyplane: load settings: %v", err)

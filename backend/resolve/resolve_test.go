@@ -10,6 +10,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/model"
+	"github.com/aceaura/model-surge-upstream/backend/oauth"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
@@ -292,5 +293,92 @@ func TestListingCarriesNoCredential(t *testing.T) {
 	}
 	if strings.Contains(string(raw), secret) {
 		t.Errorf("listing leaked a credential: %s", raw)
+	}
+}
+
+// fakeTokens 桩 token 来源:记录调用,按脚本返回。
+type fakeTokens struct {
+	calls int
+	token string
+	err   error
+}
+
+func (f *fakeTokens) AccessToken(_ context.Context, _ account.Account) (string, error) {
+	f.calls++
+	return f.token, f.err
+}
+
+func codexFixture(tokens Tokens) (*Resolver, *fakeAccounts) {
+	accounts := fakeAccounts{"gpt-1": {
+		Name:       "gpt-1",
+		ProviderID: "openai-codex",
+		Credential: credential.Credential{
+			Kind:         provider.CredOAuthRefresh,
+			RefreshToken: "rt-1",
+			AccountID:    "acc-id-1",
+		},
+		Headers: map[string]string{},
+		Enabled: true,
+	}}
+	models := fakeModels{"gpt-1/codex": {
+		ID: "gpt-1/codex", Account: "gpt-1", NativeModel: "gpt-5-codex",
+		Protocol: provider.ProtocolResponses, Enabled: true,
+	}}
+	return NewResolver(accounts, models).WithTokens(tokens), &accounts
+}
+
+func TestResolveOAuthAccountGetsCodexHeaders(t *testing.T) {
+	tokens := &fakeTokens{token: "at-live"}
+	r, _ := codexFixture(tokens)
+	got, err := r.Resolve(context.Background(), "gpt-1/codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens.calls != 1 {
+		t.Errorf("token source calls = %d", tokens.calls)
+	}
+	if got.Headers["Authorization"] != "Bearer at-live" {
+		t.Errorf("Authorization = %q", got.Headers["Authorization"])
+	}
+	if got.Headers["chatgpt-account-id"] != "acc-id-1" {
+		t.Errorf("chatgpt-account-id = %q", got.Headers["chatgpt-account-id"])
+	}
+	if got.Headers["originator"] == "" || got.Headers["OpenAI-Beta"] == "" {
+		t.Errorf("codex identity headers missing: %v", got.Headers)
+	}
+}
+
+func TestResolveOAuthNeedsReauthMapsToInvalidCredential(t *testing.T) {
+	r, _ := codexFixture(&fakeTokens{err: oauth.ErrNeedsReauth})
+	_, err := r.Resolve(context.Background(), "gpt-1/codex")
+	if !apperr.Is(err, apperr.InvalidCredential) {
+		t.Fatalf("code = %q, want invalid_credential", apperr.CodeOf(err))
+	}
+	if !strings.Contains(err.Error(), "gpt-1") {
+		t.Errorf("error should name the account: %v", err)
+	}
+}
+
+func TestResolveOAuthWithoutTokensWired(t *testing.T) {
+	r, _ := codexFixture(nil)
+	r.tokens = nil
+	_, err := r.Resolve(context.Background(), "gpt-1/codex")
+	if !apperr.Is(err, apperr.InvalidCredential) {
+		t.Fatalf("code = %q, want invalid_credential", apperr.CodeOf(err))
+	}
+}
+
+func TestResolveOAuthAccountHeaderOverlay(t *testing.T) {
+	tokens := &fakeTokens{token: "at-live"}
+	r, accounts := codexFixture(tokens)
+	acc := (*accounts)["gpt-1"]
+	acc.Headers = map[string]string{"originator": "custom-origin"}
+	(*accounts)["gpt-1"] = acc
+	got, err := r.Resolve(context.Background(), "gpt-1/codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Headers["originator"] != "custom-origin" {
+		t.Errorf("account headers should override defaults, originator = %q", got.Headers["originator"])
 	}
 }
