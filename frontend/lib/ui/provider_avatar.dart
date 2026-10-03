@@ -12,10 +12,10 @@ class ProviderAvatar extends StatelessWidget {
   /// 内置厂商 id → Logo 资源;currentColor 单色 SVG 给品牌色,
   /// null 表示资源自带颜色(多色 Logo 或 PNG)。
   static const _logos = <String, (String, Color?)>{
-    'anthropic': ('assets/providers/anthropic.svg', Color(0xFFD97757)),
+    'anthropic': ('assets/providers/anthropic.svg', Color(0xFF161C28)),
     'openai': ('assets/providers/openai.svg', Color(0xFF161C28)),
     'openai-codex': ('assets/providers/openai.svg', Color(0xFF161C28)),
-    'gemini': ('assets/providers/gemini.svg', Color(0xFF1C72E0)),
+    'gemini': ('assets/providers/gemini.svg', null),
     'kimi': ('assets/providers/kimi.svg', null),
     'deepseek': ('assets/providers/deepseek.svg', Color(0xFF4D6BFE)),
     'ark': ('assets/providers/ark.png', null),
