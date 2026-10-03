@@ -275,6 +275,9 @@ func validate(in Input) (Account, error) {
 		if s.StopIntervalMinutes < 0 || s.StopIntervalMinutes > 1440 {
 			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script stop_interval_minutes must be between 0 and 1440")
 		}
+		if err := validateScriptVariables(s.Variables); err != nil {
+			return Account{}, err
+		}
 		in.QuotaScript = &s
 	}
 	return Account{
@@ -288,8 +291,30 @@ func validate(in Input) (Account, error) {
 	}, nil
 }
 
-func encode(a Account) (credRaw, headersRaw, scriptRaw []byte, err error) {
-	if credRaw, err = a.Credential.Encode(); err != nil {
+// validateScriptVariables 校验脚本自定义变量:名须为合法标识符且不占用
+// 内置占位符名,条数与值长封顶防配置膨胀。
+func validateScriptVariables(vars map[string]string) error {
+	if len(vars) > 32 {
+		return apperr.New(apperr.InvalidRequest, "quota_script variables must not exceed 32 entries")
+	}
+	for name, value := range vars {
+		if !scriptVarName.MatchString(name) {
+			return apperr.New(apperr.InvalidRequest,
+				fmt.Sprintf("quota_script variable name %q is not a valid identifier", name))
+		}
+		if ReservedScriptVar(name) {
+			return apperr.New(apperr.InvalidRequest,
+				fmt.Sprintf("quota_script variable %q is reserved (built-in placeholder)", name))
+		}
+		if len(value) > 4096 {
+			return apperr.New(apperr.InvalidRequest,
+				fmt.Sprintf("quota_script variable %q value must not exceed 4096 bytes", name))
+		}
+	}
+	return nil
+}
+
+func encode(a Account) (credRaw, headersRaw, scriptRaw []byte, err error) {	if credRaw, err = a.Credential.Encode(); err != nil {
 		return nil, nil, nil, apperr.Wrap(apperr.InvalidCredential, "encode credential", err)
 	}
 	if headersRaw, err = json.Marshal(a.Headers); err != nil {

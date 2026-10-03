@@ -3,11 +3,30 @@
 package account
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
+
+// scriptVarName 自定义变量名:字母或下划线开头,后接字母数字下划线,
+// 与 {{名}} 占位符的书写习惯一致。
+var scriptVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ReservedScriptVars 内置占位符名,自定义变量不许占用——内置值由凭据
+// 与生效地址派生,允许同名自定义值盖掉会静默改变脚本语义。
+var ReservedScriptVars = []string{"apiKey", "baseUrl", "accessToken", "accountId"}
+
+// ReservedScriptVar 判定名是否为内置保留占位符。
+func ReservedScriptVar(name string) bool {
+	for _, r := range ReservedScriptVars {
+		if name == r {
+			return true
+		}
+	}
+	return false
+}
 
 // QuotaScript 账号级额度查询脚本(CC Switch usage_script 同款机制):
 // 内置 provider 未声明额度接口、或其响应形态超出通用解析时,用一段
@@ -24,6 +43,11 @@ type QuotaScript struct {
 	// StopIntervalMinutes 账号无请求超过该间隔后,自动刷新停打上游
 	// (0 走默认 5 分钟),下一次请求到达自动恢复。
 	StopIntervalMinutes int `json:"stop_interval_minutes,omitempty"`
+	// Variables 脚本自定义占位符:代码里 {{名}} 在执行前替换为对应值,
+	// 给内置四变量(apiKey/baseUrl/accessToken/accountId)覆盖不了的渠道
+	// 参数(cookie、额外 token 等)一个不落进代码的存放位。名与内置保留
+	// 名冲突的条目在仓储校验期被拒,不会静默盖掉内置值。
+	Variables map[string]string `json:"variables,omitempty"`
 }
 
 // Active 判定脚本是否参与额度查询:启用且代码非空。

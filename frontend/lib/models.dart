@@ -127,6 +127,7 @@ class QuotaScript {
     this.timeoutSeconds = 0,
     this.autoIntervalMinutes = 0,
     this.stopIntervalMinutes = 0,
+    this.variables = const {},
   });
 
   final bool enabled;
@@ -137,6 +138,10 @@ class QuotaScript {
   /// 账号无请求超过该间隔后自动刷新停打上游,下一次请求到达恢复;
   /// 0 走后端默认 5 分钟。
   final int stopIntervalMinutes;
+
+  /// 脚本自定义占位符:代码里 {{名}} 在执行前替换为对应值;内置
+  /// apiKey/baseUrl/accessToken/accountId 由后端派生,不在此列。
+  final Map<String, String> variables;
 
   /// 与后端 Active 同口径:启用且代码非空才真正接管额度查询。
   bool get active => enabled && code.isNotEmpty;
@@ -149,6 +154,10 @@ class QuotaScript {
             (json['auto_interval_minutes'] as num?)?.toInt() ?? 0,
         stopIntervalMinutes:
             (json['stop_interval_minutes'] as num?)?.toInt() ?? 0,
+        variables: (json['variables'] as Map?)?.map(
+              (k, v) => MapEntry('$k', '$v'),
+            ) ??
+            const {},
       );
 
   Map<String, dynamic> toJson() => {
@@ -157,6 +166,7 @@ class QuotaScript {
         'timeout_seconds': timeoutSeconds,
         'auto_interval_minutes': autoIntervalMinutes,
         'stop_interval_minutes': stopIntervalMinutes,
+        'variables': variables,
       };
 }
 

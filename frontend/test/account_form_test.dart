@@ -101,6 +101,7 @@ final accountWithScript = Account.fromJson(const {
     'timeout_seconds': 15,
     'auto_interval_minutes': 5,
     'stop_interval_minutes': 8,
+    'variables': {'session': 's3cr3t', 'tenant': 'acme'},
   },
 });
 
@@ -470,6 +471,95 @@ void main() {
     await expandScriptSection(tester);
     expect(fieldText(tester, 'quota-script-stop-interval'), isEmpty,
         reason: '已存配置为 0 时留空,保留"走后端默认"语义');
+  });
+
+  testWidgets('variables: builtin rows shown and stored rows prefill sorted',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        copyFrom: accountWithScript, client: recordingClient(captured));
+
+    expect(find.text('变量'), findsOneWidget);
+    expect(find.text('apiKey'), findsOneWidget);
+    expect(find.text('账号密钥 · 执行时自动注入'), findsOneWidget);
+    expect(find.text('baseUrl'), findsOneWidget);
+    expect(find.text('请求地址 · 执行时自动注入'), findsOneWidget);
+
+    expect(fieldText(tester, 'script-var-name-0'), 'session');
+    expect(fieldText(tester, 'script-var-value-0'), 's3cr3t');
+    expect(fieldText(tester, 'script-var-name-1'), 'tenant',
+        reason: '已存变量按名排序回显,与后端 map 迭代顺序无关');
+    expect(fieldText(tester, 'script-var-value-1'), 'acme');
+
+    await tester.ensureVisible(find.byKey(const ValueKey('account-name')));
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    final script = body['quota_script'] as Map<String, dynamic>;
+    expect(script['variables'], {'session': 's3cr3t', 'tenant': 'acme'},
+        reason: '已存变量随脚本配置全量提交');
+  });
+
+  testWidgets('variables: add row on create and blank-name row dropped',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+    await expandScriptSection(tester);
+
+    expect(find.byKey(const ValueKey('script-var-name-0')), findsNothing,
+        reason: '无已存变量时只有内置两行,不出现可编辑行');
+
+    await tester.enterText(find.byKey(const ValueKey('quota-script-code')),
+        '({request:{url:"{{baseUrl}}/t/{{tenant}}"},extractor:function(r){return{used:r.u};}})');
+    await tester.tap(find.byKey(const ValueKey('script-var-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('script-var-name-0')), 'tenant');
+    await tester.enterText(
+        find.byKey(const ValueKey('script-var-value-0')), 'acme');
+    await tester.tap(find.byKey(const ValueKey('script-var-add')));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(
+        find.byKey(const ValueKey('account-provider-vendor')));
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    final script = body['quota_script'] as Map<String, dynamic>;
+    expect(script['variables'], {'tenant': 'acme'},
+        reason: '空名行不进载荷');
+  });
+
+  testWidgets('variables: delete row removes it from submit', (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        copyFrom: accountWithScript, client: recordingClient(captured));
+
+    await tester.ensureVisible(find.byKey(const ValueKey('script-var-del-0')));
+    await tester.tap(find.byKey(const ValueKey('script-var-del-0')));
+    await tester.pumpAndSettle();
+    expect(fieldText(tester, 'script-var-name-0'), 'tenant',
+        reason: '删掉 session 行后 tenant 行顶到 0 位');
+
+    await tester.ensureVisible(find.byKey(const ValueKey('account-name')));
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    final script = body['quota_script'] as Map<String, dynamic>;
+    expect(script['variables'], {'tenant': 'acme'});
   });
 
   testWidgets('create without touching script section omits the key',

@@ -296,11 +296,16 @@ class ApiClient {
     String name, {
     required String code,
     int timeoutSeconds = 0,
+    Map<String, String> variables = const {},
   }) async {
     final body = await _send(
       'POST',
       '/admin/accounts/$name/quota-test',
-      body: {'code': code, 'timeout_seconds': timeoutSeconds},
+      body: {
+        'code': code,
+        'timeout_seconds': timeoutSeconds,
+        'variables': variables,
+      },
       timeout: const Duration(seconds: 130),
     );
     final ok = body['ok'] as bool? ?? false;

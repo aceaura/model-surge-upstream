@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -85,6 +86,14 @@ func RunScript(ctx context.Context, spec provider.Spec, acc account.Account, cod
 		"{{accountId}}", acc.Credential.AccountID,
 	).Replace(code)
 
+	// 内置之后套账号已存的自定义变量;试跑路径的未落库变量由
+	// httpapi 试跑入口预替换(quota.ReplaceScriptVars),与这里同源。
+	var stored map[string]string
+	if acc.QuotaScript != nil {
+		stored = acc.QuotaScript.Variables
+	}
+	code = ReplaceScriptVars(code, stored)
+
 	vm := goja.New()
 	// 超时中断覆盖求值与 extractor 调用两段 JS;HTTP 阶段走客户端自身超时。
 	timer := time.AfterFunc(timeout, func() { vm.Interrupt("quota script timeout") })
@@ -154,6 +163,29 @@ func RunScript(ctx context.Context, spec provider.Spec, acc account.Account, cod
 		Meters:    meters,
 		At:        time.Now().UTC(),
 	}, nil
+}
+
+// ReplaceScriptVars 把代码里的 {{名}} 换成自定义变量值,供正式查询(账号
+// 已存变量)与试跑入口(表单未落库变量)共用。内置四变量(apiKey/baseUrl/
+// accessToken/accountId)跳过——内置替换先行,自定义值不许盖掉;名按
+// 字典序入替换器,同一处文本的替换结果与 map 迭代顺序无关。
+func ReplaceScriptVars(code string, vars map[string]string) string {
+	if len(vars) == 0 {
+		return code
+	}
+	names := make([]string, 0, len(vars))
+	for n := range vars {
+		if account.ReservedScriptVar(n) {
+			continue
+		}
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	pairs := make([]string, 0, len(names)*2)
+	for _, n := range names {
+		pairs = append(pairs, "{{"+n+"}}", vars[n])
+	}
+	return strings.NewReplacer(pairs...).Replace(code)
 }
 
 // buildScriptRequest 从脚本的 request 块构造 HTTP 请求。url 必填,

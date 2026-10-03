@@ -69,8 +69,44 @@ func TestScriptQuerySuccess(t *testing.T) {
 	}
 }
 
-func TestScriptOverridesBuiltinQuota(t *testing.T) {
-	// deepseek 内置声明了 /user/balance;账号配了脚本就走路由脚本的端点。
+func TestScriptStoredVariablesReplace(t *testing.T) {
+	var gotPath, gotCookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotCookie = r.URL.Path, r.Header.Get("Cookie")
+		_, _ = w.Write([]byte(`{"used": 1}`))
+	}))
+	defer srv.Close()
+
+	a := scriptAcct(srv.URL, `({
+	  request: { url: "{{baseUrl}}/t/{{tenant}}/usage", headers: { "Cookie": "session={{session}}" } },
+	  extractor: function(r) { return { used: r.used }; }
+	})`)
+	a.QuotaScript.Variables = map[string]string{"tenant": "acme", "session": "s3cr3t"}
+	q := New(fakeAccounts{"relay-1": a}, time.Minute)
+	if _, err := q.Query(context.Background(), "relay-1"); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/t/acme/usage" {
+		t.Errorf("path = %q, {{tenant}} should resolve from stored variables", gotPath)
+	}
+	if gotCookie != "session=s3cr3t" {
+		t.Errorf("cookie = %q, {{session}} should resolve from stored variables", gotCookie)
+	}
+}
+
+func TestReplaceScriptVars(t *testing.T) {
+	code := "{{apiKey}} {{token}} {{apiKey}}"
+	vars := map[string]string{"apiKey": "evil", "token": "t1"}
+	got := ReplaceScriptVars(code, vars)
+	if got != "{{apiKey}} t1 {{apiKey}}" {
+		t.Errorf("got %q, reserved apiKey must stay for the built-in pass", got)
+	}
+	if out := ReplaceScriptVars("{{x}}", nil); out != "{{x}}" {
+		t.Errorf("nil vars should be a no-op, got %q", out)
+	}
+}
+
+func TestScriptOverridesBuiltinQuota(t *testing.T) {	// deepseek 内置声明了 /user/balance;账号配了脚本就走路由脚本的端点。
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path

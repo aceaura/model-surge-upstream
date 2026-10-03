@@ -203,6 +203,25 @@ class _AccountFormState extends State<AccountForm> {
     return (widget.editing == null && widget.copyFrom == null) ? '5' : '';
   }
 
+  /// 脚本自定义变量行,按名排序回显,保证与后端 map 迭代顺序无关。
+  late final List<_ScriptVar> _scriptVars = _initialScriptVars();
+
+  List<_ScriptVar> _initialScriptVars() {
+    final vars = _initialScript?.variables ?? const <String, String>{};
+    final names = vars.keys.toList()..sort();
+    return [for (final n in names) _ScriptVar(n, vars[n]!)];
+  }
+
+  /// 当前变量行的提交形态:空名行丢弃,名去首尾空白。
+  Map<String, String> _scriptVariables() {
+    final out = <String, String>{};
+    for (final v in _scriptVars) {
+      final k = v.name.text.trim();
+      if (k.isNotEmpty) out[k] = v.value.text;
+    }
+    return out;
+  }
+
   bool _revealKey = false;
   bool _busy = false;
 
@@ -223,6 +242,10 @@ class _AccountFormState extends State<AccountForm> {
     _scriptTimeout.dispose();
     _scriptInterval.dispose();
     _scriptStopInterval.dispose();
+    for (final v in _scriptVars) {
+      v.name.dispose();
+      v.value.dispose();
+    }
     super.dispose();
   }
 
@@ -277,6 +300,7 @@ class _AccountFormState extends State<AccountForm> {
       timeoutSeconds: int.tryParse(_scriptTimeout.text.trim()) ?? 0,
       autoIntervalMinutes: int.tryParse(_scriptInterval.text.trim()) ?? 0,
       stopIntervalMinutes: int.tryParse(_scriptStopInterval.text.trim()) ?? 0,
+      variables: _scriptVariables(),
     ).toJson();
   }
 
@@ -292,6 +316,7 @@ class _AccountFormState extends State<AccountForm> {
         widget.editing!.name,
         code: _scriptCode.text.trim(),
         timeoutSeconds: int.tryParse(_scriptTimeout.text.trim()) ?? 0,
+        variables: _scriptVariables(),
       );
       if (!mounted) return;
       setState(() {
@@ -791,13 +816,97 @@ class _AccountFormState extends State<AccountForm> {
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  '启用后由脚本接管该账号的额度查询;停用自动回落提供商内置声明',
+                  '启用脚本',
                   style: TextStyle(fontSize: 12.5),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 14),
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text('变量', style: TextStyle(fontSize: 13)),
+          ),
+          const SizedBox(height: 6),
+          // 内置两个变量:值由凭据与生效地址在执行时注入,只读展示;
+          // 自定义行仿请求头的键值动态行,脚本里以 {{名}} 引用。
+          for (final b in const [
+            ('apiKey', '账号密钥 · 执行时自动注入'),
+            ('baseUrl', '请求地址 · 执行时自动注入'),
+          ])
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(b.$1,
+                        style: const TextStyle(
+                            fontSize: 12.5,
+                            fontFamily: 'Consolas',
+                            fontFamilyFallback: ['monospace'])),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: Text(b.$2,
+                        style: TextStyle(fontSize: 12, color: theme.hintColor)),
+                  ),
+                  const SizedBox(width: 40),
+                ],
+              ),
+            ),
+          for (var i = 0; i < _scriptVars.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('script-var-name-$i'),
+                      controller: _scriptVars[i].name,
+                      decoration: const InputDecoration(
+                        labelText: '名',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 2,
+                    child: TextFormField(
+                      key: ValueKey('script-var-value-$i'),
+                      controller: _scriptVars[i].value,
+                      decoration: const InputDecoration(
+                        labelText: '值',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: ValueKey('script-var-del-$i'),
+                    tooltip: '删除',
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: () => setState(() {
+                      final v = _scriptVars.removeAt(i);
+                      v.name.dispose();
+                      v.value.dispose();
+                    }),
+                  ),
+                ],
+              ),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('script-var-add'),
+              onPressed: () => setState(() => _scriptVars.add(_ScriptVar())),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('添加变量'),
+            ),
+          ),
+          const SizedBox(height: 6),
           const Align(
             alignment: Alignment.centerLeft,
             child: Text('脚本代码', style: TextStyle(fontSize: 13)),
@@ -931,4 +1040,15 @@ class _AccountFormState extends State<AccountForm> {
       return null;
     };
   }
+}
+
+/// 一行脚本自定义变量,名与值各持一个控制器(动态增删行需要稳定的
+/// 编辑态,不能用 initialValue 靠位置复用)。
+class _ScriptVar {
+  _ScriptVar([String name = '', String value = ''])
+      : name = TextEditingController(text: name),
+        value = TextEditingController(text: value);
+
+  final TextEditingController name;
+  final TextEditingController value;
 }

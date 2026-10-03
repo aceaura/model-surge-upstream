@@ -37,6 +37,12 @@ func TestValidateRejects(t *testing.T) {
 		"blank api key":    {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("  ")}, apperr.InvalidCredential},
 		"bad base url":     {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"), BaseURL: "moonshot.cn"}, apperr.InvalidRequest},
 		"mismatched kind":  {Input{Name: "a", ProviderID: "kimi", Credential: credential.Credential{Kind: "oauth_refresh"}}, apperr.InvalidCredential},
+		"script var reserved name": {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
+			QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"apiKey": "override"}}}, apperr.InvalidRequest},
+		"script var bad identifier": {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
+			QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"1bad": "v"}}}, apperr.InvalidRequest},
+		"script var blank name": {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
+			QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"": "v"}}}, apperr.InvalidRequest},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -64,6 +70,17 @@ func TestValidateNormalizes(t *testing.T) {
 	}
 	if acc.Headers == nil {
 		t.Error("headers should default to an empty map")
+	}
+}
+
+func TestValidateScriptVariablesAccepted(t *testing.T) {
+	acc, err := validate(Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
+		QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"web_token": "abc", "_x": "1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acc.QuotaScript.Variables) != 2 || acc.QuotaScript.Variables["web_token"] != "abc" {
+		t.Errorf("variables = %+v", acc.QuotaScript.Variables)
 	}
 }
 

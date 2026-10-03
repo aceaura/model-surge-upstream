@@ -4,13 +4,17 @@ import (
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/quota"
 )
 
 // testQuotaScriptRequest 试跑额度脚本的入参。code 必填,timeout_seconds
 // 为 0 走后端默认。凭据与生效地址取自既有账号,不在请求体里传。
+// variables 是表单里未落库的自定义变量,先试跑先替换,与落库后的
+// 正式查询同一条 ReplaceScriptVars 路径。
 type testQuotaScriptRequest struct {
-	Code           string `json:"code"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Code           string            `json:"code"`
+	TimeoutSeconds int               `json:"timeout_seconds"`
+	Variables      map[string]string `json:"variables"`
 }
 
 // testQuotaScript 用账号内置凭据试跑一段未落库的额度脚本(CC Switch
@@ -21,7 +25,8 @@ func (h handler) testQuotaScript(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	report, err := h.Quota.TestScript(r.Context(), r.PathValue("name"), req.Code, req.TimeoutSeconds)
+	report, err := h.Quota.TestScript(r.Context(), r.PathValue("name"),
+		quota.ReplaceScriptVars(req.Code, req.Variables), req.TimeoutSeconds)
 	if err != nil {
 		if apperr.Is(err, apperr.NotFound) || apperr.Is(err, apperr.InvalidProvider) {
 			writeError(w, err)
