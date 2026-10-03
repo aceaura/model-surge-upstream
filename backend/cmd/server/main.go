@@ -68,6 +68,8 @@ func run() error {
 	tokens := oauth.NewManager(accounts)
 	resolver := loggedResolver{inner: resolve.NewResolver(accounts, models).WithTokens(tokens)}
 	quotas := quota.New(accounts, cfg.QuotaTTL)
+	// 额度脚本的 {{accessToken}} 复用同一个 token 生命周期管理。
+	quotas.SetTokenSource(tokens)
 	upstream := upmodels.New(accounts, cfg.QuotaTTL)
 
 	// 代理转发面：独立端口、独立密钥，配置落库、运行期可改。

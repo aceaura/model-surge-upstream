@@ -39,20 +39,50 @@ func scriptTimeout(seconds int) time.Duration {
 	return d
 }
 
+// TokenSource 为 oauth_refresh 账号在脚本执行前取出当前可用的
+// access_token(必要时续期)。由 oauth.Manager 实现;未接线时
+// {{accessToken}} 占位符不可用。
+type TokenSource interface {
+	AccessToken(ctx context.Context, acc account.Account) (string, error)
+}
+
 // RunScript 对账号执行一段额度脚本并返回报告。测试入口与正式查询共用:
-// 测试传未落库的代码,正式查询传账号已存代码。
-func RunScript(ctx context.Context, spec provider.Spec, acc account.Account, code string, timeoutSeconds int) (Report, error) {
+// 测试传未落库的代码,正式查询传账号已存代码。tokens 仅在代码用到
+// {{accessToken}} 时才被调用,API Key 账号的脚本不会触发续期。
+func RunScript(ctx context.Context, spec provider.Spec, acc account.Account, code string, timeoutSeconds int, tokens TokenSource) (Report, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
 		return Report{}, apperr.New(apperr.InvalidRequest, "quota script code is empty")
 	}
 	timeout := scriptTimeout(timeoutSeconds)
 
+	// oauth_refresh 账号没有静态密钥,脚本的 {{accessToken}} 在执行前
+	// 换成活体 token(过期则先续期);终态失败(reauth)原样透出。
+	accessToken := ""
+	if strings.Contains(code, "{{accessToken}}") {
+		if acc.Credential.Kind != provider.CredOAuthRefresh {
+			return Report{}, apperr.New(apperr.InvalidRequest,
+				"quota script {{accessToken}} requires an oauth_refresh credential")
+		}
+		if tokens == nil {
+			return Report{}, apperr.New(apperr.QuotaUnavailable,
+				"quota script {{accessToken}} token source is not wired")
+		}
+		t, err := tokens.AccessToken(ctx, acc)
+		if err != nil {
+			return Report{}, apperr.Wrap(apperr.QuotaUnavailable, "obtain access token for quota script", err)
+		}
+		accessToken = t
+	}
+
 	// 变量替换在求值前做纯文本替换,与 CC Switch 行为一致:
-	// {{apiKey}} 取账号内置凭据,{{baseUrl}} 取生效地址(去尾斜杠)。
+	// {{apiKey}} 取账号内置凭据,{{baseUrl}} 取生效地址(去尾斜杠),
+	// {{accountId}} 取 OAuth 账号的 chatgpt_account_id。
 	code = strings.NewReplacer(
 		"{{apiKey}}", acc.Credential.APIKey,
 		"{{baseUrl}}", strings.TrimRight(acc.EffectiveBaseURL(spec), "/"),
+		"{{accessToken}}", accessToken,
+		"{{accountId}}", acc.Credential.AccountID,
 	).Replace(code)
 
 	vm := goja.New()
@@ -94,8 +124,13 @@ func RunScript(ctx context.Context, spec provider.Spec, acc account.Account, cod
 		return Report{}, apperr.Wrap(apperr.QuotaUnavailable, "read quota script response", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 带上游应答片段:脚本作者排错(鉴权失败、端点错误)全指望它。
+		snippet := strings.TrimSpace(string(body))
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "…"
+		}
 		return Report{}, apperr.New(apperr.QuotaUnavailable,
-			fmt.Sprintf("upstream quota query returned %d", resp.StatusCode))
+			fmt.Sprintf("upstream quota query returned %d: %s", resp.StatusCode, snippet))
 	}
 
 	// 响应按 JSON 喂给 extractor;非 JSON 原样给字符串,由脚本自行处理。

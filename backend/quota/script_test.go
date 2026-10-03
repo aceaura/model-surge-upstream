@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
@@ -245,6 +247,106 @@ func TestScriptDisabledFallsBackToBuiltin(t *testing.T) {
 	}
 	if !got.Queryable || len(got.Meters) != 1 {
 		t.Errorf("disabled script should fall back to the builtin quota api: %+v", got)
+	}
+}
+
+type fakeTokens struct {
+	token string
+	err   error
+	calls int
+}
+
+func (f *fakeTokens) AccessToken(_ context.Context, _ account.Account) (string, error) {
+	f.calls++
+	return f.token, f.err
+}
+
+func oauthAcct(baseURL string, code string) account.Account {
+	a := acct("codex-1", "openai-codex", baseURL)
+	a.Credential = credential.Credential{
+		Kind:         provider.CredOAuthRefresh,
+		RefreshToken: "rt-abcdefghijkl",
+		AccountID:    "acc-123",
+	}
+	a.QuotaScript = &account.QuotaScript{Enabled: true, Code: code}
+	return a
+}
+
+const whamScript = `({
+  request: {
+    url: "{{baseUrl}}/backend-api/wham/usage",
+    headers: {
+      "Authorization": "Bearer {{accessToken}}",
+      "ChatGPT-Account-Id": "{{accountId}}"
+    }
+  },
+  extractor: function(r) {
+    return { planName: "5小时", used: r.rate_limit.primary_window.used_percent, total: 100, unit: "%" };
+  }
+})`
+
+func TestScriptOAuthPlaceholders(t *testing.T) {
+	var gotAuth, gotAccount string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotAccount = r.Header.Get("ChatGPT-Account-Id")
+		_, _ = w.Write([]byte(`{"rate_limit":{"primary_window":{"used_percent":64}}}`))
+	}))
+	defer srv.Close()
+
+	tokens := &fakeTokens{token: "at-live-token"}
+	q := New(fakeAccounts{"codex-1": oauthAcct(srv.URL, whamScript)}, time.Minute)
+	q.SetTokenSource(tokens)
+	got, err := q.Query(context.Background(), "codex-1")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if gotAuth != "Bearer at-live-token" {
+		t.Errorf("auth = %q, {{accessToken}} should resolve to the live access token", gotAuth)
+	}
+	if gotAccount != "acc-123" {
+		t.Errorf("account id = %q, {{accountId}} should resolve to the credential account_id", gotAccount)
+	}
+	if tokens.calls != 1 {
+		t.Errorf("token source calls = %d, want exactly one", tokens.calls)
+	}
+	if len(got.Meters) != 1 || got.Meters[0].Used == nil || *got.Meters[0].Used != 64 {
+		t.Errorf("meters = %+v", got.Meters)
+	}
+}
+
+func TestScriptAccessTokenNotFetchedUnlessReferenced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"balance": 1}`))
+	}))
+	defer srv.Close()
+
+	tokens := &fakeTokens{err: errors.New("must not be called")}
+	q := New(fakeAccounts{"relay-1": scriptAcct(srv.URL, balanceScript)}, time.Minute)
+	q.SetTokenSource(tokens)
+	if _, err := q.Query(context.Background(), "relay-1"); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if tokens.calls != 0 {
+		t.Errorf("token source called %d times for an apiKey script", tokens.calls)
+	}
+}
+
+func TestScriptAccessTokenRequiresOAuthCredential(t *testing.T) {
+	tokens := &fakeTokens{token: "at-live-token"}
+	q := New(fakeAccounts{"relay-1": scriptAcct("http://127.0.0.1:1", whamScript)}, time.Minute)
+	q.SetTokenSource(tokens)
+	_, err := q.Query(context.Background(), "relay-1")
+	if !apperr.Is(err, apperr.InvalidRequest) {
+		t.Errorf("code = %q, want invalid_request for apiKey account using {{accessToken}}", apperr.CodeOf(err))
+	}
+}
+
+func TestScriptAccessTokenNeedsWiring(t *testing.T) {
+	q := New(fakeAccounts{"codex-1": oauthAcct("http://127.0.0.1:1", whamScript)}, time.Minute)
+	_, err := q.Query(context.Background(), "codex-1")
+	if !apperr.Is(err, apperr.QuotaUnavailable) {
+		t.Errorf("code = %q, want quota_unavailable when token source is nil", apperr.CodeOf(err))
 	}
 }
 

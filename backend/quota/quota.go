@@ -65,6 +65,7 @@ type Quota struct {
 	accounts Accounts
 	client   *http.Client
 	ttl      time.Duration
+	tokens   TokenSource
 
 	mu     sync.RWMutex
 	cached map[string]entry
@@ -81,6 +82,10 @@ func New(accounts Accounts, ttl time.Duration) *Quota {
 
 // SetClient 供测试注入桩上游。
 func (q *Quota) SetClient(c *http.Client) { q.client = c }
+
+// SetTokenSource 接线 oauth_refresh 账号的 access_token 来源(oauth.Manager)。
+// 不接线时含 {{accessToken}} 的脚本报错,其余脚本不受影响。
+func (q *Quota) SetTokenSource(t TokenSource) { q.tokens = t }
 
 func (q *Quota) Query(ctx context.Context, accountName string) (Report, error) {
 	if r, ok := q.lookup(accountName); ok {
@@ -99,7 +104,7 @@ func (q *Quota) Query(ctx context.Context, accountName string) (Report, error) {
 	// 账号级脚本优先于内置声明:显式配置的定制查询盖住通用路径,
 	// 内置未声明额度接口的渠道也由此获得查询能力。
 	if acc.QuotaScript.Active() {
-		report, err := RunScript(ctx, spec, acc, acc.QuotaScript.Code, acc.QuotaScript.TimeoutSeconds)
+		report, err := RunScript(ctx, spec, acc, acc.QuotaScript.Code, acc.QuotaScript.TimeoutSeconds, q.tokens)
 		if err != nil {
 			return Report{}, err
 		}
@@ -320,7 +325,7 @@ func (q *Quota) TestScript(ctx context.Context, accountName, code string, timeou
 		return Report{}, apperr.New(apperr.InvalidProvider,
 			fmt.Sprintf("account %q references unknown provider %q", acc.Name, acc.ProviderID))
 	}
-	return RunScript(ctx, spec, acc, code, timeoutSeconds)
+	return RunScript(ctx, spec, acc, code, timeoutSeconds, q.tokens)
 }
 
 func (q *Quota) lookup(name string) (Report, bool) {

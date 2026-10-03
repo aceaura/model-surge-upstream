@@ -12,7 +12,8 @@ import (
 // QuotaScript 账号级额度查询脚本(CC Switch usage_script 同款机制):
 // 内置 provider 未声明额度接口、或其响应形态超出通用解析时,用一段
 // JS(request + extractor)定制查询。代码里 {{apiKey}}/{{baseUrl}} 占位符
-// 在执行时替换为账号内置凭据与生效地址,脚本本身不存密钥。
+// 在执行时替换为账号内置凭据与生效地址;oauth_refresh 账号另可用
+// {{accessToken}}/{{accountId}}(执行前续期取活体 token)。脚本本身不存密钥。
 type QuotaScript struct {
 	Enabled bool   `json:"enabled"`
 	Code    string `json:"code"`
