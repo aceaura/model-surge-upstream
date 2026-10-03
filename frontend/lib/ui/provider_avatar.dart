@@ -16,7 +16,7 @@ class ProviderAvatar extends StatelessWidget {
     'openai': ('assets/providers/openai.svg', Color(0xFF161C28)),
     'openai-codex': ('assets/providers/openai.svg', Color(0xFF161C28)),
     'gemini': ('assets/providers/gemini.svg', Color(0xFF1C72E0)),
-    'kimi': ('assets/providers/kimi.svg', Color(0xFF161C28)),
+    'kimi': ('assets/providers/kimi.svg', null),
     'deepseek': ('assets/providers/deepseek.svg', Color(0xFF4D6BFE)),
     'ark': ('assets/providers/ark.png', null),
   };
