@@ -3,17 +3,19 @@
 // 续期,产物经 Store 落库。单账号并发刷新单飞去重;终态失败
 // (invalid_grant/401)记为需重新授权,之后短路不再打签发方。
 //
-// 常量口径与 codex CLI 官方实现一致(codex-rs/login/src/auth/manager.rs):
-// 公开 client_id、JSON 编码的 refresh_token grant、5 分钟刷新窗。
+// 常量口径取三家生产实现(sub2api/new-api/cc-switch)与 codex CLI 官方
+// 实现(codex-rs)的交集:公开 client_id、form 编码的 refresh_token grant
+// 带 scope、5 分钟刷新窗;授权侧请求带 originator 与 UA,与 codex-rs
+// default_client.rs 一致。
 package oauth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +29,15 @@ const (
 	// TokenURL 是 OpenAI 授权服务的 token 端点。
 	TokenURL = "https://auth.openai.com/oauth/token"
 	// ClientID 是 codex CLI 的公开 OAuth client(订阅登录态共用一个 client)。
-	ClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
+	ClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+	// Scope 续期携带的 scope;不带 offline_access(codex-rs 同款)。
+	Scope = "openid profile email"
+	// Originator 标识 codex CLI 来源,授权侧与 backend-api 请求都要带。
+	Originator = "codex_cli_rs"
+	// ClientVersion 伪装的 codex CLI 版本;backend-api 按 originator+version
+	// 路由模型队列,过低新版本模型直接 404(sub2api 实测下限 0.144.0)。
+	ClientVersion = "0.153.4"
+
 	refreshWindow = 5 * time.Minute
 	defaultTTL    = time.Hour
 )
@@ -144,20 +154,22 @@ type tokenResponse struct {
 }
 
 func (m *Manager) refresh(ctx context.Context, acc account.Account) (string, error) {
-	body, err := json.Marshal(map[string]string{
-		"client_id":     m.clientID,
-		"grant_type":    "refresh_token",
-		"refresh_token": acc.Credential.RefreshToken,
-	})
+	// form 编码:sub2api/new-api/cc-switch 三家生产实现一致,JSON 编码未见实证。
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {acc.Credential.RefreshToken},
+		"client_id":     {m.clientID},
+		"scope":         {Scope},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.tokenURL, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	// 授权侧身份头与 codex-rs default_client.rs 一致:只带 originator 与 UA。
+	req.Header.Set("originator", Originator)
+	req.Header.Set("User-Agent", Originator+"/"+ClientVersion)
 
 	resp, err := m.client.Do(req)
 	if err != nil {

@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -62,13 +61,28 @@ type tokenServer struct {
 func (ts *tokenServer) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ts.hits.Add(1)
-		var body map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "bad json", http.StatusBadRequest)
+		if ct := r.Header.Get("Content-Type"); ct != "application/x-www-form-urlencoded" {
+			http.Error(w, "want form encoding, got "+ct, http.StatusBadRequest)
 			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		body := map[string]string{}
+		for k := range r.PostForm {
+			body[k] = r.PostForm.Get(k)
 		}
 		if body["grant_type"] != "refresh_token" || body["client_id"] == "" || body["refresh_token"] == "" {
 			http.Error(w, "bad grant", http.StatusBadRequest)
+			return
+		}
+		if body["scope"] != Scope {
+			http.Error(w, "bad scope "+body["scope"], http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("originator") != Originator {
+			http.Error(w, "missing originator", http.StatusBadRequest)
 			return
 		}
 		ts.serve(w, body["refresh_token"])
