@@ -18,6 +18,8 @@ final providers = [
     'protocols': ['chat_completions'],
     'auth': 'bearer',
     'credential': 'api_key',
+    'billing': 'paygo',
+    'region': 'Global',
   }),
   ProviderSpec.fromJson(const {
     'id': 'openai',
@@ -27,6 +29,8 @@ final providers = [
     'protocols': ['chat_completions', 'responses'],
     'auth': 'bearer',
     'credential': 'api_key',
+    'billing': 'paygo',
+    'region': 'Global',
   }),
 ];
 
@@ -126,13 +130,36 @@ String fieldText(WidgetTester tester, String key) => tester
     .controller!
     .text;
 
+/// 三级级联从上至下逐级点选(厂商→计费模式→服务区域)。
+Future<void> selectCascade(
+  WidgetTester tester, {
+  required String vendor,
+  required String billing,
+  required String region,
+}) async {
+  await tester.tap(find.byKey(const ValueKey('account-provider-vendor')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(vendor).last);
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('account-provider-billing')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(billing).last);
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('account-provider-region')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(region).last);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('copy prefills config but keeps create semantics', (tester) async {
     await pumpForm(tester, copyFrom: account);
 
     expect(find.text('拷贝账号 ds-1'), findsOneWidget);
-    expect(find.text('DeepSeek (deepseek)'), findsOneWidget,
-        reason: 'provider dropdown follows the source account');
+    expect(find.text('DeepSeek'), findsOneWidget,
+        reason: '厂商级跟随来源账号反推预填');
+    expect(find.text('按量计费'), findsOneWidget, reason: '计费模式级预填');
+    expect(find.text('全球'), findsOneWidget, reason: '服务区域级预填');
     expect(fieldText(tester, 'account-name'), 'ds-1-copy');
     expect(fieldText(tester, 'account-base-url'), 'https://ds.example.com',
         reason: '已存覆盖值直接预填');
@@ -186,25 +213,62 @@ void main() {
     expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com');
   });
 
-  testWidgets('plain create stays blank but url prefills provider default',
-      (tester) async {
+  testWidgets('plain create stays blank until cascade selected', (tester) async {
     await pumpForm(tester);
     expect(find.text('新建账号'), findsOneWidget);
     expect(fieldText(tester, 'account-name'), isEmpty);
+    expect(fieldText(tester, 'account-base-url'), isEmpty,
+        reason: '三级级联未选定前没有提供商,地址留空');
+
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
     expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com',
-        reason: '默认值是所选提供商的默认请求地址');
+        reason: '三级选定后自动带出该提供商的默认请求地址');
+  });
+
+  testWidgets('lower cascade levels stay disabled until upper chosen',
+      (tester) async {
+    await pumpForm(tester);
+
+    await tester.tap(find.byKey(const ValueKey('account-provider-billing')));
+    await tester.pumpAndSettle();
+    expect(find.text('按量计费'), findsNothing,
+        reason: '厂商未选,计费模式禁用点开不出菜单');
+
+    await tester.tap(find.byKey(const ValueKey('account-provider-vendor')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('DeepSeek').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('account-provider-region')));
+    await tester.pumpAndSettle();
+    expect(find.text('全球'), findsNothing,
+        reason: '计费模式未选,服务区域禁用点开不出菜单');
+  });
+
+  testWidgets('switching vendor resets lower levels and followed url',
+      (tester) async {
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
+    expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com');
+
+    await tester.tap(find.byKey(const ValueKey('account-provider-vendor')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OpenAI').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('按量计费'), findsNothing, reason: '换厂商后计费模式被重置');
+    expect(find.text('全球'), findsNothing, reason: '换厂商后服务区域被重置');
+    expect(fieldText(tester, 'account-base-url'), isEmpty,
+        reason: '地址仍跟随默认值,提供商未解析时清空');
   });
 
   testWidgets('switching provider swaps an untouched default', (tester) async {
     await pumpForm(tester);
 
-    await tester.tap(find.byKey(const ValueKey('account-provider')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI (openai)').last);
-    await tester.pumpAndSettle();
+    await selectCascade(tester, vendor: 'OpenAI', billing: '按量计费', region: '全球');
 
     expect(fieldText(tester, 'account-base-url'), 'https://api.openai.com',
-        reason: '用户没改过地址,换提供商时跟着换新默认值');
+        reason: '用户没改过地址,选定后跟着带出默认值');
   });
 
   testWidgets('switching provider preserves a customized url', (tester) async {
@@ -215,10 +279,7 @@ void main() {
         'https://my-gateway.example.com');
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('account-provider')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI (openai)').last);
-    await tester.pumpAndSettle();
+    await selectCascade(tester, vendor: 'OpenAI', billing: '按量计费', region: '全球');
 
     expect(fieldText(tester, 'account-base-url'),
         'https://my-gateway.example.com');
@@ -229,6 +290,7 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
     await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
         find.byKey(const ValueKey('account-api-key')), 'sk-test');
@@ -237,6 +299,7 @@ void main() {
 
     expect(captured, hasLength(1));
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['provider_id'], 'deepseek', reason: '三级级联最终解析回 provider id');
     expect(body['base_url'], '',
         reason: '与提供商默认值相同→空覆盖,继续跟随提供商');
   });
@@ -245,6 +308,7 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
     await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
         find.byKey(const ValueKey('account-api-key')), 'sk-test');
@@ -262,6 +326,7 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
     await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
         find.byKey(const ValueKey('account-api-key')), 'sk-test');
@@ -312,6 +377,7 @@ void main() {
     final captured = <String>[];
     await pumpForm(tester, client: recordingClient(captured));
 
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
     await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
     await tester.enterText(
         find.byKey(const ValueKey('account-api-key')), 'sk-test');
@@ -330,6 +396,7 @@ void main() {
         editing: accountWithScript, client: recordingClient(captured));
 
     // 初始展开(脚本启用中):关掉开关并清空代码=不要脚本了
+    await tester.ensureVisible(find.byKey(const ValueKey('quota-script-enabled')));
     await tester.tap(find.byKey(const ValueKey('quota-script-enabled')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('quota-script-code')), '');

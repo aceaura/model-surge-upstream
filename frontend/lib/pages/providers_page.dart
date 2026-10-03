@@ -25,12 +25,45 @@ class ProvidersPage extends StatefulWidget {
   State<ProvidersPage> createState() => _ProvidersPageState();
 }
 
+/// 一个厂商(displayName)下的全部类型条目,按 订阅在前、区域名 排序。
+class _VendorGroup {
+  _VendorGroup(this.name, this.specs);
+
+  final String name;
+  final List<ProviderSpec> specs;
+}
+
 class _ProvidersPageState extends State<ProvidersPage> {
   late Future<List<ProviderSpec>> _future = widget.client.listProviders();
   String _query = '';
 
   void _reload() =>
       setState(() => _future = widget.client.listProviders());
+
+  /// 按厂商分组:同 displayName 的条目并入一组,组内订阅在前;
+  /// 搜索命中厂商名或任一条目 id 即保留整组。
+  List<_VendorGroup> _groupsOf(List<ProviderSpec> providers) {
+    final q = _query.toLowerCase();
+    final byName = <String, List<ProviderSpec>>{};
+    for (final p in providers) {
+      byName.putIfAbsent(p.displayName, () => []).add(p);
+    }
+    final groups = [
+      for (final e in byName.entries)
+        _VendorGroup(e.key, List.of(e.value)
+          ..sort((a, b) {
+            final sub = (a.billing == 'subscription' ? 0 : 1)
+                .compareTo(b.billing == 'subscription' ? 0 : 1);
+            return sub != 0 ? sub : a.region.compareTo(b.region);
+          })),
+    ];
+    if (q.isEmpty) return groups;
+    return groups
+        .where((g) =>
+            g.name.toLowerCase().contains(q) ||
+            g.specs.any((p) => p.id.toLowerCase().contains(q)))
+        .toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,21 +81,14 @@ class _ProvidersPageState extends State<ProvidersPage> {
           );
         }
         final providers = snapshot.data ?? const <ProviderSpec>[];
-        // 摘要带:按协议统计覆盖的提供商数;搜索按 id/显示名过滤
+        // 摘要带:按协议统计覆盖的提供商数;搜索按厂商名/条目 id 过滤
         final protoCounts = <String, int>{};
         for (final p in providers) {
           for (final proto in p.protocols) {
             protoCounts[proto] = (protoCounts[proto] ?? 0) + 1;
           }
         }
-        final q = _query.toLowerCase();
-        final visible = q.isEmpty
-            ? providers
-            : providers
-                .where((p) =>
-                    p.id.toLowerCase().contains(q) ||
-                    p.displayName.toLowerCase().contains(q))
-                .toList();
+        final visible = _groupsOf(providers);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -111,8 +137,8 @@ class _ProvidersPageState extends State<ProvidersPage> {
                                             const SizedBox(width: 12),
                                           Expanded(
                                             child: j < visible.length
-                                                ? _ProviderCard(
-                                                    spec: visible[j])
+                                                ? _VendorCard(
+                                                    group: visible[j])
                                                 : const SizedBox(),
                                           ),
                                         ],
@@ -133,10 +159,11 @@ class _ProvidersPageState extends State<ProvidersPage> {
   }
 }
 
-class _ProviderCard extends StatelessWidget {
-  const _ProviderCard({required this.spec});
+/// 厂商大卡:卡头头像+厂商名,卡内按类型分节(节首类型签+缩写标签)。
+class _VendorCard extends StatelessWidget {
+  const _VendorCard({required this.group});
 
-  final ProviderSpec spec;
+  final _VendorGroup group;
 
   @override
   Widget build(BuildContext context) {
@@ -149,28 +176,37 @@ class _ProviderCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                ProviderAvatar(providerId: spec.id, size: 36),
+                ProviderAvatar(providerId: group.specs.first.id, size: 36),
                 const SizedBox(width: 12),
                 Text(
-                  spec.displayNameFull,
+                  group.name,
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                     color: t.ink,
                   ),
                 ),
-                const SizedBox(width: 8),
-                ProviderTag(spec.tagLabel),
               ],
             ),
-            const SizedBox(height: 12),
-            _row(context, '官网', spec.website),
-            _row(context, '请求地址', spec.baseUrl),
-            _row(context, '支持协议', spec.protocols.join(', ')),
-            _row(context, '认证形态', spec.auth),
-            _row(context, '凭据形态', spec.credential),
-            _row(context, '计费模式', spec.billingLabel),
-            _row(context, '服务区域', spec.regionLabel),
+            for (var i = 0; i < group.specs.length; i++) ...[
+              if (i > 0)
+                Divider(height: 26, thickness: 1, color: t.border)
+              else
+                const SizedBox(height: 12),
+              Row(
+                children: [
+                  _TypeChip(spec: group.specs[i]),
+                  const Spacer(),
+                  ProviderTag(group.specs[i].tagLabel),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _row(context, '官网', group.specs[i].website),
+              _row(context, '请求地址', group.specs[i].baseUrl),
+              _row(context, '支持协议', group.specs[i].protocols.join(', ')),
+              _row(context, '认证形态', group.specs[i].auth),
+              _row(context, '凭据形态', group.specs[i].credential),
+            ],
           ],
         ),
       ),
@@ -195,4 +231,34 @@ class _ProviderCard extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// 类型签「计费模式 · 服务区域」:订阅紫、按量计费橙。
+class _TypeChip extends StatelessWidget {
+  const _TypeChip({required this.spec});
+
+  final ProviderSpec spec;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final subscription = spec.billing == 'subscription';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: subscription
+            ? t.violet.withValues(alpha: .10)
+            : t.warnSoft,
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Text(
+        spec.typeLabel,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w500,
+          color: subscription ? t.violet : t.warnInk,
+        ),
+      ),
+    );
+  }
 }

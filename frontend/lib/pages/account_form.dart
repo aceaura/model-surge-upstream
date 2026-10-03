@@ -45,9 +45,12 @@ class _AccountFormState extends State<AccountForm> {
           (widget.copyFrom != null ? '${widget.copyFrom!.name}-copy' : ''));
   late final TextEditingController _apiKey = TextEditingController();
 
-  late String? _providerId = widget.editing?.providerId ??
-      widget.copyFrom?.providerId ??
-      (widget.providers.isNotEmpty ? widget.providers.first.id : null);
+  late String? _providerId =
+      widget.editing?.providerId ?? widget.copyFrom?.providerId;
+  // 三级级联选择(厂商→计费模式→服务区域):编辑/拷贝时按已存 providerId 反推
+  late String? _vendor = _spec?.displayName;
+  late String? _billing = _spec?.billingLabel;
+  late String? _region = _spec?.regionLabel;
 
   // 请求地址可编辑:默认取提供商默认地址,已存覆盖值时取覆盖值
   late final TextEditingController _baseUrl =
@@ -109,20 +112,25 @@ class _AccountFormState extends State<AccountForm> {
           ? source.baseUrl
           : _defaultBaseUrlFor(source.providerId);
     }
-    return _defaultBaseUrlFor(
-        widget.providers.isNotEmpty ? widget.providers.first.id : null);
+    // 新建:三级级联选定前无提供商,地址留空,选定后自动带默认值
+    return '';
   }
 
-  /// 换提供商时:地址仍是旧提供商默认值(用户没改过)就跟着换成新默认值,
-  /// 用户改过则保留其输入。
-  void _onProviderChanged(String? v) {
-    setState(() {
-      final oldDefault = _defaultBaseUrlFor(_providerId);
-      if (oldDefault.isNotEmpty && _baseUrl.text.trim() == oldDefault) {
-        _baseUrl.text = _defaultBaseUrlFor(v);
-      }
-      _providerId = v;
-    });
+  /// 三级级联任一级变化后重解析 provider:地址为空或仍是旧默认值时
+  /// 跟随新默认值,用户改过则保留其输入。
+  void _resolveProvider() {
+    final match = widget.providers
+        .where((p) =>
+            p.displayName == _vendor &&
+            p.billingLabel == _billing &&
+            p.regionLabel == _region)
+        .firstOrNull;
+    final oldDefault = _defaultBaseUrlFor(_providerId);
+    final cur = _baseUrl.text.trim();
+    if (cur.isEmpty || (oldDefault.isNotEmpty && cur == oldDefault)) {
+      _baseUrl.text = match?.baseUrl ?? '';
+    }
+    _providerId = match?.id;
   }
 
   /// 额度脚本提交载荷:null=不动服务端配置,空 Map=显式清除。
@@ -215,17 +223,62 @@ class _AccountFormState extends State<AccountForm> {
     }
   }
 
-  Widget _providerDropdown() => StyledDropdownFormField(
-        key: const ValueKey('account-provider'),
-        value: _providerId,
+  // ── 提供商三级级联:厂商→计费模式→服务区域,选项由清单动态推导,
+  // 上级未选下级禁用,换上级重置下级 ──
+
+  List<String> get _vendorOptions =>
+      {for (final p in widget.providers) p.displayName}.toList();
+
+  List<String> get _billingOptions => {
+        for (final p in widget.providers)
+          if (p.displayName == _vendor) p.billingLabel
+      }.toList();
+
+  List<String> get _regionOptions => {
+        for (final p in widget.providers)
+          if (p.displayName == _vendor && p.billingLabel == _billing)
+            p.regionLabel
+      }.toList();
+
+  Widget _vendorDropdown() => StyledDropdownFormField(
+        key: const ValueKey('account-provider-vendor'),
+        value: _vendor,
         decoration: const InputDecoration(border: OutlineInputBorder()),
-        options: [for (final p in widget.providers) p.id],
-        labelOf: (id) {
-          final p = widget.providers.where((p) => p.id == id).firstOrNull;
-          return p == null ? id : '${p.displayName} ($id)';
-        },
-        onChanged: _onProviderChanged,
-        validator: (v) => v == null ? '请选择提供商' : null,
+        options: _vendorOptions,
+        onChanged: (v) => setState(() {
+          _vendor = v;
+          _billing = null;
+          _region = null;
+          _resolveProvider();
+        }),
+        validator: (v) => v == null ? '请选择厂商' : null,
+      );
+
+  Widget _billingDropdown() => StyledDropdownFormField(
+        key: const ValueKey('account-provider-billing'),
+        value: _billing,
+        enabled: _vendor != null,
+        decoration: const InputDecoration(border: OutlineInputBorder()),
+        options: _billingOptions,
+        onChanged: (v) => setState(() {
+          _billing = v;
+          _region = null;
+          _resolveProvider();
+        }),
+        validator: (v) => v == null ? '请选择计费模式' : null,
+      );
+
+  Widget _regionDropdown() => StyledDropdownFormField(
+        key: const ValueKey('account-provider-region'),
+        value: _region,
+        enabled: _billing != null,
+        decoration: const InputDecoration(border: OutlineInputBorder()),
+        options: _regionOptions,
+        onChanged: (v) => setState(() {
+          _region = v;
+          _resolveProvider();
+        }),
+        validator: (v) => v == null ? '请选择服务区域' : null,
       );
 
   @override
@@ -281,13 +334,14 @@ class _AccountFormState extends State<AccountForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 编辑时账号名不可改(标题已含),提供商独占整行;
-          // 新建时提供商与账号名并排(CC Switch 式双列)
+          // 编辑时账号名不可改(标题已含),厂商独占整行;
+          // 新建时厂商与账号名并排(CC Switch 式双列);
+          // 计费模式/服务区域是级联的下两级,并排一行,从上至下依次解锁
           if (_isEdit)
-            LabeledField(label: '提供商', child: _providerDropdown())
+            LabeledField(label: '厂商', child: _vendorDropdown())
           else
             FormRow2(
-              LabeledField(label: '提供商', child: _providerDropdown()),
+              LabeledField(label: '厂商', child: _vendorDropdown()),
               LabeledField(
                 label: '账号名',
                 child: TextFormField(
@@ -303,6 +357,11 @@ class _AccountFormState extends State<AccountForm> {
                 ),
               ),
             ),
+          const SizedBox(height: 20),
+          FormRow2(
+            LabeledField(label: '计费模式', child: _billingDropdown()),
+            LabeledField(label: '服务区域', child: _regionDropdown()),
+          ),
           const SizedBox(height: 20),
           LabeledField(
             label: '请求地址',

@@ -17,7 +17,7 @@ ApiClient fakeClient() => ApiClient(
               {
                 'id': 'kimi',
                 'display_name': 'Moonshot Kimi',
-                'website': 'https://platform.moonshot.cn',
+                'website': 'https://www.kimi.com',
                 'base_url': 'https://api.kimi.com/coding',
                 'protocols': ['anthropic', 'chat_completions'],
                 'auth': 'anthropic_key',
@@ -54,7 +54,7 @@ ApiClient fakeClient() => ApiClient(
     );
 
 void main() {
-  testWidgets('提供商卡片按属性行展示计费模式中文名', (tester) async {
+  testWidgets('厂商大卡按类型分节展示:类型签+缩写标签+属性行', (tester) async {
     await tester.pumpWidget(MaterialApp(
       theme: buildAppTheme(),
       home: Scaffold(
@@ -63,23 +63,81 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('计费模式'), findsNWidgets(3));
-    expect(find.text('订阅'), findsOneWidget, reason: 'kimi 是订阅制');
-    expect(find.text('按量计费'), findsNWidgets(2), reason: 'ark/openai 是按量计费');
-    expect(find.text('服务区域'), findsNWidgets(3));
-    expect(find.text('中国'), findsOneWidget, reason: 'ark 服务区域 CN');
-    expect(find.text('全球'), findsNWidgets(2), reason: 'kimi/openai 服务区域 Global');
-    // 命名规则:Global 不加后缀;其他区域全名加 -CN、缩写加 -cn
-    expect(find.text('Volcengine Ark-CN'), findsOneWidget,
-        reason: 'CN 区域全名加 -CN 后缀');
+    // 卡头是厂商名(不带区域后缀),计费/区域由类型签承载
+    expect(find.text('Moonshot Kimi'), findsOneWidget);
+    expect(find.text('Volcengine Ark'), findsOneWidget,
+        reason: '分组形态下区域在类型签里,厂商名不加 -CN 后缀');
+    expect(find.text('OpenAI'), findsOneWidget);
+
+    // 类型签「计费模式 · 服务区域」:三种组合各一处
+    expect(find.text('订阅 · 全球'), findsOneWidget, reason: 'kimi 订阅/Global');
+    expect(find.text('按量计费 · 中国'), findsOneWidget, reason: 'ark 按量/CN');
+    expect(find.text('按量计费 · 全球'), findsOneWidget, reason: 'openai 按量/Global');
+    expect(find.text('计费模式'), findsNothing, reason: '独立属性行已被类型签取代');
+    expect(find.text('服务区域'), findsNothing);
+
+    // 缩写标签:Global 原样,CN 加小写后缀
+    expect(find.text('kimi'), findsOneWidget);
     expect(find.text('ark-cn'), findsOneWidget, reason: 'CN 区域缩写加 -cn 后缀');
-    expect(find.text('Moonshot Kimi'), findsOneWidget,
-        reason: 'Global 全名原样不加后缀');
-    expect(find.text('kimi'), findsOneWidget, reason: 'Global 缩写原样不加后缀');
-    expect(find.textContaining('-CN'), findsOneWidget, reason: '只有 ark 一家带后缀');
+    expect(find.textContaining('-CN'), findsNothing,
+        reason: '分组卡片厂商名不再拼 -CN 后缀');
+
+    // 属性行按节下发(官网/请求地址每节各一份)
+    expect(find.text('官网'), findsNWidgets(3));
+    expect(find.text('请求地址'), findsNWidgets(3));
     expect(find.text('额度查询'), findsNothing,
         reason: '额度查询由账号脚本配置决定,不是供应商的属性');
     expect(find.text('额度形态'), findsNothing);
     expect(find.text('额度重置'), findsNothing);
+  });
+
+  testWidgets('同厂商多类型并入一张卡分节,订阅在前', (tester) async {
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((_) async => http.Response(
+          jsonEncode({
+            'providers': [
+              {
+                'id': 'kimi-cn',
+                'display_name': 'Moonshot Kimi',
+                'website': 'https://platform.moonshot.cn',
+                'base_url': 'https://api.moonshot.cn/v1',
+                'protocols': ['chat_completions'],
+                'auth': 'bearer',
+                'credential': 'api_key',
+                'billing': 'paygo',
+                'region': 'CN',
+              },
+              {
+                'id': 'kimi',
+                'display_name': 'Moonshot Kimi',
+                'website': 'https://www.kimi.com',
+                'base_url': 'https://api.kimi.com/coding',
+                'protocols': ['anthropic', 'chat_completions'],
+                'auth': 'anthropic_key',
+                'credential': 'api_key',
+                'billing': 'subscription',
+                'region': 'Global',
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json'})),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(body: ProvidersPage(client: client, onOpenSettings: () {})),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Moonshot Kimi'), findsOneWidget,
+        reason: '两条同厂商记录并入一卡,厂商名只出现一次');
+    expect(find.text('订阅 · 全球'), findsOneWidget);
+    expect(find.text('按量计费 · 中国'), findsOneWidget);
+    final subTop = tester.getTopLeft(find.text('订阅 · 全球')).dy;
+    final paygoTop = tester.getTopLeft(find.text('按量计费 · 中国')).dy;
+    expect(subTop, lessThan(paygoTop), reason: '组内订阅类型排在按量前面');
+    expect(find.text('kimi-cn'), findsOneWidget);
   });
 }

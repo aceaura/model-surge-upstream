@@ -20,6 +20,8 @@ class StyledDropdown extends StatefulWidget {
   // 菜单朝触发器上方展开:触发器贴近窗口底缘(如对话页输入栏)时
   // 默认的下翻菜单会落到窗口外,既看不见也点不到。
   final bool dropUp;
+  // false=禁用:不响应点击(级联选择中下级等上级选定后再解锁)。
+  final bool enabled;
   const StyledDropdown(
       {super.key,
       required this.value,
@@ -28,7 +30,8 @@ class StyledDropdown extends StatefulWidget {
       this.decoration,
       this.labelOf,
       this.showValue = true,
-      this.dropUp = false});
+      this.dropUp = false,
+      this.enabled = true});
 
   @override
   State<StyledDropdown> createState() => _StyledDropdownState();
@@ -181,11 +184,13 @@ class _StyledDropdownState extends State<StyledDropdown> {
     return CompositedTransformTarget(
       link: _link,
       child: MouseRegion(
-        cursor: SystemMouseCursors.click,
+        cursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         child: GestureDetector(
           key: _triggerKey,
           behavior: HitTestBehavior.opaque,
-          onTap: _toggle,
+          onTap: widget.enabled ? _toggle : null,
           child: InputDecorator(
             decoration: d,
             isEmpty: !widget.showValue,
@@ -205,12 +210,13 @@ class _StyledDropdownState extends State<StyledDropdown> {
                           // 显式钉字体族:textStyle 缺 fontFamily 会在合并链上丢掉字体栈
                           style: TextStyle(
                               fontSize: 13,
-                              color: t.ink,
+                              color: widget.enabled ? t.ink : t.faint,
                               fontFamily: AppConst.fontFamily,
                               fontFamilyFallback: AppConst.fontFallback),
                         ),
                 ),
-                Icon(Icons.expand_more_rounded, size: 18, color: t.dim),
+                Icon(Icons.expand_more_rounded,
+                    size: 18, color: widget.enabled ? t.dim : t.faint),
               ]),
             ),
           ),
@@ -229,6 +235,7 @@ class StyledDropdownFormField extends FormField<String> {
     required ValueChanged<String?> onChanged,
     InputDecoration decoration = const InputDecoration(),
     String Function(String)? labelOf,
+    bool enabled = true,
     super.validator,
   }) : super(
           initialValue: value,
@@ -237,11 +244,28 @@ class StyledDropdownFormField extends FormField<String> {
             options: options,
             labelOf: labelOf,
             showValue: field.value != null,
-            decoration: decoration.copyWith(errorText: field.errorText),
+            enabled: enabled,
+            decoration:
+                decoration.copyWith(errorText: field.errorText, enabled: enabled),
             onChanged: (v) {
               field.didChange(v);
               onChanged(v);
             },
           ),
         );
+
+  @override
+  FormFieldState<String> createState() => _StyledDropdownFormFieldState();
+}
+
+/// FormField 基类的 didUpdateWidget 不回同步 initialValue,父级从外部改值
+/// (级联换上级重置下级)时下拉会残留旧值;这里补上外部值变更的回同步。
+class _StyledDropdownFormFieldState extends FormFieldState<String> {
+  @override
+  void didUpdateWidget(StyledDropdownFormField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialValue != oldWidget.initialValue) {
+      setValue(widget.initialValue);
+    }
+  }
 }
