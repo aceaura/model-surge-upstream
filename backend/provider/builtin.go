@@ -63,7 +63,7 @@ func init() {
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
 		Billing:     BillingPayGo,
-		Region:      RegionCN,
+		Region:      RegionGlobal,
 	})
 	register(Spec{
 		ID:          "deepseek",

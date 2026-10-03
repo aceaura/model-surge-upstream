@@ -62,6 +62,14 @@ class ProviderSpec {
         _ => region,
       };
 
+  /// 卡片全名:Global 原样,其他区域在全名后加 -区域 后缀(如 Ark-CN)。
+  String get displayNameFull =>
+      region == 'Global' || region.isEmpty ? displayName : '$displayName-$region';
+
+  /// 缩写标签:Global 原样,其他区域加小写 -区域 后缀(如 ark-cn)。
+  String get tagLabel =>
+      region == 'Global' || region.isEmpty ? id : '$id-${region.toLowerCase()}';
+
   /// 后端只要带 quota 块即视为声明了额度接口;kind/unit 只是
   /// 主计量项形态说明,老数据可能缺省,不能拿它们当可查询判据。
   final String? quotaKind;

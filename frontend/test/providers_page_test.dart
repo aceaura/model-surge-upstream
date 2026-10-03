@@ -69,6 +69,14 @@ void main() {
     expect(find.text('服务区域'), findsNWidgets(3));
     expect(find.text('中国'), findsOneWidget, reason: 'ark 服务区域 CN');
     expect(find.text('全球'), findsNWidgets(2), reason: 'kimi/openai 服务区域 Global');
+    // 命名规则:Global 不加后缀;其他区域全名加 -CN、缩写加 -cn
+    expect(find.text('Volcengine Ark-CN'), findsOneWidget,
+        reason: 'CN 区域全名加 -CN 后缀');
+    expect(find.text('ark-cn'), findsOneWidget, reason: 'CN 区域缩写加 -cn 后缀');
+    expect(find.text('Moonshot Kimi'), findsOneWidget,
+        reason: 'Global 全名原样不加后缀');
+    expect(find.text('kimi'), findsOneWidget, reason: 'Global 缩写原样不加后缀');
+    expect(find.textContaining('-CN'), findsOneWidget, reason: '只有 ark 一家带后缀');
     expect(find.text('额度查询'), findsNothing,
         reason: '额度查询由账号脚本配置决定,不是供应商的属性');
     expect(find.text('额度形态'), findsNothing);

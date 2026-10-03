@@ -67,7 +67,7 @@ func TestBuiltinRegion(t *testing.T) {
 		"openai":    RegionGlobal,
 		"gemini":    RegionGlobal,
 		"kimi":      RegionGlobal,
-		"ark":       RegionCN,
+		"ark":       RegionGlobal,
 		"deepseek":  RegionGlobal,
 	}
 	for id, region := range want {

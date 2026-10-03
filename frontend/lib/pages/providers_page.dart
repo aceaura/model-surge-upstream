@@ -152,7 +152,7 @@ class _ProviderCard extends StatelessWidget {
                 ProviderAvatar(providerId: spec.id, size: 36),
                 const SizedBox(width: 12),
                 Text(
-                  spec.displayName,
+                  spec.displayNameFull,
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
@@ -160,7 +160,7 @@ class _ProviderCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                ProviderTag(spec.id),
+                ProviderTag(spec.tagLabel),
               ],
             ),
             const SizedBox(height: 12),
