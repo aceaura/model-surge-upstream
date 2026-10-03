@@ -218,7 +218,7 @@ class ApiClient {
       'defaults': defaults,
       'overrides': overrides,
       'compact': ?compact,
-      // efforts 恒带键:null=自动(跟随上游声明),数组=显式声明(空数组=不支持)。
+      // efforts 恒带键:数组=显式声明(空数组=不支持);null=自动仅存量兼容,表单不写。
       'efforts': efforts?.map((e) => e.toJson()).toList(),
       'enabled': enabled,
     });

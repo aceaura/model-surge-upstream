@@ -256,11 +256,12 @@ class UpstreamModel {
   final Map<String, dynamic> compact;
   final bool enabled;
 
-  /// 推理档支持列表的管理员覆盖:null=自动(跟随上游声明),
-  /// 数组=显式声明的 [{name,value}] 条目(空数组即不支持)。
+  /// 推理档支持列表的管理员覆盖:数组=显式声明的 [{name,value}] 条目
+  /// (空数组即不支持)。null=自动(跟随上游声明)仅存量数据兼容,
+  /// 表单只写显式数组。
   final List<EffortEntry>? efforts;
 
-  /// 服务端算好的有效支持列表(自动模式=上游声明),空列表=不支持。
+  /// 服务端算好的有效支持列表(存量自动模式=上游声明),空列表=不支持。
   final List<EffortEntry> effortsEffective;
 
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(

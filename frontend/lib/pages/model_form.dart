@@ -81,11 +81,24 @@ class _ModelFormState extends State<ModelForm> {
   // 启停由列表行开关控制,表单不再展示;编辑/拷贝时沿用原值提交,新建默认启用
   late final bool _enabled = _source?.enabled ?? true;
 
-  // 推理档支持列表:null=自动(跟随上游 /models 声明);行列表=显式声明
-  // (名+值动态行,空列表即声明不支持)。拷贝创建沿用来源配置。
-  late List<_EffortRow>? _effortRows = _source?.efforts == null
-      ? null
-      : [for (final e in _source!.efforts!) _EffortRow(e.name, e.value)];
+  // 推理档支持列表:只允许显式声明(名+值动态行,空列表即声明不支持),
+  // 没有自动跟随上游的模式。新建默认带一行「关闭思考」;编辑/拷贝存量
+  // 自动档(null)的模型时用当前有效列表预填并补上「关闭思考」,保存即
+  // 落为显式声明。
+  late final List<_EffortRow> _effortRows = _initialEffortRows();
+
+  List<_EffortRow> _initialEffortRows() {
+    final source = _source;
+    if (source == null) return [_EffortRow('关闭思考', 'none')];
+    if (source.efforts != null) {
+      return [for (final e in source.efforts!) _EffortRow(e.name, e.value)];
+    }
+    final prefill = source.effortsEffective;
+    return [
+      for (final e in prefill) _EffortRow(e.name, e.value),
+      if (!prefill.any((e) => e.value == 'none')) _EffortRow('关闭思考', 'none'),
+    ];
+  }
 
   bool _defaultsValid = true;
   bool _overridesValid = true;
@@ -108,11 +121,8 @@ class _ModelFormState extends State<ModelForm> {
     _overrides.dispose();
     _compactThreshold.dispose();
     _compactKeepTurns.dispose();
-    final rows = _effortRows;
-    if (rows != null) {
-      for (final r in rows) {
-        r.dispose();
-      }
+    for (final r in _effortRows) {
+      r.dispose();
     }
     super.dispose();
   }
@@ -445,25 +455,21 @@ class _ModelFormState extends State<ModelForm> {
     );
   }
 
-  // ── 推理档(跟随上游声明/自定义名+值档位)──
+  // ── 推理档(显式名+值档位,无自动模式)──
 
   /// 收集当前行态为提交条目:值是档位的身份(去重/上行都靠它),空值行
-  /// 视为未填丢弃;名留空由服务端按值自动命名。null=自动模式。
-  List<EffortEntry>? get _efforts {
-    final rows = _effortRows;
-    if (rows == null) return null;
+  /// 视为未填丢弃;名留空由服务端按值自动命名。删掉所有行即声明不支持。
+  List<EffortEntry> get _efforts {
     return [
-      for (final r in rows)
+      for (final r in _effortRows)
         if (r.value.text.trim().isNotEmpty)
           EffortEntry(name: r.name.text.trim(), value: r.value.text.trim()),
     ];
   }
 
   String get _effortSubtitle {
-    final rows = _effortRows;
-    if (rows == null) return '自动（跟随上游声明）';
     final names = [
-      for (final r in rows)
+      for (final r in _effortRows)
         if (r.value.text.trim().isNotEmpty)
           r.name.text.trim().isNotEmpty
               ? r.name.text.trim()
@@ -479,43 +485,14 @@ class _ModelFormState extends State<ModelForm> {
       icon: Icons.psychology_outlined,
       title: '推理档',
       subtitle: _effortSubtitle,
-      // 显式配置过时默认展开,自动模式收起靠副标题辨认。
-      initiallyExpanded: rows != null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          LabeledField(
-            key: const ValueKey('model-effort-mode-field'),
-            label: '支持档位',
-            hint: rows == null
-                ? '跟随上游 /models 声明的支持档位，上游未声明即不支持'
-                : '每行一个档位：名是显示名（留空按值命名），值是发上游的档位字符串；删掉所有行即声明不支持推理档',
-            child: StyledDropdownFormField(
-              key: const ValueKey('model-effort-mode'),
-              value: rows == null ? 'auto' : 'custom',
-              decoration: const InputDecoration(border: OutlineInputBorder()),
-              options: const ['auto', 'custom'],
-              labelOf: (m) => m == 'auto' ? '自动' : '自定义',
-              onChanged: (v) => setState(() {
-                if (v == 'auto') {
-                  for (final r in _effortRows!) {
-                    r.dispose();
-                  }
-                  _effortRows = null;
-                } else {
-                  // 切自定义时用当前有效列表预填,管理员在自动结果上增删。
-                  final prefill =
-                      _source?.effortsEffective ?? const <EffortEntry>[];
-                  _effortRows = [
-                    for (final e in prefill) _EffortRow(e.name, e.value),
-                    if (prefill.isEmpty) _EffortRow(),
-                  ];
-                }
-              }),
-            ),
-          ),
-          if (rows != null) ...[
-            const SizedBox(height: 16),
+      initiallyExpanded: true,
+      child: LabeledField(
+        key: const ValueKey('model-effort-mode-field'),
+        label: '支持档位',
+        hint: '每行一个档位：名是显示名（留空按值命名），值是发上游的档位字符串；删掉所有行即声明不支持推理档',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             for (var i = 0; i < rows.length; i++)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -550,7 +527,7 @@ class _ModelFormState extends State<ModelForm> {
                       tooltip: '删除',
                       icon: const Icon(Icons.remove_circle_outline),
                       onPressed: () => setState(() {
-                        final r = _effortRows!.removeAt(i);
+                        final r = _effortRows.removeAt(i);
                         r.dispose();
                       }),
                     ),
@@ -561,14 +538,13 @@ class _ModelFormState extends State<ModelForm> {
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
                 key: const ValueKey('model-effort-add'),
-                onPressed: () =>
-                    setState(() => _effortRows!.add(_EffortRow())),
+                onPressed: () => setState(() => _effortRows.add(_EffortRow())),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('添加档位'),
               ),
             ),
           ],
-        ],
+        ),
       ),
     );
   }
