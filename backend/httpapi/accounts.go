@@ -47,15 +47,29 @@ func (r accountRequest) input(name string) (account.Input, error) {
 	return in, nil
 }
 
+// accountView 在仓储视图外叠加 OAuth 授权健康位:订阅登录态终态失效时
+// 管理面据此提示重新粘贴。放接口层而非 account.View——仓储不感知 OAuth。
+type accountView struct {
+	account.View
+	NeedsReauth bool `json:"needs_reauth"`
+}
+
+func (h handler) viewOf(acc account.Account) accountView {
+	return accountView{
+		View:        acc.View(),
+		NeedsReauth: h.OAuth != nil && h.OAuth.NeedsReauth(acc.Name),
+	}
+}
+
 func (h handler) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts, err := h.Accounts.List(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	views := make([]account.View, 0, len(accounts))
+	views := make([]accountView, 0, len(accounts))
 	for _, a := range accounts {
-		views = append(views, a.View())
+		views = append(views, h.viewOf(a))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": views})
 }
@@ -71,7 +85,7 @@ func (h handler) getAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": acc.View(), "model_count": models})
+	writeJSON(w, http.StatusOK, map[string]any{"account": h.viewOf(acc), "model_count": models})
 }
 
 func (h handler) createAccount(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +103,11 @@ func (h handler) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"account": acc.View()})
+	// 同名重建的账号不能继承旧终态标记。
+	if h.OAuth != nil {
+		h.OAuth.Reset(acc.Name)
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"account": h.viewOf(acc)})
 }
 
 func (h handler) updateAccount(w http.ResponseWriter, r *http.Request) {
@@ -108,10 +126,14 @@ func (h handler) updateAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// 重新粘贴登录态后清掉 OAuth 终态标记,让新凭据有机会正常续期。
+	if h.OAuth != nil {
+		h.OAuth.Reset(name)
+	}
 	// 凭据或端点可能已变，丢弃该账号的额度与上游模型清单缓存。
 	h.Quota.Forget(name)
 	h.UpstreamModels.Forget(name)
-	writeJSON(w, http.StatusOK, map[string]any{"account": acc.View()})
+	writeJSON(w, http.StatusOK, map[string]any{"account": h.viewOf(acc)})
 }
 
 func (h handler) deleteAccount(w http.ResponseWriter, r *http.Request) {

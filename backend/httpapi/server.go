@@ -88,6 +88,13 @@ type UsageStats interface {
 	UsageLogs(ctx context.Context, f store.UsageFilter, limit, offset int) ([]store.UsageLog, int64, error)
 }
 
+// OAuthState 暴露 OAuth 登录态的授权健康(oauth.Manager 实现;nil 表示
+// 未装配 OAuth,账号视图的 needs_reauth 恒 false)。
+type OAuthState interface {
+	NeedsReauth(name string) bool
+	Reset(name string)
+}
+
 type Deps struct {
 	Accounts       Accounts
 	Models         Models
@@ -99,6 +106,7 @@ type Deps struct {
 	Chat           Chat
 	Usage          UsageStats
 	Health         Health
+	OAuth          OAuthState
 	AdminKey       string
 	DeliveryKey    string
 }

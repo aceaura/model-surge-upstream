@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"net/http"
@@ -266,5 +267,32 @@ func TestWrongKindRejected(t *testing.T) {
 	acc := accWith(credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-x"})
 	if _, err := m.AccessToken(context.Background(), acc); err == nil {
 		t.Fatal("api_key kind should be rejected by oauth manager")
+	}
+}
+
+func TestResetClearsReauth(t *testing.T) {
+	m, _, ts := newFixture(t, func(w http.ResponseWriter, _ string) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_grant"}`)
+	})
+	acc := accWith(oauthCred("", time.Time{}))
+
+	if _, err := m.AccessToken(context.Background(), acc); !errors.Is(err, ErrNeedsReauth) {
+		t.Fatalf("err = %v, want ErrNeedsReauth", err)
+	}
+	if !m.NeedsReauth("a1") {
+		t.Fatal("account should be flagged needs-reauth")
+	}
+
+	// 用户重新粘贴登录态后 Reset:换一个新凭据应能正常续期。
+	m.Reset("a1")
+	if m.NeedsReauth("a1") {
+		t.Fatal("Reset should clear the flag")
+	}
+	// 注意:token 端点仍按 400 脚本应答,再次取 token 会真的打过去
+	// (而不是被 reauth 短路),hits 增加即证明短路已解除。
+	_, _ = m.AccessToken(context.Background(), accWith(oauthCred("", time.Time{})))
+	if ts.hits.Load() != 2 {
+		t.Errorf("hits = %d, want 2 (second call must reach the endpoint)", ts.hits.Load())
 	}
 }

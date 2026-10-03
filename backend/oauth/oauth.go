@@ -147,6 +147,15 @@ func (m *Manager) NeedsReauth(name string) bool {
 	return m.reauth[name]
 }
 
+// Reset 用户重新粘贴登录态后调用:清掉终态标记与作废记录,
+// 下次取 token 用新凭据正常续期。
+func (m *Manager) Reset(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.reauth, name)
+	delete(m.invalid, name)
+}
+
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`

@@ -96,6 +96,7 @@ func run() error {
 		Chat:           chats,
 		Usage:          db,
 		Health:         health{db: db, cache: c},
+		OAuth:          tokens,
 		AdminKey:       cfg.AdminKey,
 		DeliveryKey:    cfg.DeliveryKey,
 	}))

@@ -200,6 +200,17 @@ func (s *stubHealth) CacheReady(context.Context) bool { return s.cacheReady }
 
 // ---- 装配 ----
 
+type stubOAuth struct {
+	reauth map[string]bool
+	resets []string
+}
+
+func (s *stubOAuth) NeedsReauth(name string) bool { return s.reauth[name] }
+func (s *stubOAuth) Reset(name string) {
+	s.resets = append(s.resets, name)
+	delete(s.reauth, name)
+}
+
 type fixture struct {
 	server   http.Handler
 	accounts *stubAccounts
@@ -207,6 +218,7 @@ type fixture struct {
 	quota    *stubQuota
 	upstream *stubUpstreamModels
 	health   *stubHealth
+	oauth    *stubOAuth
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -232,6 +244,7 @@ func newFixture(t *testing.T) *fixture {
 		Models:    []upmodels.Entry{{ID: "kimi-k2-turbo"}},
 	}}
 	h := &stubHealth{cacheReady: true}
+	oa := &stubOAuth{reauth: map[string]bool{}}
 
 	return &fixture{
 		server: NewServer(Deps{
@@ -241,10 +254,11 @@ func newFixture(t *testing.T) *fixture {
 			Quota:          q,
 			UpstreamModels: up,
 			Health:         h,
+			OAuth:          oa,
 			AdminKey:       adminKey,
 			DeliveryKey:    deliveryKey,
 		}),
-		accounts: accounts, models: models, quota: q, upstream: up, health: h,
+		accounts: accounts, models: models, quota: q, upstream: up, health: h, oauth: oa,
 	}
 }
 
@@ -418,6 +432,73 @@ func TestUnsupportedCredentialKindListsSupported(t *testing.T) {
 		`{"name":"x","provider_id":"kimi","credential":{"kind":"session_token","token":"x"}}`)
 	if !strings.Contains(rec.Body.String(), "api_key") {
 		t.Errorf("error should list the supported kinds: %s", rec.Body)
+	}
+}
+
+// oauth_refresh 凭据的管理面往返:创建成功,读回时 refresh_token 脱敏、
+// access_token 不出现、account_id 明文(它是标识不是秘密)。
+func TestCreateOAuthAccountRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "POST", "/admin/accounts", adminKey,
+		`{"name":"gpt-1","provider_id":"openai-codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-secret","account_id":"acc-x"}}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "rt-secret") {
+		t.Errorf("create response leaked refresh_token: %s", rec.Body)
+	}
+
+	rec = f.do(t, "GET", "/admin/accounts/gpt-1", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "rt-secret") {
+		t.Errorf("get response leaked refresh_token: %s", body)
+	}
+	if strings.Contains(body, "access_token") {
+		t.Errorf("view must never carry access_token: %s", body)
+	}
+	if !strings.Contains(body, `"kind":"oauth_refresh"`) || !strings.Contains(body, `"account_id":"acc-x"`) {
+		t.Errorf("view should carry kind and account_id: %s", body)
+	}
+}
+
+// 账号视图叠加 needs_reauth:终态授权失败的账号在列表与详情里都带位。
+func TestAccountViewCarriesNeedsReauth(t *testing.T) {
+	f := newFixture(t)
+	f.oauth.reauth["kimi-1"] = true
+
+	rec := f.do(t, "GET", "/admin/accounts", adminKey, "")
+	if !strings.Contains(rec.Body.String(), `"needs_reauth":true`) {
+		t.Errorf("list should flag needs_reauth: %s", rec.Body)
+	}
+	rec = f.do(t, "GET", "/admin/accounts/kimi-1", adminKey, "")
+	if !strings.Contains(rec.Body.String(), `"needs_reauth":true`) {
+		t.Errorf("get should flag needs_reauth: %s", rec.Body)
+	}
+}
+
+// 重新粘贴凭据(更新)后清 OAuth 终态标记;创建同名账号同样清。
+func TestAccountWritesResetOAuthState(t *testing.T) {
+	f := newFixture(t)
+	f.oauth.reauth["kimi-1"] = true
+	if rec := f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if len(f.oauth.resets) != 1 || f.oauth.resets[0] != "kimi-1" {
+		t.Errorf("resets = %v, want [kimi-1]", f.oauth.resets)
+	}
+	if f.oauth.reauth["kimi-1"] {
+		t.Error("reauth flag should be cleared after update")
+	}
+
+	if rec := f.do(t, "POST", "/admin/accounts", adminKey,
+		`{"name":"gpt-2","provider_id":"openai-codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-y","account_id":"acc-y"}}`); rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	if len(f.oauth.resets) != 2 || f.oauth.resets[1] != "gpt-2" {
+		t.Errorf("resets = %v, want create to reset too", f.oauth.resets)
 	}
 }
 
