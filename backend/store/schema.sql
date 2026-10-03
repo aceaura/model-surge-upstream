@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS models (
 -- compact 承载上下文压缩配置（mode/threshold/keep_turns/max_summary_tokens）。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS compact JSONB NOT NULL DEFAULT '{}';
 
+-- efforts 为推理档支持列表：JSON null=自动（按协议+模型名规则推导），
+-- 数组=管理员显式声明（空数组即该模型不支持 effort）。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS efforts JSONB NOT NULL DEFAULT 'null';
+
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 
 -- 代理转发面配置：单行表（id 恒为 1）。api_key 为空表示转发面关闭。

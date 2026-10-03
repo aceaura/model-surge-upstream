@@ -14,10 +14,11 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/cache"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, enabled, created_at, updated_at`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, enabled, created_at, updated_at`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -42,7 +43,10 @@ type Input struct {
 	Defaults      json.RawMessage
 	Overrides     json.RawMessage
 	Compact       json.RawMessage
-	Enabled       bool
+	// Efforts 原始配置：空=跟随现状（Create 落 null 自动，Update 保留旧值），
+	// "null"=恢复自动，数组=显式声明。
+	Efforts json.RawMessage
+	Enabled bool
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
@@ -55,9 +59,10 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), m.Enabled, m.CreatedAt, m.UpdatedAt)
+			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
+			m.Enabled, m.CreatedAt, m.UpdatedAt)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -122,6 +127,9 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	if in.Protocol == "" {
 		in.Protocol = existing.Protocol
 	}
+	if len(in.Efforts) == 0 {
+		in.Efforts = existing.Efforts
+	}
 	m, err := r.validate(ctx, in)
 	if err != nil {
 		return Model{}, err
@@ -132,9 +140,10 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	persist := func() error {
 		tag, err := r.pool.Exec(ctx, `UPDATE models SET
 			account=$2, native_model=$3, protocol=$4, context_window=$5,
-			defaults=$6, overrides=$7, compact=$8, enabled=$9, updated_at=$10 WHERE id=$1`,
+			defaults=$6, overrides=$7, compact=$8, efforts=$9, enabled=$10, updated_at=$11 WHERE id=$1`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), m.Enabled, m.UpdatedAt)
+			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
+			m.Enabled, m.UpdatedAt)
 		if err != nil {
 			return apperr.Wrap(apperr.StorageError, "update model", err)
 		}
@@ -201,18 +210,44 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	efforts, err := normalizeEfforts(in.Efforts)
+	if err != nil {
+		return Model{}, err
+	}
+	effective, err := effort.Effective(in.Protocol, native, efforts)
+	if err != nil {
+		return Model{}, err
+	}
 
 	return Model{
-		ID:            id,
-		Account:       accountName,
-		NativeModel:   native,
-		Protocol:      in.Protocol,
-		ContextWindow: in.ContextWindow,
-		Defaults:      defaults,
-		Overrides:     overrides,
-		Compact:       compactCfg,
-		Enabled:       in.Enabled,
+		ID:               id,
+		Account:          accountName,
+		NativeModel:      native,
+		Protocol:         in.Protocol,
+		ContextWindow:    in.ContextWindow,
+		Defaults:         defaults,
+		Overrides:        overrides,
+		Compact:          compactCfg,
+		Efforts:          efforts,
+		EffortsEffective: effective,
+		Enabled:          in.Enabled,
 	}, nil
+}
+
+// normalizeEfforts 把空值补成 JSON null（自动推导）；数组形态的词表
+// 合法性在 effort.Effective 里统一校验。
+func normalizeEfforts(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return json.RawMessage(`null`), nil
+	}
+	s := strings.TrimSpace(string(raw))
+	if s == "null" {
+		return json.RawMessage(`null`), nil
+	}
+	if !strings.HasPrefix(s, "[") {
+		return nil, apperr.New(apperr.InvalidJSON, "efforts must be a json array of strings")
+	}
+	return json.RawMessage(s), nil
 }
 
 // normalizeCompact 校验 compact JSON：必须是对象；mode 只允许
@@ -280,14 +315,16 @@ func scan(s scanner) (Model, error) {
 		defaults  []byte
 		overrides []byte
 		compact   []byte
+		efforts   []byte
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &compact, &m.Enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&defaults, &overrides, &compact, &efforts, &m.Enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)
 	m.Overrides = json.RawMessage(overrides)
 	m.Compact = json.RawMessage(compact)
+	m.Efforts = json.RawMessage(efforts)
 	if len(m.Defaults) == 0 {
 		m.Defaults = json.RawMessage(`{}`)
 	}
@@ -297,6 +334,16 @@ func scan(s scanner) (Model, error) {
 	if len(m.Compact) == 0 {
 		m.Compact = json.RawMessage(`{}`)
 	}
+	if len(m.Efforts) == 0 {
+		m.Efforts = json.RawMessage(`null`)
+	}
+	// 库里 JSON 已落过校验,此处算错只可能是词表演进后不认识的旧档位,
+	// 退回空列表(不露面选择器)比读不出模型更安全。
+	effective, err := effort.Effective(m.Protocol, m.NativeModel, m.Efforts)
+	if err != nil {
+		effective = []string{}
+	}
+	m.EffortsEffective = effective
 	return m, nil
 }
 

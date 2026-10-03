@@ -281,4 +281,113 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });
+
+  testWidgets('推理档:新建默认自动,自定义勾选按词表序随提交上行',
+      (tester) async {
+    Map<String, dynamic>? sentBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        sentBody =
+            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      }),
+    );
+    await pumpForm(tester, client: client);
+
+    // 新建默认自动:分区收起,副标题标注自动推导。
+    expect(find.text('推理档'), findsOneWidget);
+    expect(find.text('自动（按协议与模型名推导）'), findsOneWidget);
+
+    // 展开并切到自定义:七个档位的 chip 全渲染(分区在首屏外,先滚入视野)。
+    await tester.tap(find.text('推理档'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(dropdownIn('model-effort-mode-field'));
+    await tester.pumpAndSettle();
+    await tester.tap(dropdownIn('model-effort-mode-field'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('model-effort-none')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-effort-max')), findsOneWidget);
+
+    // 勾选 高/低(乱序点选),提交应去重并按词表升序。
+    await tester.tap(find.byKey(const ValueKey('model-effort-high')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('model-effort-low')));
+    await tester.pump();
+
+    await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('model-id')), 'kimi-1/k2');
+    await tester.enterText(
+        find.byKey(const ValueKey('model-native')), 'kimi-k2-turbo');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(sentBody, isNotNull);
+    expect(sentBody!['efforts'], ['low', 'high']);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('推理档:编辑回显显式配置,切回自动提交 null', (tester) async {
+    Map<String, dynamic>? sentBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        sentBody =
+            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      }),
+    );
+    final editing = UpstreamModel.fromJson(const {
+      'id': 'kimi-1/k2',
+      'account': 'kimi-1',
+      'native_model': 'kimi-k2-turbo',
+      'protocol': 'anthropic',
+      'context_window': 0,
+      'defaults': <String, dynamic>{},
+      'overrides': <String, dynamic>{},
+      'efforts': ['low', 'high'],
+      'efforts_effective': ['low', 'high'],
+      'enabled': true,
+    });
+    await pumpForm(tester, editing: editing, client: client);
+
+    // 显式配置:分区默认展开,副标题列出档位,chips 选中态一致。
+    expect(find.text('低 / 高'), findsOneWidget);
+    expect(
+        tester
+            .widget<FilterChip>(find.byKey(const ValueKey('model-effort-low')))
+            .selected,
+        isTrue);
+    expect(
+        tester
+            .widget<FilterChip>(
+                find.byKey(const ValueKey('model-effort-medium')))
+            .selected,
+        isFalse);
+
+    // 切回自动并保存:efforts 键仍在但为 null(恢复服务端推导)。
+    await tester.ensureVisible(dropdownIn('model-effort-mode-field'));
+    await tester.pumpAndSettle();
+    await tester.tap(dropdownIn('model-effort-mode-field'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自动').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    expect(sentBody, isNotNull);
+    expect(sentBody!.containsKey('efforts'), isTrue);
+    expect(sentBody!['efforts'], isNull);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
 }

@@ -81,6 +81,12 @@ class _ModelFormState extends State<ModelForm> {
   // 启停由列表行开关控制,表单不再展示;编辑/拷贝时沿用原值提交,新建默认启用
   late final bool _enabled = _source?.enabled ?? true;
 
+  // 推理档支持列表:null=自动(按协议+模型名推导);数组=显式声明,
+  // 空数组即声明该模型不支持。拷贝创建沿用来源配置。
+  late List<String>? _efforts = _source?.efforts == null
+      ? null
+      : List<String>.from(_source!.efforts!);
+
   bool _defaultsValid = true;
   bool _overridesValid = true;
   bool _busy = false;
@@ -167,6 +173,7 @@ class _ModelFormState extends State<ModelForm> {
           defaults: defaults!,
           overrides: overrides!,
           compact: _buildCompact(),
+          efforts: _efforts,
           enabled: _enabled,
         );
       } else {
@@ -179,6 +186,7 @@ class _ModelFormState extends State<ModelForm> {
           defaults: defaults!,
           overrides: overrides!,
           compact: _buildCompact(),
+          efforts: _efforts,
           enabled: _enabled,
         );
       }
@@ -216,6 +224,8 @@ class _ModelFormState extends State<ModelForm> {
             _basicSection(),
             const SizedBox(height: 26),
             _contextSection(),
+            const SizedBox(height: 26),
+            _effortSection(),
             const SizedBox(height: 26),
             _paramsSection(),
           ],
@@ -422,6 +432,79 @@ class _ModelFormState extends State<ModelForm> {
                       ),
                     )
                   : const SizedBox.shrink(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── 推理档(自动推导/自定义支持列表)──
+
+  String get _effortSubtitle {
+    final efforts = _efforts;
+    if (efforts == null) return '自动（按协议与模型名推导）';
+    if (efforts.isEmpty) return '不支持';
+    return efforts.map((e) => effortLevelLabels[e] ?? e).join(' / ');
+  }
+
+  Widget _effortSection() {
+    final efforts = _efforts;
+    return CollapsibleSection(
+      icon: Icons.psychology_outlined,
+      title: '推理档',
+      subtitle: _effortSubtitle,
+      // 显式配置过时默认展开,自动模式收起靠副标题辨认。
+      initiallyExpanded: efforts != null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LabeledField(
+            key: const ValueKey('model-effort-mode-field'),
+            label: '支持档位',
+            hint: efforts == null
+                ? '按协议与模型名自动推导，词表演进自动跟随'
+                : '勾选该模型支持的档位；都不选即声明不支持推理档',
+            child: StyledDropdownFormField(
+              key: const ValueKey('model-effort-mode'),
+              value: efforts == null ? 'auto' : 'custom',
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              options: const ['auto', 'custom'],
+              labelOf: (m) => m == 'auto' ? '自动' : '自定义',
+              onChanged: (v) => setState(() {
+                // 切自定义时用当前有效列表预填,管理员在自动结果上增删。
+                _efforts = v == 'auto'
+                    ? null
+                    : List<String>.from(_source?.effortsEffective ?? const []);
+              }),
+            ),
+          ),
+          if (efforts != null) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final level in effortLevels)
+                  FilterChip(
+                    key: ValueKey('model-effort-$level'),
+                    label: Text(effortLevelLabels[level] ?? level),
+                    selected: efforts.contains(level),
+                    onSelected: (on) => setState(() {
+                      final next = List<String>.from(_efforts!);
+                      if (on) {
+                        next.add(level);
+                        // 保持词表升序,与服务端落库形态一致。
+                        next.sort((a, b) => effortLevels
+                            .indexOf(a)
+                            .compareTo(effortLevels.indexOf(b)));
+                      } else {
+                        next.remove(level);
+                      }
+                      _efforts = next;
+                    }),
+                  ),
+              ],
             ),
           ],
         ],

@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/ringlog"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -343,25 +344,17 @@ func (s *Service) ClearMessages(ctx context.Context, id string) error {
 	return s.repo.ClearMessages(ctx, id)
 }
 
-// efforts 是对话页可选的推理档白名单（空=默认不下发）。
-var efforts = map[string]bool{
-	"minimal": true,
-	"low":     true,
-	"medium":  true,
-	"high":    true,
-}
-
 // Send 追加用户消息 → 带整段历史上游补全 → 追加助手回复。
 // images 为用户消息内嵌的图片（可为空）；effort 为推理档（空=默认，
-// 仅 responses/chat_completions 协议生效）。上游失败时用户消息已落库
+// 须在模型的有效支持列表内，见 effort 包）。上游失败时用户消息已落库
 // （对话页可见自己发出去的话），错误原样返回。
-func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effort string, images []ImageAttachment) ([]Message, error) {
+func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effortLevel string, images []ImageAttachment) ([]Message, error) {
 	if err := validateImages(content, images); err != nil {
 		return nil, err
 	}
-	if effort != "" && !efforts[effort] {
+	if effortLevel != "" && !effort.Valid(effortLevel) {
 		return nil, apperr.New(apperr.InvalidRequest,
-			fmt.Sprintf("unknown reasoning effort %q", effort))
+			fmt.Sprintf("unknown reasoning effort %q", effortLevel))
 	}
 	if _, err := s.repo.GetSession(ctx, sessionID); err != nil {
 		return nil, err
@@ -369,6 +362,11 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effort 
 	target, err := s.resolver.Resolve(ctx, modelID)
 	if err != nil {
 		return nil, err
+	}
+	if effortLevel != "" && !effort.Contains(target.Efforts, effortLevel) {
+		return nil, apperr.New(apperr.InvalidRequest,
+			fmt.Sprintf("model %q does not support reasoning effort %q (supported: %s)",
+				modelID, effortLevel, strings.Join(target.Efforts, ", ")))
 	}
 	history, err := s.repo.ListMessages(ctx, sessionID)
 	if err != nil {
@@ -381,7 +379,7 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effort 
 	history = append(history, user)
 
 	start := time.Now()
-	reply, u, status, err := Complete(ctx, target, sessionID, effort, history)
+	reply, u, status, err := Complete(ctx, target, sessionID, effortLevel, history)
 	elapsed := time.Since(start)
 	if s.record != nil {
 		errMsg := ""

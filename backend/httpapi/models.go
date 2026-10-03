@@ -16,7 +16,9 @@ type modelRequest struct {
 	Defaults      json.RawMessage `json:"defaults"`
 	Overrides     json.RawMessage `json:"overrides"`
 	Compact       json.RawMessage `json:"compact"`
-	Enabled       *bool           `json:"enabled"`
+	// Efforts 推理档支持列表:null=自动推导,数组=显式声明;缺省不改现状。
+	Efforts json.RawMessage `json:"efforts"`
+	Enabled *bool           `json:"enabled"`
 }
 
 func (r modelRequest) input(id string) model.Input {
@@ -29,6 +31,7 @@ func (r modelRequest) input(id string) model.Input {
 		Defaults:      r.Defaults,
 		Overrides:     r.Overrides,
 		Compact:       r.Compact,
+		Efforts:       r.Efforts,
 		Enabled:       true,
 	}
 	if r.Enabled != nil {

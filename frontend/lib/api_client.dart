@@ -206,6 +206,7 @@ class ApiClient {
     required Map<String, dynamic> defaults,
     required Map<String, dynamic> overrides,
     Map<String, dynamic>? compact,
+    List<String>? efforts,
     bool enabled = true,
   }) async {
     final body = await _send('POST', '/admin/models', body: {
@@ -217,6 +218,8 @@ class ApiClient {
       'defaults': defaults,
       'overrides': overrides,
       'compact': ?compact,
+      // efforts 恒带键:null=自动推导,数组=显式声明(空数组=不支持)。
+      'efforts': efforts,
       'enabled': enabled,
     });
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);
@@ -231,6 +234,7 @@ class ApiClient {
     Map<String, dynamic>? defaults,
     Map<String, dynamic>? overrides,
     Map<String, dynamic>? compact,
+    List<String>? efforts,
     required bool enabled,
   }) async {
     final body = await _send('PUT', '/admin/models/$id', body: {
@@ -241,6 +245,8 @@ class ApiClient {
       'defaults': ?defaults,
       'overrides': ?overrides,
       'compact': ?compact,
+      // 表单总是知道目标形态(自动/显式),恒带键提交;null=恢复自动。
+      'efforts': efforts,
       'enabled': enabled,
     });
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);

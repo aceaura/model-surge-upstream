@@ -17,6 +17,29 @@ String tokensToK(int tokens) {
 /// k 单位输入串 → token 数(1k = 1000 tokens,四舍五入到个位)。
 int kToTokens(String kText) => (double.parse(kText.trim()) * 1000).round();
 
+/// 推理档词表,与后端 effort.Levels 同序同集;UI 选择器与表单编辑器共用。
+const effortLevels = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
+
+/// 推理档中文名;空串是「默认(不下发)」档,仅对话页选择器用。
+const effortLevelLabels = {
+  '': '默认',
+  'none': '无',
+  'minimal': '最小',
+  'low': '低',
+  'medium': '中',
+  'high': '高',
+  'xhigh': '超高',
+  'max': '最大',
+};
+
 class ProviderSpec {
   const ProviderSpec({
     required this.id,
@@ -199,6 +222,8 @@ class UpstreamModel {
     required this.overrides,
     required this.compact,
     required this.enabled,
+    this.efforts,
+    this.effortsEffective = const [],
   });
 
   final String id;
@@ -214,6 +239,13 @@ class UpstreamModel {
   final Map<String, dynamic> compact;
   final bool enabled;
 
+  /// 推理档支持列表的管理员覆盖:null=自动(按协议+模型名推导),
+  /// 数组=显式声明(空数组即不支持)。
+  final List<String>? efforts;
+
+  /// 服务端算好的有效支持列表(含自动推导),空列表=不支持。
+  final List<String> effortsEffective;
+
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
         id: json['id'] as String,
         account: json['account'] as String? ?? '',
@@ -224,6 +256,10 @@ class UpstreamModel {
         overrides: json['overrides'] as Map<String, dynamic>? ?? const {},
         compact: json['compact'] as Map<String, dynamic>? ?? const {},
         enabled: json['enabled'] as bool? ?? false,
+        efforts: (json['efforts'] as List<dynamic>?)?.cast<String>(),
+        effortsEffective:
+            (json['efforts_effective'] as List<dynamic>? ?? const [])
+                .cast<String>(),
       );
 }
 

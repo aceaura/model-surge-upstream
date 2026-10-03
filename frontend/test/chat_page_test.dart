@@ -660,9 +660,10 @@ void main() {
     expect(find.text('codex-1/gpt-6.1-sol'), findsOneWidget);
   });
 
-  testWidgets('推理档选择器仅对支持协议的模型可见,选择后随发送上行', (tester) async {
-    // anthropic 模型没有通用 effort 语义:选择器不露面;切到 codex(responses)
-    // 出现,选「高」后 POST body 带 effort=high。
+  testWidgets('推理档选择器按所选模型的支持列表渲染,选择后随发送上行', (tester) async {
+    // kimi-1/k2 有效支持列表为空:选择器不露面;切到 codex-1/gpt-6.1-sol
+    // (有效列表 minimal~high)出现且只渲染这些档,选「高」后 POST body 带
+    // effort=high。
     final sent = <Map<String, dynamic>>[];
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -693,6 +694,8 @@ void main() {
                 'context_window': 0,
                 'defaults': <String, dynamic>{},
                 'overrides': <String, dynamic>{},
+                'efforts': null,
+                'efforts_effective': ['minimal', 'low', 'medium', 'high'],
                 'enabled': true,
               },
             ],
@@ -744,19 +747,22 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // 会话回显 kimi-1/k2(anthropic):推理档选择器不出现。
+    // 会话回显 kimi-1/k2(支持列表为空):推理档选择器不出现。
     expect(find.text('默认'), findsNothing);
 
-    // 模型切到 codex-1/gpt-6.1-sol(responses):选择器出现。
+    // 模型切到 codex-1/gpt-6.1-sol:选择器出现,只渲染该模型的支持档。
     await tester.tap(find.text('kimi-1/k2'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('codex-1/gpt-6.1-sol'));
     await tester.pumpAndSettle();
     expect(find.text('默认'), findsOneWidget);
 
-    // 选「高」并发送。
     await tester.tap(find.text('默认'));
     await tester.pumpAndSettle();
+    expect(find.text('最小'), findsOneWidget);
+    expect(find.text('超高'), findsNothing, reason: '词表有但模型不支持的不渲染');
+
+    // 选「高」并发送。
     await tester.tap(find.text('高'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'hi');

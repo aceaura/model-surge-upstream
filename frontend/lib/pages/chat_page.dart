@@ -14,10 +14,6 @@ import '../ui/page_header.dart';
 import '../ui/styled_dropdown.dart';
 import '../ui/top_toast.dart';
 
-/// 推理档选项:''=默认(不下发,上游自己定),其余映射 reasoning.effort /
-/// reasoning_effort(见后端 chat.applyEffort)。
-const _effortLabels = {'': '默认', 'low': '低', 'medium': '中', 'high': '高'};
-
 /// 对话页：左侧会话列表（新对话/切换/删除），右侧消息流 + 模型选择 + 输入框。
 /// 补全走服务端：按所选模型的出站协议透传上游，整段历史落库可回看。
 /// 输入区支持图片附件：回形针选图或 Ctrl+V 粘贴截图，随消息内嵌上行。
@@ -61,15 +57,17 @@ class _ChatPageState extends State<ChatPage> {
   bool _sending = false;
   Object? _error;
 
-  /// 当前所选模型是否支持推理档:responses(codex)/chat_completions 两家
-  /// 有 effort 语义;anthropic/gemini 没有通用对应物,选择器不露面。
-  bool get _effortSupported {
+  /// 当前所选模型的推理档选项:''=默认(不下发,上游自己定) + 服务端算好
+  /// 的有效支持列表;空列表=该模型不支持,选择器不露面。
+  List<String> get _effortOptions {
     for (final m in _models) {
       if (m.id == _modelId) {
-        return m.protocol == 'responses' || m.protocol == 'chat_completions';
+        return m.effortsEffective.isEmpty
+            ? const []
+            : ['', ...m.effortsEffective];
       }
     }
-    return false;
+    return const [];
   }
 
   @override
@@ -227,6 +225,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 模型选择回显：会话最近用过的模型优先，否则第一个可用模型。
+  /// 模型落定后收敛推理档:原选择不在新模型支持列表里时回默认。
   void _syncModelChoice() {
     if (_models.isEmpty) {
       return;
@@ -238,6 +237,7 @@ class _ChatPageState extends State<ChatPage> {
           ? sess.modelId
           : ids.first;
     }
+    if (!_effortOptions.contains(_effort)) _effort = '';
   }
 
   Future<void> _select(String id) async {
@@ -862,18 +862,22 @@ class _ChatPageState extends State<ChatPage> {
                         borderSide: BorderSide.none,
                       ),
                     ),
-                    onChanged: (v) => setState(() => _modelId = v),
+                    onChanged: (v) => setState(() {
+                      _modelId = v;
+                      if (!_effortOptions.contains(_effort)) _effort = '';
+                    }),
                   ),
                 ),
-                // 推理档选择器:仅在所选模型支持时出现(其余协议服务端忽略)。
-                if (_effortSupported) ...[
+                // 推理档选择器:选项来自所选模型的有效支持列表,
+                // 空列表(不支持)时选择器不露面。
+                if (_effortOptions.isNotEmpty) ...[
                   const SizedBox(width: 8),
                   SizedBox(
                     width: 108,
                     child: StyledDropdown(
                       value: _effort,
-                      options: _effortLabels.keys.toList(),
-                      labelOf: (v) => _effortLabels[v] ?? v,
+                      options: _effortOptions,
+                      labelOf: (v) => effortLevelLabels[v] ?? v,
                       dropUp: true,
                       decoration: InputDecoration(
                         isDense: true,

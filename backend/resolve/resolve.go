@@ -36,6 +36,9 @@ type ResolvedTarget struct {
 	Defaults      json.RawMessage   `json:"defaults"`
 	Overrides     json.RawMessage   `json:"overrides"`
 	Compact       json.RawMessage   `json:"compact,omitempty"`
+	// Efforts 是模型的有效推理档列表（含自动推导），对话页发送侧
+	// 按它校验所选档位；空列表表示该模型不支持 effort。
+	Efforts []string `json:"efforts,omitempty"`
 }
 
 // 认证头名。
@@ -140,6 +143,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Defaults:      m.Defaults,
 		Overrides:     m.Overrides,
 		Compact:       m.Compact,
+		Efforts:       m.EffortsEffective,
 	}, nil
 }
 

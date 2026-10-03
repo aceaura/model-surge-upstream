@@ -238,6 +238,82 @@ func TestUpdateKeepsOmittedFields(t *testing.T) {
 	}
 }
 
+func TestEffortsRoundTrip(t *testing.T) {
+	repo, _ := fixtures(t)
+	ctx := context.Background()
+
+	// 未配置 efforts:落库存 null,有效列表走协议默认
+	// (chat_completions 协议的 gpt-5 自动得 low/medium/high)。
+	in := input()
+	in.ID = "kimi-1/gpt5"
+	in.NativeModel = "gpt-5"
+	in.Protocol = provider.ProtocolChatCompletions
+	created, err := repo.Create(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if string(created.Efforts) != `null` {
+		t.Errorf("auto efforts should persist as null, got %s", created.Efforts)
+	}
+	assertEfforts(t, created.EffortsEffective, []string{"low", "medium", "high"})
+
+	// 显式数组:按词表升序去重。
+	in.Efforts = json.RawMessage(`["high","low","high","xhigh"]`)
+	updated, err := repo.Update(ctx, in)
+	if err != nil {
+		t.Fatalf("update explicit: %v", err)
+	}
+	assertEfforts(t, updated.EffortsEffective, []string{"low", "high", "xhigh"})
+
+	// 更新不带 efforts:保留现状。
+	keep, err := repo.Update(ctx, Input{ID: in.ID, Enabled: true})
+	if err != nil {
+		t.Fatalf("update omitted: %v", err)
+	}
+	assertEfforts(t, keep.EffortsEffective, []string{"low", "high", "xhigh"})
+
+	// 显式空数组 = 管理员声明不支持。
+	in.Efforts = json.RawMessage(`[]`)
+	empty, err := repo.Update(ctx, in)
+	if err != nil {
+		t.Fatalf("update empty: %v", err)
+	}
+	assertEfforts(t, empty.EffortsEffective, []string{})
+
+	// null 恢复自动推导。
+	in.Efforts = json.RawMessage(`null`)
+	auto, err := repo.Update(ctx, in)
+	if err != nil {
+		t.Fatalf("update null: %v", err)
+	}
+	assertEfforts(t, auto.EffortsEffective, []string{"low", "medium", "high"})
+
+	// 读回(走缓存/库)同样带算好的有效列表。
+	got, err := repo.Get(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEfforts(t, got.EffortsEffective, []string{"low", "medium", "high"})
+
+	// 词表外档位被拒。
+	in.Efforts = json.RawMessage(`["ultra"]`)
+	if _, err := repo.Update(ctx, in); !apperr.Is(err, apperr.InvalidRequest) {
+		t.Errorf("unknown level err = %v, want invalid_request", err)
+	}
+}
+
+func assertEfforts(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("efforts = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("efforts = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestUpdateNotFound(t *testing.T) {
 	repo, _ := fixtures(t)
 	in := input()
