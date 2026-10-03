@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -652,5 +653,86 @@ void main() {
 
     expect(find.byKey(const ValueKey('oauth-reauth-banner')), findsOneWidget,
         reason: '服务端标记登录态终态失效时提示重新粘贴');
+  });
+
+  // ── codex CLI auth.json 一键填入 ──
+
+  /// 临时目录落一份 auth.json,返回路径并注册覆写清理。
+  String writeAuthJson(String content) {
+    final dir = Directory.systemTemp.createTempSync('msu-auth-test');
+    addTearDown(() {
+      debugCodexAuthPathOverride = null;
+      dir.deleteSync(recursive: true);
+    });
+    final file = File('${dir.path}${Platform.pathSeparator}auth.json')
+      ..writeAsStringSync(content);
+    debugCodexAuthPathOverride = file.path;
+    return file.path;
+  }
+
+  Future<void> tapAutofill(WidgetTester tester) async {
+    await tester.ensureVisible(find.byKey(const ValueKey('oauth-autofill-codex')));
+    await tester.tap(find.byKey(const ValueKey('oauth-autofill-codex')));
+    await tester.pump();
+  }
+
+  /// toast 2.4s 后自动滑出,快进补动画收尾,不给用例末留 pending timer。
+  Future<void> drainToast(WidgetTester tester) async {
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('autofill button fills both fields from codex auth.json',
+      (tester) async {
+    writeAuthJson(
+        '{"tokens":{"refresh_token":"rt-from-file","account_id":"acc-from-file"}}');
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+
+    await tapAutofill(tester);
+
+    expect(fieldText(tester, 'account-refresh-token'), 'rt-from-file');
+    expect(fieldText(tester, 'account-account-id'), 'acc-from-file');
+    expect(find.text('已填入 codex CLI 登录态'), findsOneWidget);
+    await drainToast(tester);
+  });
+
+  testWidgets('autofill reports missing auth.json and keeps fields blank',
+      (tester) async {
+    writeAuthJson( '{}');
+    final missing = debugCodexAuthPathOverride! + '.missing';
+    debugCodexAuthPathOverride = missing;
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+
+    await tapAutofill(tester);
+
+    expect(fieldText(tester, 'account-refresh-token'), isEmpty);
+    expect(fieldText(tester, 'account-account-id'), isEmpty);
+    expect(find.textContaining('未找到'), findsOneWidget);
+    expect(find.textContaining('codex 登录'), findsOneWidget);
+    await drainToast(tester);
+  });
+
+  testWidgets('autofill reports malformed auth.json', (tester) async {
+    writeAuthJson( '{"tokens":{"refresh_token":"rt-only"}}');
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+
+    await tapAutofill(tester);
+
+    expect(fieldText(tester, 'account-refresh-token'), isEmpty,
+        reason: '缺 account_id 视为格式错误,两个字段都不半填');
+    expect(find.textContaining('缺少 tokens.refresh_token'), findsOneWidget);
+    await drainToast(tester);
+  });
+
+  testWidgets('parseCodexAuthJson rejects non-map payloads', (tester) async {
+    expect(() => parseCodexAuthJson('"just a string"'),
+        throwsA(isA<FormatException>()));
+    expect(parseCodexAuthJson(
+        '{"tokens":{"refresh_token":"rt","account_id":"acc","access_token":"at"}}'),
+        ('rt', 'acc'),
+        reason: '多余字段忽略,只取登录续期所需两项');
   });
 }

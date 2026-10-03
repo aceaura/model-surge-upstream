@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
@@ -8,6 +11,31 @@ import '../ui/form_page.dart';
 import '../ui/header_editor.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/styled_dropdown.dart';
+import '../ui/top_toast.dart';
+
+/// codex CLI 登录态文件(~/.codex/auth.json)的默认路径。
+String defaultCodexAuthPath() {
+  final home =
+      Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'] ?? '';
+  return '$home${Platform.pathSeparator}.codex${Platform.pathSeparator}auth.json';
+}
+
+/// 从 auth.json 文本取出 (refresh_token, account_id);缺字段即格式错误。
+(String, String) parseCodexAuthJson(String text) {
+  final decoded = jsonDecode(text);
+  final tokens = decoded is Map ? decoded['tokens'] : null;
+  final rt = tokens is Map ? tokens['refresh_token'] : null;
+  final id = tokens is Map ? tokens['account_id'] : null;
+  if (rt is! String || rt.isEmpty || id is! String || id.isEmpty) {
+    throw const FormatException(
+        'auth.json 里缺少 tokens.refresh_token 或 tokens.account_id');
+  }
+  return (rt, id);
+}
+
+/// 测试覆写:指向临时 auth.json,避免碰真实用户目录。
+@visibleForTesting
+String? debugCodexAuthPathOverride;
 
 /// 账号创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
 /// 侧边栏保持可见;不用居中弹窗)。
@@ -517,7 +545,39 @@ class _AccountFormState extends State<AccountForm> {
               : null,
         ),
       ),
+      const SizedBox(height: 12),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          key: const ValueKey('oauth-autofill-codex'),
+          icon: const Icon(Icons.bolt_outlined, size: 18),
+          label: const Text('从 codex CLI 自动填入'),
+          onPressed: _fillFromCodexCli,
+        ),
+      ),
     ];
+  }
+
+  /// 读本机 codex CLI 的 auth.json,一键填入 refresh_token 与 account_id。
+  /// 本地几 KB 小文件,同步读避免异步缝隙里表单已销毁。
+  void _fillFromCodexCli() {
+    final path = debugCodexAuthPathOverride ?? defaultCodexAuthPath();
+    String message;
+    var ok = false;
+    try {
+      final (rt, id) = parseCodexAuthJson(File(path).readAsStringSync());
+      setState(() {
+        _refreshToken.text = rt;
+        _accountId.text = id;
+      });
+      ok = true;
+      message = '已填入 codex CLI 登录态';
+    } on FileSystemException {
+      message = '未找到 $path,请先在终端完成一次 codex 登录';
+    } on FormatException catch (e) {
+      message = e.message;
+    }
+    TopToast.show(context, message, error: !ok);
   }
 
   // ── 额度脚本区(仿 CC Switch 脚本弹窗,收进可折叠分栏)──
