@@ -332,49 +332,44 @@ class _AccountFormState extends State<AccountForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 编辑时账号名是资源键不可改,只读展示(不套禁用框)与厂商并排;
-          // 新建时厂商与账号名输入框并排(CC Switch 式双列);
-          // 计费模式/服务区域是级联的下两级,并排一行,从上至下依次解锁
+          // 账号名/厂商/计费模式/服务区域四个配置一行一个,账号名居首;
+          // 编辑态账号名是资源键不可改,只读展示(不套禁用框);
+          // 计费模式/服务区域是级联下两级,从上至下依次解锁
           if (_isEdit)
-            FormRow2(
-              LabeledField(label: '厂商', child: _vendorDropdown()),
-              LabeledField(
-                label: '账号名',
-                child: SizedBox(
-                  // 与左侧下拉触发器同高,两侧齐平
-                  height: 48,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(widget.editing!.name,
-                        key: const ValueKey('account-name-readonly'),
-                        style: const TextStyle(fontSize: 13)),
-                  ),
+            LabeledField(
+              label: '账号名',
+              child: SizedBox(
+                // 与下拉触发器同高,行间节奏一致
+                height: 48,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(widget.editing!.name,
+                      key: const ValueKey('account-name-readonly'),
+                      style: const TextStyle(fontSize: 13)),
                 ),
               ),
             )
           else
-            FormRow2(
-              LabeledField(label: '厂商', child: _vendorDropdown()),
-              LabeledField(
-                label: '账号名',
-                child: TextFormField(
-                  key: const ValueKey('account-name'),
-                  controller: _name,
-                  decoration: const InputDecoration(
-                    hintText: 'kimi-1',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? '账号名不能为空'
-                      : null,
+            LabeledField(
+              label: '账号名',
+              child: TextFormField(
+                key: const ValueKey('account-name'),
+                controller: _name,
+                decoration: const InputDecoration(
+                  hintText: 'kimi-1',
+                  border: OutlineInputBorder(),
                 ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? '账号名不能为空'
+                    : null,
               ),
             ),
           const SizedBox(height: 20),
-          FormRow2(
-            LabeledField(label: '计费模式', child: _billingDropdown()),
-            LabeledField(label: '服务区域', child: _regionDropdown()),
-          ),
+          LabeledField(label: '厂商', child: _vendorDropdown()),
+          const SizedBox(height: 20),
+          LabeledField(label: '计费模式', child: _billingDropdown()),
+          const SizedBox(height: 20),
+          LabeledField(label: '服务区域', child: _regionDropdown()),
           const SizedBox(height: 20),
           LabeledField(
             label: '请求地址',
