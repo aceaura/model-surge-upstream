@@ -58,6 +58,42 @@ func codexTarget(baseURL, token string) resolve.ResolvedTarget {
 	}
 }
 
+func TestCodexForwardRecordsSSEUsage(t *testing.T) {
+	for _, contentType := range []string{"text/plain; charset=utf-8", "text/event-stream"} {
+		t.Run(contentType, func(t *testing.T) {
+			body := "event: response.completed\ndata: " + `{"type":"response.completed","response":{"id":"resp-usage","model":"gpt-5-codex","usage":{"input_tokens":120,"output_tokens":37,"input_tokens_details":{"cached_tokens":80}}}}` + "\n\n"
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set("Content-Type", contentType)
+				_, _ = io.WriteString(w, body)
+			}))
+			defer up.Close()
+			resolver := fakeResolver{targets: map[string]resolve.ResolvedTarget{
+				"my-codex": codexTarget(up.URL, "at-live"),
+			}}
+			sink := &recordSink{}
+			h := NewHandler(testKey, resolver, sink.add)
+			rec := doRequest(t, h, http.MethodPost, "/v1/responses",
+				map[string]string{"Authorization": "Bearer " + testKey},
+				`{"model":"my-codex","input":"hi","stream":false}`)
+			if rec.Code != http.StatusOK || rec.Body.String() != body || rec.Header().Get("Content-Type") != contentType {
+				t.Fatalf("response not passed through: status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+			}
+			records := sink.all()
+			if len(records) != 1 {
+				t.Fatalf("records = %d, want 1", len(records))
+			}
+			u := records[0].Usage
+			if u.InputTokens != 120 || u.OutputTokens != 37 || u.CacheReadTokens != 80 || u.CacheWriteTokens != 0 {
+				t.Fatalf("usage = %+v", u)
+			}
+			if records[0].StatusCode != http.StatusOK || !records[0].IsStreaming {
+				t.Fatalf("record = %+v", records[0])
+			}
+		})
+	}
+}
+
 // 订阅端点端到端:体整形、路径映射、session 头隔离、身份头齐备。
 func TestCodexForwardShapesBodyAndHeaders(t *testing.T) {
 	cap := &captured{}

@@ -409,7 +409,12 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	}
 	defer resp.Body.Close()
 
-	sniffer := usage.NewSniffer(target.Protocol, resp.Header.Get("Content-Type"))
+	contentType := resp.Header.Get("Content-Type")
+	// Codex 强制 SSE，但上游可能标为 text/plain。
+	if target.ProviderID == codex.ProviderID {
+		contentType = "text/event-stream"
+	}
+	sniffer := usage.NewSniffer(target.Protocol, contentType)
 	out := &usageWriter{ResponseWriter: w, sniffer: sniffer, start: start}
 
 	copyHeaders(w.Header(), resp.Header, stripResponseHeaders)
