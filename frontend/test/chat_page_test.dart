@@ -11,6 +11,7 @@ import 'package:msu_admin/attachments/image_source.dart';
 import 'package:msu_admin/pages/chat_page.dart';
 import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/styled_dropdown.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 1×1 透明 PNG：气泡/缩略图渲染断言用，解码必须能真过。
 const kTinyPng =
@@ -208,6 +209,9 @@ Finder rowOf(String title) => find
     .first;
 
 void main() {
+  // 对话页会读每模型档位记忆(shared_preferences),测试环境给空库。
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('selected row exposes rename: dialog prefills and PATCHes title',
       (tester) async {
     final stub = await _pumpChat(tester);
@@ -660,11 +664,12 @@ void main() {
     expect(find.text('codex-1/gpt-6.1-sol'), findsOneWidget);
   });
 
-  testWidgets('推理档选择器按所选模型的支持列表渲染,选择后随发送上行', (tester) async {
+  testWidgets('推理档选择器:无「默认」,首次取最低档,回指上次所选,选择随发送上行', (tester) async {
     // kimi-1/k2 有效支持列表为空:选择器不露面;切到 codex-1/gpt-6.1-sol
-    // (有效列表 minimal~high)出现且只渲染这些档。菜单显示上行值原文
-    // (英文档位名,不显示条目 name 的中文转译),选 high 后 POST body 带
-    // effort=high。
+    // (有效列表 minimal~high)出现并自动选中最低档 minimal(无「默认」项)。
+    // 菜单显示上行值原文(英文档位名,不显示条目 name 的中文转译),选
+    // high 后 POST body 带 effort=high;且该模型记住 high——切走再切回、
+    // 重建页面(模拟重启,shared_preferences mock 库跨实例存活)都回指 high。
     final sent = <Map<String, dynamic>>[];
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -754,18 +759,20 @@ void main() {
     await tester.pumpAndSettle();
 
     // 会话回显 kimi-1/k2(支持列表为空):推理档选择器不出现。
-    expect(find.text('默认'), findsNothing);
+    expect(find.text('minimal'), findsNothing);
 
-    // 模型切到 codex-1/gpt-6.1-sol:选择器出现,只渲染该模型的支持档。
+    // 模型切到 codex-1/gpt-6.1-sol:选择器出现,首次无记忆自动选中
+    // 最低档 minimal,不再有「默认」项。
     await tester.tap(find.text('kimi-1/k2'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('codex-1/gpt-6.1-sol'));
     await tester.pumpAndSettle();
-    expect(find.text('默认'), findsOneWidget);
-
-    await tester.tap(find.text('默认'));
-    await tester.pumpAndSettle();
     expect(find.text('minimal'), findsOneWidget);
+    expect(find.text('默认'), findsNothing);
+
+    await tester.tap(find.text('minimal'));
+    await tester.pumpAndSettle();
+    expect(find.text('low'), findsOneWidget);
     expect(find.text('最小'), findsNothing, reason: '显示上行值原文,不做中文转译');
     expect(find.text('高'), findsNothing, reason: '条目 name 不露面');
     expect(find.text('xhigh'), findsNothing, reason: '模型不支持的档不渲染');
@@ -779,5 +786,35 @@ void main() {
 
     expect(sent.single['model_id'], 'codex-1/gpt-6.1-sol');
     expect(sent.single['effort'], 'high');
+
+    // 回指上次所选:切到无档位的 kimi-1/k2 再切回,选择器亮 high。
+    await tester.tap(find.text('codex-1/gpt-6.1-sol'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('kimi-1/k2'));
+    await tester.pumpAndSettle();
+    expect(find.text('high'), findsNothing);
+    await tester.tap(find.text('kimi-1/k2'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('codex-1/gpt-6.1-sol'));
+    await tester.pumpAndSettle();
+    expect(find.text('high'), findsOneWidget, reason: '切回该模型回指上次所选档位');
+
+    // 重启页面(同一份 prefs mock 库):切到该模型仍回指 high。
+    // 先泵一帧空树拆掉旧 State——同位置同类型直接换 pumpWidget 会复用
+    // 旧 State,测不到持久化。
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: ChatPage(client: client, imageSource: _FakeImageSource()),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('kimi-1/k2'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('codex-1/gpt-6.1-sol'));
+    await tester.pumpAndSettle();
+    expect(find.text('high'), findsOneWidget, reason: '档位记忆跨重启存活');
   });
 }

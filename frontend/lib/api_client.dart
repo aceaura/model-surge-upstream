@@ -392,7 +392,7 @@ class ApiClient {
 
   /// 发送一轮对话：用户消息落库 → 服务端带上游补全 → 返回整段消息。
   /// images 为内嵌图片附件（base64，纯图消息 content 可为空）。
-  /// effort 为推理档（空=默认，仅 responses/chat_completions 协议生效）。
+  /// effort 为推理档（空=不下发，所选模型不支持档位时）。
   /// 超时放宽到 200s：长回复模型的整轮补全远超默认 15s。
   Future<List<ChatMessage>> sendChatMessage(
     String id, {

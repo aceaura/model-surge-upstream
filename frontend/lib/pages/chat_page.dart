@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_client.dart';
 import '../attachments/image_source.dart';
@@ -51,28 +52,64 @@ class _ChatPageState extends State<ChatPage> {
   List<PendingImage> _pending = [];
   String? _sessionId;
   String? _modelId;
-  // 推理档选择（''=默认不下发）;仅所选模型协议支持时选择器可见。
+  // 推理档选择;仅所选模型支持时选择器可见,''=该模型不支持(不下发)。
   String _effort = '';
+
+  /// 每模型上次所选档位(本机持久化):选定即落盘,再次选中该模型直接
+  /// 回指;无记忆时取支持列表首项(最低档)。
+  Map<String, String> _effortByModel = {};
   bool _loadingSessions = true;
   bool _sending = false;
   Object? _error;
 
-  /// 当前所选模型的推理档选项:''=默认(不下发,上游自己定) + 服务端算好
-  /// 的有效支持列表(上行值);空列表=该模型不支持,选择器不露面。
+  /// 当前所选模型的推理档选项:服务端算好的有效支持列表(上行值,
+  /// 首项=最低档);空列表=该模型不支持,选择器不露面。
   List<String> get _effortOptions {
     for (final m in _models) {
       if (m.id == _modelId) {
-        return m.effortsEffective.isEmpty
-            ? const []
-            : ['', ...m.effortsEffective.map((e) => e.value)];
+        return m.effortsEffective.map((e) => e.value).toList();
       }
     }
     return const [];
   }
 
-  /// 档位值 → 显示名:''是「默认(不下发)」,其余直接显示上行值原文
-  /// (英文档位名),不做中文转译避免歧义。
-  String _effortLabel(String value) => value == '' ? '默认' : value;
+  static const _effortStoreKey = 'msu.chat.effort_by_model';
+
+  /// 读取每模型档位记忆;偏好损坏按无记忆处理(回落最低档),不挡对话。
+  Future<void> _loadEffortStore() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_effortStoreKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        _effortByModel = {
+          for (final e in decoded.entries)
+            if (e.value is String) e.key.toString(): e.value as String,
+        };
+      }
+    } catch (_) {}
+  }
+
+  /// 档位落定:回指该模型上次所选,无记忆或记忆已不在支持列表时
+  /// 取首项(最低档);不支持档位的模型归 ''(不下发,选择器不露面)。
+  void _syncEffort() {
+    final options = _effortOptions;
+    if (options.isEmpty) {
+      _effort = '';
+      return;
+    }
+    final saved = _effortByModel[_modelId];
+    _effort =
+        (saved != null && options.contains(saved)) ? saved : options.first;
+  }
+
+  /// 记住所选档位:内存即改,落盘异步(下次启动仍在)。
+  void _rememberEffort(String modelId, String effort) {
+    _effortByModel[modelId] = effort;
+    SharedPreferences.getInstance().then((prefs) =>
+        prefs.setString(_effortStoreKey, jsonEncode(_effortByModel)));
+  }
 
   @override
   void initState() {
@@ -207,6 +244,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final sessions = await widget.client.listChatSessions();
       final models = await widget.client.listModels();
+      await _loadEffortStore();
       if (!mounted) return;
       setState(() {
         _sessions = sessions;
@@ -229,7 +267,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 模型选择回显：会话最近用过的模型优先，否则第一个可用模型。
-  /// 模型落定后收敛推理档:原选择不在新模型支持列表里时回默认。
+  /// 模型落定后收敛推理档:回指该模型上次所选,无记忆取最低档。
   void _syncModelChoice() {
     if (_models.isEmpty) {
       return;
@@ -241,7 +279,7 @@ class _ChatPageState extends State<ChatPage> {
           ? sess.modelId
           : ids.first;
     }
-    if (!_effortOptions.contains(_effort)) _effort = '';
+    _syncEffort();
   }
 
   Future<void> _select(String id) async {
@@ -868,12 +906,13 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                     onChanged: (v) => setState(() {
                       _modelId = v;
-                      if (!_effortOptions.contains(_effort)) _effort = '';
+                      _syncEffort();
                     }),
                   ),
                 ),
-                // 推理档选择器:选项来自所选模型的有效支持列表,
-                // 空列表(不支持)时选择器不露面。
+                // 推理档选择器:选项来自所选模型的有效支持列表,直接
+                // 显示上行值原文(英文档位名);空列表(不支持)时不露面。
+                // 选定即记住,下次选中该模型直接回指。
                 if (_effortOptions.isNotEmpty) ...[
                   const SizedBox(width: 8),
                   SizedBox(
@@ -881,7 +920,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: StyledDropdown(
                       value: _effort,
                       options: _effortOptions,
-                      labelOf: _effortLabel,
+                      labelOf: (v) => v,
                       dropUp: true,
                       decoration: InputDecoration(
                         isDense: true,
@@ -894,7 +933,12 @@ class _ChatPageState extends State<ChatPage> {
                           borderSide: BorderSide.none,
                         ),
                       ),
-                      onChanged: (v) => setState(() => _effort = v ?? ''),
+                      onChanged: (v) => setState(() {
+                        if (v == null) return;
+                        _effort = v;
+                        final id = _modelId;
+                        if (id != null) _rememberEffort(id, v);
+                      }),
                     ),
                   ),
                 ],
