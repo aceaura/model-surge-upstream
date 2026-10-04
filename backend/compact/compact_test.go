@@ -291,8 +291,11 @@ func TestRunAutoCompactsCodexSubscription(t *testing.T) {
 			t.Error("codex 摘要请求 instructions 应非空")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: response.completed\n" +
-			"data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"[SUMMARY]\"}]}],\"usage\":{\"input_tokens\":700,\"output_tokens\":20}}}\n\n"))
+		// codex 实测形态:completed 的 output 为空数组,正文走 delta 事件。
+		_, _ = w.Write([]byte("event: response.output_text.delta\n" +
+			"data: {\"type\":\"response.output_text.delta\",\"delta\":\"[SUMMARY]\"}\n\n" +
+			"event: response.completed\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"output\":[],\"usage\":{\"input_tokens\":700,\"output_tokens\":20}}}\n\n"))
 	}))
 	defer srv.Close()
 	r := NewRunner(DefaultConfig())

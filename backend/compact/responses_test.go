@@ -196,7 +196,7 @@ func TestResponsesExtractSummaryOutputTextFallback(t *testing.T) {
 }
 
 func TestResponsesExtractSummarySSE(t *testing.T) {
-	// codex 订阅端点强制 stream=true：响应是 SSE，取 response.completed。
+	// 标准 Responses 上游：completed 事件带完整 output。
 	raw := []byte("event: response.output_text.delta\n" +
 		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"摘\"}\n\n" +
 		"event: response.completed\n" +
@@ -210,6 +210,44 @@ func TestResponsesExtractSummarySSE(t *testing.T) {
 	}
 	if u.InputTokens != 800 || u.OutputTokens != 120 {
 		t.Fatalf("usage = %+v", u)
+	}
+}
+
+func TestResponsesExtractSummarySSECodexShape(t *testing.T) {
+	// codex 订阅端点实测形态：completed 的 output 恒为空数组，
+	// 正文只经 output_text.delta 流出。
+	raw := []byte("event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{}}\n\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"摘要\"}\n\n" +
+		"event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"正文\"}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"output\":[],\"usage\":{\"input_tokens\":3413,\"output_tokens\":419}}}\n\n")
+	text, u, err := (responsesImpl{}).ExtractSummary(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "摘要正文" {
+		t.Fatalf("text = %q", text)
+	}
+	if u.InputTokens != 3413 || u.OutputTokens != 419 {
+		t.Fatalf("usage = %+v", u)
+	}
+}
+
+func TestResponsesExtractSummarySSEOutputTextDone(t *testing.T) {
+	// delta 缺失时回退 output_text.done 的完整 text。
+	raw := []byte("event: response.output_text.done\n" +
+		"data: {\"type\":\"response.output_text.done\",\"text\":\"done 形态\"}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n")
+	text, _, err := (responsesImpl{}).ExtractSummary(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "done 形态" {
+		t.Fatalf("text = %q", text)
 	}
 }
 

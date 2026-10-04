@@ -98,22 +98,105 @@ func responsesUserMessage(text string) map[string]any {
 }
 
 // ExtractSummary 从摘要响应抽出纯文本与用量。优先按非流式 JSON 解析；
-// 失败后按 SSE 解析——codex 订阅端点强制 stream=true，响应体是事件流，
-// 取 response.completed 事件里的完整 response 对象按 JSON 路径复用。
+// 失败后按 SSE 解析——codex 订阅端点强制 stream=true，且其
+// response.completed 事件 output 恒为空数组(实测)，正文只经
+// output_text.delta/done 事件流出；标准 Responses 上游则在 completed
+// 里带完整 output，两种形态都兼容。
 func (responsesImpl) ExtractSummary(raw []byte) (string, usage.Usage, error) {
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err == nil {
 		return extractResponsesSummary(obj, raw)
 	}
-	completed, err := responsesCompletedEvent(raw)
-	if err != nil {
-		return "", usage.Usage{}, err
+	return extractResponsesSSE(raw)
+}
+
+// extractResponsesSSE 从 SSE 事件流抽摘要文本与用量：文本取
+// output_text.delta 累加(回退 output_text.done / output_item.done)，
+// 用量取 response.completed 的 response 对象。
+func extractResponsesSSE(raw []byte) (string, usage.Usage, error) {
+	var deltas strings.Builder
+	var doneText, itemText string
+	var completed map[string]any
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		data, ok := bytes.CutPrefix(bytes.TrimSpace(line), []byte("data:"))
+		if !ok {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
+			continue
+		}
+		switch event["type"] {
+		case "response.output_text.delta":
+			if d, ok := event["delta"].(string); ok {
+				deltas.WriteString(d)
+			}
+		case "response.output_text.done":
+			if t, ok := event["text"].(string); ok {
+				doneText = t
+			}
+		case "response.output_item.done":
+			if item, ok := event["item"].(map[string]any); ok {
+				if t, err := responsesMessageText(item); err == nil {
+					itemText = t
+				}
+			}
+		case "response.completed":
+			if resp, ok := event["response"].(map[string]any); ok {
+				completed = resp
+			}
+		}
+	}
+	if completed == nil {
+		return "", usage.Usage{}, errors.New("summary stream has no response.completed event")
+	}
+	// completed 的 output 是权威全文(标准上游);codex output 恒空,
+	// 依次回退 output_text.done 全文、delta 累加、output_item.done。
+	var text string
+	if t, err := responsesOutputText(completed); err == nil {
+		text = t
+	}
+	if text == "" {
+		text = strings.TrimSpace(doneText)
+	}
+	if text == "" {
+		text = strings.TrimSpace(deltas.String())
+	}
+	if text == "" {
+		text = itemText
+	}
+	if text == "" {
+		return "", usage.Usage{}, errors.New("summary response has no output text")
 	}
 	encoded, err := json.Marshal(completed)
 	if err != nil {
 		return "", usage.Usage{}, err
 	}
-	return extractResponsesSummary(completed, encoded)
+	u, _ := usage.FromResponse(provider.ProtocolResponses, encoded)
+	return text, u, nil
+}
+
+// responsesMessageText 拼接单个 message item 的 output_text 段。
+func responsesMessageText(m map[string]any) (string, error) {
+	if m["type"] != "message" {
+		return "", errors.New("not a message item")
+	}
+	var sb strings.Builder
+	parts, _ := m["content"].([]any)
+	for _, p := range parts {
+		pm, ok := p.(map[string]any)
+		if !ok || pm["type"] != "output_text" {
+			continue
+		}
+		if t, ok := pm["text"].(string); ok {
+			sb.WriteString(t)
+		}
+	}
+	text := strings.TrimSpace(sb.String())
+	if text == "" {
+		return "", errors.New("message item has no output text")
+	}
+	return text, nil
 }
 
 // extractResponsesSummary 从 response 对象抽文本与用量。
@@ -133,18 +216,11 @@ func responsesOutputText(obj map[string]any) (string, error) {
 	if output, ok := obj["output"].([]any); ok {
 		for _, item := range output {
 			m, ok := item.(map[string]any)
-			if !ok || m["type"] != "message" {
+			if !ok {
 				continue
 			}
-			parts, _ := m["content"].([]any)
-			for _, p := range parts {
-				pm, ok := p.(map[string]any)
-				if !ok || pm["type"] != "output_text" {
-					continue
-				}
-				if t, ok := pm["text"].(string); ok {
-					sb.WriteString(t)
-				}
+			if t, err := responsesMessageText(m); err == nil {
+				sb.WriteString(t)
 			}
 		}
 	}
@@ -158,29 +234,6 @@ func responsesOutputText(obj map[string]any) (string, error) {
 		return "", errors.New("summary response has no output text")
 	}
 	return text, nil
-}
-
-// responsesCompletedEvent 在 SSE 事件流里找 response.completed 事件，
-// 返回其 response 对象。
-func responsesCompletedEvent(raw []byte) (map[string]any, error) {
-	for _, line := range bytes.Split(raw, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		data, ok := bytes.CutPrefix(line, []byte("data:"))
-		if !ok {
-			continue
-		}
-		var event map[string]any
-		if err := json.Unmarshal(bytes.TrimSpace(data), &event); err != nil {
-			continue
-		}
-		if event["type"] != "response.completed" {
-			continue
-		}
-		if resp, ok := event["response"].(map[string]any); ok {
-			return resp, nil
-		}
-	}
-	return nil, errors.New("summary stream has no response.completed event")
 }
 
 // Splice 把摘要与 tail 拼回请求体：摘要作为一条 user 消息插在 tail 之前。

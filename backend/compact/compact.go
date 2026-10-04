@@ -215,7 +215,8 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 	}
 	summary, u, err := impl.ExtractSummary(raw)
 	if err != nil {
-		r.logf("compact: model=%s extract summary failed: %v, forwarding as-is", target.ModelID, err)
+		r.logf("compact: model=%s extract summary failed: %v, raw_tail=%s, forwarding as-is",
+			target.ModelID, err, tailSnippet(raw, 8000))
 		return body, estimated, false
 	}
 	if record != nil {
@@ -256,6 +257,16 @@ func snippet(raw []byte) string {
 	s := strings.TrimSpace(string(raw))
 	if r := []rune(s); len(r) > 200 {
 		s = string(r[:200]) + "…"
+	}
+	return s
+}
+
+// tailSnippet 取响应尾部最多 n 个字符：SSE 流的有效信息（最终事件）
+// 在末尾，头部截断看不到。
+func tailSnippet(raw []byte, n int) string {
+	s := strings.TrimSpace(string(raw))
+	if r := []rune(s); len(r) > n {
+		s = "…" + string(r[len(r)-n:])
 	}
 	return s
 }
