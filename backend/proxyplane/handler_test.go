@@ -78,6 +78,20 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			ModelID: "my-gpt", Account: "openai-1", ProviderID: "openai",
 			Protocol: "chat_completions", BaseURL: upstreamURL, NativeModel: "gpt-5",
 			Headers: map[string]string{"Authorization": "Bearer real-openai-key"},
+			Efforts: []effort.Entry{
+				{Name: "0", Value: "none"},
+				{Name: "1", Value: "low"},
+				{Name: "2", Value: "high"},
+			},
+		},
+		"my-resp": {
+			ModelID: "my-resp", Account: "openai-1", ProviderID: "openai",
+			Protocol: "responses", BaseURL: upstreamURL, NativeModel: "gpt-6",
+			Headers: map[string]string{"Authorization": "Bearer real-openai-key"},
+			Efforts: []effort.Entry{
+				{Name: "0", Value: "none"},
+				{Name: "1", Value: "low"},
+			},
 		},
 		"my-gemini": {
 			ModelID: "my-gemini", Account: "g-1", ProviderID: "gemini",
@@ -202,6 +216,80 @@ func TestOpenAIChatCompletionsForward(t *testing.T) {
 	}
 	if headers.Get("Authorization") != "Bearer real-openai-key" {
 		t.Fatalf("Authorization = %q", headers.Get("Authorization"))
+	}
+}
+
+// TestReasoningLevelMappedIntoThinkingParams 锁定 reasoning_level 数字档:
+// 命中声明即消费(不进上游)并赋思考参数,字符串与整数字面量同效;0 档
+// 映射 none=关闭思考;不在声明里的值原样透传不动体。
+func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
+	h, cap, cleanup := newTestHandler(t, "")
+	defer cleanup()
+
+	upstreamBody := func() map[string]any {
+		body, _, _ := cap.snapshot()
+		var got map[string]any
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("upstream body not json: %v", err)
+		}
+		return got
+	}
+
+	// 字符串档号命中:2→high,reasoning_effort 赋值,reasoning_level 不进上游。
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"my-gpt","messages":[],"reasoning_level":"2"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got := upstreamBody()
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning_effort = %v, want high", got["reasoning_effort"])
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+
+	// 整数字面量同效:0→none 即关闭思考。
+	rec = doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"my-gpt","messages":[],"reasoning_level":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := upstreamBody(); got["reasoning_effort"] != "none" {
+		t.Fatalf("0 档 reasoning_effort = %v, want none", got["reasoning_effort"])
+	}
+
+	// responses 协议:1→low 进 reasoning.effort。
+	rec = doRequest(t, h, http.MethodPost, "/v1/responses",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"my-resp","input":[],"reasoning_level":"1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got = upstreamBody()
+	reasoning, _ := got["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" {
+		t.Fatalf("responses reasoning = %v, want effort=low", got)
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+
+	// 未声明的档号:原样透传,不赋任何思考参数。
+	rec = doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"my-gpt","messages":[],"reasoning_level":"9"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got = upstreamBody()
+	if got["reasoning_level"] != "9" {
+		t.Fatalf("未命中档位应透传 reasoning_level, got %v", got)
+	}
+	if _, assigned := got["reasoning_effort"]; assigned {
+		t.Fatalf("未命中档位不应赋 reasoning_effort: %v", got)
 	}
 }
 

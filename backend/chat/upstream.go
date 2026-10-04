@@ -14,6 +14,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -152,21 +153,11 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 	return suffix, body, nil
 }
 
-// applyEffort 把对话页选定的推理档写进请求体：responses 进 reasoning.effort
-// （不覆盖 overrides 里已有的其他 reasoning 键），chat_completions 用
-// 顶层 reasoning_effort；anthropic/gemini 没有通用的 effort 语义，忽略。
-func applyEffort(protocol string, body map[string]any, effort string) {
-	switch protocol {
-	case provider.ProtocolResponses:
-		reasoning, _ := body["reasoning"].(map[string]any)
-		if reasoning == nil {
-			reasoning = map[string]any{}
-			body["reasoning"] = reasoning
-		}
-		reasoning["effort"] = effort
-	case provider.ProtocolChatCompletions:
-		body["reasoning_effort"] = effort
-	}
+// applyEffort 把对话页选定的推理档写进请求体,与转发面 reasoning_level
+// 数字档共用同一份映射逻辑(effort.Apply):responses 进 reasoning.effort,
+// chat_completions 用顶层 reasoning_effort;anthropic/gemini 忽略。
+func applyEffort(protocol string, body map[string]any, value string) {
+	effort.Apply(protocol, body, value)
 }
 
 // messageList 生成 [{role, content}] 形态；content 由 perMessage 决定。

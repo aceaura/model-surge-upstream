@@ -9,13 +9,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/compact"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -225,6 +228,10 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 	}
 
 	obj["model"] = target.NativeModel
+	// reasoning_level 是网关自有的顶层数字档:命中模型声明的档位即消费
+	// (不进上游)并给思考开关/档位参数赋值,先于 defaults/overrides 合并,
+	// 之后 overrides 仍可压盖(强制值优先级最高)。
+	applyReasoningLevel(target.Protocol, target.Efforts, obj)
 	merged := mergeParams(rawObject(target.Defaults), obj)
 	merged = mergeParams(merged, rawObject(target.Overrides))
 	// OpenAI 流式默认不回 usage，统计会全盲。仅当客户端要流式时注入
@@ -306,6 +313,7 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 	} else {
 		obj = map[string]any{}
 	}
+	applyReasoningLevel(target.Protocol, target.Efforts, obj)
 	merged := mergeParams(rawObject(target.Defaults), obj)
 	merged = mergeParams(merged, rawObject(target.Overrides))
 
@@ -531,6 +539,38 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 	}
+}
+
+// applyReasoningLevel 消费请求顶层的 reasoning_level 数字档:命中模型
+// 声明的档位(名=档号)即从体里删除(网关自有字段不进上游),并按映射出
+// 的档位值给思考开关/档位参数赋值(effort.Apply:0 档映射 none=关闭
+// 思考);未提供的、形态不对的、值不在声明列表里的都原样透传。
+func applyReasoningLevel(protocol string, efforts []effort.Entry, body map[string]any) {
+	level, ok := reasoningLevel(body["reasoning_level"])
+	if !ok {
+		return
+	}
+	mapped, hit := effort.LevelOf(efforts, level)
+	if !hit {
+		return
+	}
+	delete(body, "reasoning_level")
+	effort.Apply(protocol, body, mapped)
+}
+
+// reasoningLevel 归一 reasoning_level 的取值:字符串("2")与整数
+// 字面量(2)都认,空串/负数/小数/其他类型视为未提供。
+func reasoningLevel(v any) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		return s, s != ""
+	case float64:
+		if t >= 0 && t == math.Trunc(t) {
+			return strconv.FormatInt(int64(t), 10), true
+		}
+	}
+	return "", false
 }
 
 // rawObject 把 defaults/overrides 的 RawMessage 读成对象；空或 null 视为 {}。

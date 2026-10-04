@@ -108,3 +108,46 @@ func TestContainsValue(t *testing.T) {
 		t.Errorf("Values = %v, want [low ultra]", got)
 	}
 }
+
+// TestLevelOf 锁定数字档查映射:名即档号,命中回上行值,未命中回 false。
+func TestLevelOf(t *testing.T) {
+	list := []Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "high"}}
+	if v, ok := LevelOf(list, "2"); !ok || v != "high" {
+		t.Errorf("LevelOf(2) = %q, %v, want high, true", v, ok)
+	}
+	if _, ok := LevelOf(list, "9"); ok {
+		t.Error("LevelOf(9) 应未命中")
+	}
+	if _, ok := LevelOf(nil, "1"); ok {
+		t.Error("空列表应未命中")
+	}
+}
+
+// TestApply 锁定映射值写进上行体的协议差异:responses 深合并进
+// reasoning(不动其他 reasoning 键),chat_completions 顶层直写,
+// 0 档值 none 即关闭思考;anthropic/gemini 无通用语义不动体。
+func TestApply(t *testing.T) {
+	body := map[string]any{"reasoning": map[string]any{"summary": "auto"}}
+	Apply("responses", body, "none")
+	reasoning := body["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" || reasoning["summary"] != "auto" {
+		t.Errorf("responses body = %v, want effort=none 且保留 summary", body)
+	}
+
+	chat := map[string]any{}
+	Apply("chat_completions", chat, "high")
+	if chat["reasoning_effort"] != "high" {
+		t.Errorf("chat_completions body = %v, want reasoning_effort=high", chat)
+	}
+
+	anthropic := map[string]any{"thinking": map[string]any{"type": "enabled"}}
+	Apply("anthropic", anthropic, "high")
+	if len(anthropic) != 1 {
+		t.Errorf("anthropic body 被动过: %v", anthropic)
+	}
+	gemini := map[string]any{}
+	Apply("gemini", gemini, "low")
+	if len(gemini) != 0 {
+		t.Errorf("gemini body 被动过: %v", gemini)
+	}
+}

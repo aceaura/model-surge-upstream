@@ -1272,16 +1272,17 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 
 请求路径原样拼到解析出的账号 `base_url` 之后（`/v1/messages` → `{base_url}/v1/messages`）。上表之外的路径 `404`。
 
-**转发时只改四处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
+**转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
-2. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
-3. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
-4. 逐跳头（Connection 等）按 HTTP 规范不转发。
+2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并按映射值给思考参数赋值：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`，0 档映射 `none` 即关闭思考；`anthropic`/`gemini` 无通用 effort 语义只消费不赋值；值不在声明列表里（或形态不对）则原样透传不动体。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
+3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
+4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
+5. 逐跳头（Connection 等）按 HTTP 规范不转发。
 
 ### 7.3 模型列举
 
-列举端点返回**本服务已配置的启用中模型**（同 `/v1/models` 下发面的数据源），只列客户端当前协议可用的条目，外壳是各协议原生形态：anthropic 为 `{"data":[{"id","type":"model","display_name","created_at"}],"has_more":false}`，openai 为 `{"object":"list","data":[{"id","object":"model","created","owned_by"}]}`，gemini 为 `{"models":[{"name":"models/{id}","displayName"}]}`。
+列举端点返回**本服务已配置的启用中模型**（同 `/v1/models` 下发面的数据源），只列客户端当前协议可用的条目，外壳是各协议原生形态：anthropic 为 `{"data":[{"id","type":"model","display_name","created_at","efforts"}],"has_more":false}`，openai 为 `{"object":"list","data":[{"id","object":"model","created","owned_by","efforts"}]}`，gemini 为 `{"models":[{"name":"models/{id}","displayName","efforts"}]}`。每条模型的 `efforts` 是该模型的有效推理档清单 `[{"name","value"}]`：`name` 为数字档档号（`"0"` 固定为关闭思考，上行值 `none`），`value` 为发上游的档位字符串；空数组表示该模型不支持推理档。
 
 anthropic 与 openai 客户端都打 `GET /v1/models`，按放钥位置分族：`x-api-key`（Anthropic SDK 的原生位置）回 anthropic 形态、只列 `anthropic` 协议模型；其余（Bearer、`?key=`）回 openai 形态、列 `chat_completions` 与 `responses` 协议模型。gemini 走 `GET /v1beta/models`，无撞车。
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
 // Entry 是一个推理档:Name 是显示名(对话页档位菜单),Value 是
@@ -130,6 +131,35 @@ func ContainsValue(list []Entry, value string) bool {
 		}
 	}
 	return false
+}
+
+// LevelOf 按档位名(数字档)查映射出的上行值:命中返回值与 true。
+// 数字档是下游请求顶层 reasoning_level 的合法取值,名即档号。
+func LevelOf(list []Entry, level string) (string, bool) {
+	for _, e := range list {
+		if e.Name == level {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+// Apply 把映射出的档位值写进上行请求体:responses 进 reasoning.effort
+// (不覆盖已有的其他 reasoning 键),chat_completions 用顶层
+// reasoning_effort;值 none 即关闭思考(两协议都认 none 档)。
+// anthropic/gemini 没有通用的 effort 语义,忽略。
+func Apply(protocol string, body map[string]any, value string) {
+	switch protocol {
+	case provider.ProtocolResponses:
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = map[string]any{}
+			body["reasoning"] = reasoning
+		}
+		reasoning["effort"] = value
+	case provider.ProtocolChatCompletions:
+		body["reasoning_effort"] = value
+	}
 }
 
 // Values 取出条目列表的全部档位值(错误提示用)。
