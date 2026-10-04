@@ -81,10 +81,11 @@ class _ModelFormState extends State<ModelForm> {
   // 启停由列表行开关控制,表单不再展示;编辑/拷贝时沿用原值提交,新建默认启用
   late final bool _enabled = _source?.enabled ?? true;
 
-  // 推理档支持列表:只允许显式声明(名+值动态行,空列表即声明不支持),
-  // 没有自动跟随上游的模式。「关闭思考」是常驻开关(上行值 none),开即在
-  // 有效列表最前面加一条 {关闭思考, none},新建默认开;编辑/拷贝存量
-  // 自动档(null)的模型时用当前有效列表预填并默认开,保存即落为显式声明。
+  // 推理档=数字映射:档位是 0..N 的数字,0 档固定为「关闭思考」(上行值
+  // none),由常驻开关决定是否提供;1..N 档每行只填一个 effort 值,行号即
+  // 档位。对话页与下游按数字选档,上行发映射的值。没有自动跟随上游的模式;
+  // 编辑/拷贝存量自动档(null)的模型时用当前有效列表的值预填并默认开,
+  // 保存即落为显式声明(旧数据的中文名直接废弃,按行号重排)。
   late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
   late bool _disableThinking = _effortInit.off;
   late final List<_EffortRow> _effortRows = _effortInit.rows;
@@ -98,7 +99,7 @@ class _ModelFormState extends State<ModelForm> {
       off: source.efforts == null || entries.any((e) => e.value == 'none'),
       rows: [
         for (final e in entries)
-          if (e.value != 'none') _EffortRow(e.name, e.value),
+          if (e.value != 'none') _EffortRow(e.value),
       ],
     );
   }
@@ -460,29 +461,27 @@ class _ModelFormState extends State<ModelForm> {
 
   // ── 推理档(关闭思考开关 + 显式名+值档位,无自动模式)──
 
-  /// 收集提交条目:关闭思考开关开时最前面固定一条 {关闭思考, none};
-  /// 值是档位的身份(去重/上行都靠它),空值行视为未填丢弃;名留空由服务端
-  /// 按值自动命名。开关关且删掉所有行即声明不支持。
+  /// 收集提交条目:档位数字即条目名——0 档固定 {0, none}(关闭思考开关
+  /// 开时),1..N 档按行号命名 {行号, 值};空值行视为未填丢弃(其后行档号
+  /// 按当前位置算,与界面行标一致)。开关关且删掉所有行即声明不支持。
   List<EffortEntry> get _efforts {
     return [
-      if (_disableThinking) const EffortEntry(name: '关闭思考', value: 'none'),
-      for (final r in _effortRows)
-        if (r.value.text.trim().isNotEmpty)
-          EffortEntry(name: r.name.text.trim(), value: r.value.text.trim()),
+      if (_disableThinking) const EffortEntry(name: '0', value: 'none'),
+      for (var i = 0; i < _effortRows.length; i++)
+        if (_effortRows[i].value.text.trim().isNotEmpty)
+          EffortEntry(name: '${i + 1}', value: _effortRows[i].value.text.trim()),
     ];
   }
 
   String get _effortSubtitle {
-    final names = [
-      if (_disableThinking) '关闭思考',
-      for (final r in _effortRows)
-        if (r.value.text.trim().isNotEmpty)
-          r.name.text.trim().isNotEmpty
-              ? r.name.text.trim()
-              : r.value.text.trim(),
+    final levels = [
+      if (_disableThinking) '0·关闭思考',
+      for (var i = 0; i < _effortRows.length; i++)
+        if (_effortRows[i].value.text.trim().isNotEmpty)
+          '${i + 1}·${_effortRows[i].value.text.trim()}',
     ];
-    if (names.isEmpty) return '不支持';
-    return names.join(' / ');
+    if (levels.isEmpty) return '不支持';
+    return levels.join(' / ');
   }
 
   Widget _effortSection() {
@@ -495,7 +494,7 @@ class _ModelFormState extends State<ModelForm> {
       child: LabeledField(
         key: const ValueKey('model-effort-mode-field'),
         label: '元数据',
-        hint: '关闭思考开关=提供不思考选项（上行值 none）；每行一个档位：名是显示名（留空按值命名），值是发上游的档位字符串；开关关且删掉所有行即声明不支持推理档',
+        hint: '档位是 0..N 的数字：关闭思考开关=0 档（上行值 none）；每行一个 effort 值，行号即档位，对话页与下游按数字选档、上行发映射的值；开关关且删掉所有行即声明不支持推理档',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -508,7 +507,7 @@ class _ModelFormState extends State<ModelForm> {
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
-                  child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
+                  child: Text('关闭思考（0 档）', style: TextStyle(fontSize: 12.5)),
                 ),
               ],
             ),
@@ -518,23 +517,24 @@ class _ModelFormState extends State<ModelForm> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: TextFormField(
-                        key: ValueKey('model-effort-name-$i'),
-                        controller: rows[i].name,
-                        decoration: const InputDecoration(
-                          hintText: '名',
+                    SizedBox(
+                      width: 28,
+                      child: Text(
+                        '${i + 1}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: Theme.of(context).hintColor,
                         ),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      flex: 2,
                       child: TextFormField(
                         key: ValueKey('model-effort-value-$i'),
                         controller: rows[i].value,
                         decoration: const InputDecoration(
-                          hintText: '值',
+                          hintText: '值（发上游）',
                         ),
                       ),
                     ),
@@ -602,18 +602,14 @@ class _ModelFormState extends State<ModelForm> {
   }
 }
 
-/// 一行自定义推理档,名与值各持一个控制器(动态增删行需要稳定的
+/// 一行自定义推理档(行号即档位),值持一个控制器(动态增删行需要稳定的
 /// 编辑态,不能用 initialValue 靠位置复用)。
 class _EffortRow {
-  _EffortRow([String name = '', String value = ''])
-      : name = TextEditingController(text: name),
-        value = TextEditingController(text: value);
+  _EffortRow([String value = '']) : value = TextEditingController(text: value);
 
-  final TextEditingController name;
   final TextEditingController value;
 
   void dispose() {
-    name.dispose();
     value.dispose();
   }
 }
