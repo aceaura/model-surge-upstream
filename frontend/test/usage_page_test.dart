@@ -62,7 +62,7 @@ Future<void> _unmount(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('卡片与趋势图例依次展示输入、缓存创建、缓存命中、输出',
+  testWidgets('卡片与趋势图例依次展示输入、输出、缓存创建、缓存命中',
       (tester) async {
     tester.view.physicalSize = const Size(1600, 1200);
     tester.view.devicePixelRatio = 1;
@@ -71,15 +71,15 @@ void main() {
 
     final cards = [
       find.text('新增输入'),
+      find.text('输出').first,
       find.text('缓存创建').first,
       find.text('缓存命中').first,
-      find.text('输出').first,
     ];
     final legends = [
       find.text('输入').first,
+      find.text('输出').at(1),
       find.text('缓存创建').at(1),
       find.text('缓存命中').at(1),
-      find.text('输出').at(1),
     ];
     for (final items in [cards, legends]) {
       for (var i = 1; i < items.length; i++) {
@@ -143,11 +143,11 @@ void main() {
           find.descendant(of: data, matching: find.byType(Text)))
           .map((text) => text.data).toList();
       if (tab == '请求日志') {
-        expect(headers, ['时间', '来源', '账号', '模型', '输入', '缓存创建', '缓存命中', '输出', '用时', '状态']);
-        expect(values.sublist(4, 8), ['111', '222', '333', '444']);
+        expect(headers, ['时间', '来源', '账号', '模型', '输入', '输出', '缓存创建', '缓存命中', '用时', '状态']);
+        expect(values.sublist(4, 8), ['111', '444', '222', '333']);
       } else {
-        expect(headers, [tab == '账号统计' ? '账号' : '模型', '请求', '新增输入', '缓存创建', '缓存命中', '输出', '命中率']);
-        expect(values, ['group-key', '7', '555', '666', '777', '888', '25.0%']);
+        expect(headers, [tab == '账号统计' ? '账号' : '模型', '请求', '新增输入', '输出', '缓存创建', '缓存命中', '命中率']);
+        expect(values, ['group-key', '7', '555', '888', '666', '777', '25.0%']);
       }
       final start = tab == '请求日志' ? 4 : 2;
       for (var i = start; i < start + 4; i++) {
@@ -299,11 +299,11 @@ void main() {
       matching: find.byType(Text),
     )).map((text) => text.data).toList();
     expect(tooltipTexts.skip(1).toList(),
-        ['输入: 700', '缓存创建: 9', '缓存命中: 500', '输出: 60']);
+        ['输入: 700', '输出: 60', '缓存创建: 9', '缓存命中: 500']);
     for (final pair in [
-      ('输入: 700', '缓存创建: 9'),
+      ('输入: 700', '输出: 60'),
+      ('输出: 60', '缓存创建: 9'),
       ('缓存创建: 9', '缓存命中: 500'),
-      ('缓存命中: 500', '输出: 60'),
     ]) {
       expect(tester.getTopLeft(find.text(pair.$2)).dy,
           greaterThan(tester.getTopLeft(find.text(pair.$1)).dy));
