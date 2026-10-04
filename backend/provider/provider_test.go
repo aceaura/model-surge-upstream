@@ -45,10 +45,11 @@ func TestBuiltinBilling(t *testing.T) {
 		"openai":    BillingPayGo,
 		"gemini":    BillingPayGo,
 		// kimi 预设端点是 api.kimi.com/coding,即 Kimi For Coding 订阅产品。
-		"kimi":          BillingSubscription,
-		"ark":           BillingPayGo,
-		"deepseek":      BillingPayGo,
+		"kimi":         BillingSubscription,
+		"ark":          BillingPayGo,
+		"deepseek":     BillingPayGo,
 		"openai-codex": BillingSubscription,
+		"bailian":      BillingSubscription,
 	}
 	for id, billing := range want {
 		s, ok := Get(id)
@@ -64,13 +65,14 @@ func TestBuiltinBilling(t *testing.T) {
 
 func TestBuiltinRegion(t *testing.T) {
 	want := map[string]string{
-		"anthropic": RegionGlobal,
-		"openai":    RegionGlobal,
-		"gemini":    RegionGlobal,
+		"anthropic":    RegionGlobal,
+		"openai":       RegionGlobal,
+		"gemini":       RegionGlobal,
 		"kimi":         RegionGlobal,
 		"ark":          RegionGlobal,
 		"deepseek":     RegionGlobal,
 		"openai-codex": RegionGlobal,
+		"bailian":      RegionCN,
 	}
 	for id, region := range want {
 		s, ok := Get(id)
@@ -93,12 +95,13 @@ func TestBuiltinWebsite(t *testing.T) {
 		"gemini":    "https://aistudio.google.com",
 		// kimi 是订阅(Kimi For Coding),订阅站在 kimi.com;
 		// platform.moonshot.cn 是按量平台,不挂。
-		"kimi":         "https://www.kimi.com",
-		"ark":          "https://console.volcengine.com/ark",
-		"deepseek":     "https://platform.deepseek.com",
+		"kimi":     "https://www.kimi.com",
+		"ark":      "https://console.volcengine.com/ark",
+		"deepseek": "https://platform.deepseek.com",
 		// openai-codex 是订阅(ChatGPT Plus/Pro),订阅站在 chatgpt.com;
 		// platform.openai.com 是按量平台,已挂给 openai。
 		"openai-codex": "https://chatgpt.com",
+		"bailian":      "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
 	}
 	for id, website := range want {
 		s, ok := Get(id)
@@ -198,6 +201,25 @@ func TestOpenAICodexSpec(t *testing.T) {
 	}
 	if s.DisplayName != "OpenAI" {
 		t.Errorf("display_name = %q, 与按量 openai 同名才能在级联里同厂商分组", s.DisplayName)
+	}
+}
+
+func TestBailianSpec(t *testing.T) {
+	s, ok := Get("bailian")
+	if !ok {
+		t.Fatal("bailian should be registered")
+	}
+	if s.BaseURL != "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode" {
+		t.Errorf("base_url = %q", s.BaseURL)
+	}
+	if s.DisplayName != "Aliyun Bailian" || s.Auth != AuthBearer || s.Credential != CredAPIKey {
+		t.Errorf("unexpected bailian spec: %+v", s)
+	}
+	if len(s.Protocols) != 1 || !s.Supports(ProtocolChatCompletions) {
+		t.Errorf("protocols = %v, want chat_completions only", s.Protocols)
+	}
+	if s.Models != nil || s.Quota != nil {
+		t.Errorf("unverified endpoints must not be declared: %+v", s)
 	}
 }
 

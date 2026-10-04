@@ -12,6 +12,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
+	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
 
@@ -252,6 +253,44 @@ func TestOpenAIChatCompletionsForward(t *testing.T) {
 	}
 	if headers.Get("Authorization") != "Bearer real-openai-key" {
 		t.Fatalf("Authorization = %q", headers.Get("Authorization"))
+	}
+}
+
+func TestBailianChatCompletionsForward(t *testing.T) {
+	spec, ok := provider.Get("bailian")
+	if !ok {
+		t.Fatal("bailian not registered")
+	}
+	cap := &captured{}
+	up := httptest.NewServer(cap.handler(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`))
+	defer up.Close()
+	baseURL := up.URL + strings.TrimPrefix(spec.BaseURL, "https://token-plan.cn-beijing.maas.aliyuncs.com")
+	h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{
+		"bailian-1/qwen3.8-max": {
+			ModelID: "bailian-1/qwen3.8-max", Account: "bailian-1", ProviderID: spec.ID,
+			Protocol: provider.ProtocolChatCompletions, BaseURL: baseURL, NativeModel: "qwen3.8-max",
+			Headers: map[string]string{"Authorization": "Bearer bailian-test-key"},
+		},
+	}}, nil)
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"bailian-1/qwen3.8-max","messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	body, headers, path := cap.snapshot()
+	if path != "/compatible-mode/v1/chat/completions" {
+		t.Fatalf("upstream path = %q", path)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["model"] != "qwen3.8-max" || headers.Get("Authorization") != "Bearer bailian-test-key" {
+		t.Fatalf("unexpected upstream model or auth: model=%v auth=%q", got["model"], headers.Get("Authorization"))
+	}
+	if got["thinking"] != nil || got["reasoning_effort"] != nil {
+		t.Fatalf("unexpected thinking overrides: %s", body)
 	}
 }
 

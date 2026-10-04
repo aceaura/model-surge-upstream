@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:msu_admin/api_client.dart';
@@ -9,64 +10,123 @@ import 'package:msu_admin/pages/providers_page.dart';
 import 'package:msu_admin/theme.dart';
 
 ApiClient fakeClient() => ApiClient(
+  baseUrl: 'http://127.0.0.1:8080',
+  adminKey: 'adm',
+  httpClient: MockClient(
+    (_) async => http.Response(
+      jsonEncode({
+        'providers': [
+          {
+            'id': 'kimi',
+            'display_name': 'Moonshot Kimi',
+            'website': 'https://www.kimi.com',
+            'base_url': 'https://api.kimi.com/coding',
+            'protocols': ['anthropic', 'chat_completions'],
+            'auth': 'anthropic_key',
+            'credential': 'api_key',
+            'billing': 'subscription',
+            'region': 'Global',
+          },
+          {
+            'id': 'ark',
+            'display_name': 'Volcengine Ark',
+            'website': 'https://console.volcengine.com/ark',
+            'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
+            'protocols': ['anthropic', 'chat_completions'],
+            'auth': 'bearer',
+            'credential': 'api_key',
+            'billing': 'paygo',
+            'region': 'CN',
+          },
+          {
+            'id': 'openai',
+            'display_name': 'OpenAI',
+            'website': 'https://openai.com',
+            'base_url': 'https://api.openai.com',
+            'protocols': ['chat_completions', 'responses'],
+            'auth': 'bearer',
+            'credential': 'api_key',
+            'billing': 'paygo',
+            'region': 'Global',
+          },
+        ],
+      }),
+      200,
+      headers: {'content-type': 'application/json'},
+    ),
+  ),
+);
+
+void main() {
+  testWidgets('百炼订阅中国版显示厂商、端点与 SVG Logo', (tester) async {
+    final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
       adminKey: 'adm',
-      httpClient: MockClient((_) async => http.Response(
+      httpClient: MockClient(
+        (_) async => http.Response(
           jsonEncode({
             'providers': [
               {
-                'id': 'kimi',
-                'display_name': 'Moonshot Kimi',
-                'website': 'https://www.kimi.com',
-                'base_url': 'https://api.kimi.com/coding',
-                'protocols': ['anthropic', 'chat_completions'],
-                'auth': 'anthropic_key',
+                'id': 'bailian',
+                'display_name': 'Aliyun Bailian',
+                'website':
+                    'https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal',
+                'base_url':
+                    'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
+                'protocols': ['chat_completions'],
+                'auth': 'bearer',
                 'credential': 'api_key',
                 'billing': 'subscription',
-                'region': 'Global',
-              },
-              {
-                'id': 'ark',
-                'display_name': 'Volcengine Ark',
-                'website': 'https://console.volcengine.com/ark',
-                'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
-                'protocols': ['anthropic', 'chat_completions'],
-                'auth': 'bearer',
-                'credential': 'api_key',
-                'billing': 'paygo',
                 'region': 'CN',
-              },
-              {
-                'id': 'openai',
-                'display_name': 'OpenAI',
-                'website': 'https://openai.com',
-                'base_url': 'https://api.openai.com',
-                'protocols': ['chat_completions', 'responses'],
-                'auth': 'bearer',
-                'credential': 'api_key',
-                'billing': 'paygo',
-                'region': 'Global',
               },
             ],
           }),
           200,
-          headers: {'content-type': 'application/json'})),
-    );
-
-void main() {
-  testWidgets('厂商大卡按类型分节展示:类型签+缩写标签+属性行', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      theme: buildAppTheme(),
-      home: Scaffold(
-        body: ProvidersPage(client: fakeClient(), onOpenSettings: () {}),
+          headers: {'content-type': 'application/json'},
+        ),
       ),
-    ));
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: ProvidersPage(client: client, onOpenSettings: () {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Aliyun Bailian'), findsOneWidget);
+    expect(find.text('订阅 · 中国'), findsOneWidget);
+    expect(find.text('bailian'), findsOneWidget);
+    expect(
+      find.text(
+        'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(SvgPicture), findsOneWidget);
+    expect(find.text('B'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('厂商大卡按类型分节展示:类型签+缩写标签+属性行', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: ProvidersPage(client: fakeClient(), onOpenSettings: () {}),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     // 卡头是厂商名(不带区域后缀),计费/区域由类型签承载
     expect(find.text('Moonshot Kimi'), findsOneWidget);
-    expect(find.text('Volcengine Ark'), findsOneWidget,
-        reason: '分组形态下区域在类型签里,厂商名不加 -CN 后缀');
+    expect(
+      find.text('Volcengine Ark'),
+      findsOneWidget,
+      reason: '分组形态下区域在类型签里,厂商名不加 -CN 后缀',
+    );
     expect(find.text('OpenAI'), findsOneWidget);
 
     // 类型签「计费模式 · 服务区域」:三种组合各一处
@@ -80,14 +140,12 @@ void main() {
     expect(find.text('kimi'), findsOneWidget);
     expect(find.text('ark'), findsOneWidget, reason: 'CN 区域也不加 -cn 后缀');
     expect(find.textContaining('-CN'), findsNothing);
-    expect(find.textContaining('-cn'), findsNothing,
-        reason: '分组形态下名字一律不带区域后缀');
+    expect(find.textContaining('-cn'), findsNothing, reason: '分组形态下名字一律不带区域后缀');
 
     // 属性行按节下发(官网/请求地址每节各一份)
     expect(find.text('官网'), findsNWidgets(3));
     expect(find.text('请求地址'), findsNWidgets(3));
-    expect(find.text('额度查询'), findsNothing,
-        reason: '额度查询由账号脚本配置决定,不是供应商的属性');
+    expect(find.text('额度查询'), findsNothing, reason: '额度查询由账号脚本配置决定,不是供应商的属性');
     expect(find.text('额度形态'), findsNothing);
     expect(find.text('额度重置'), findsNothing);
   });
@@ -96,7 +154,8 @@ void main() {
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
       adminKey: 'adm',
-      httpClient: MockClient((_) async => http.Response(
+      httpClient: MockClient(
+        (_) async => http.Response(
           jsonEncode({
             'providers': [
               {
@@ -124,16 +183,25 @@ void main() {
             ],
           }),
           200,
-          headers: {'content-type': 'application/json'})),
+          headers: {'content-type': 'application/json'},
+        ),
+      ),
     );
-    await tester.pumpWidget(MaterialApp(
-      theme: buildAppTheme(),
-      home: Scaffold(body: ProvidersPage(client: client, onOpenSettings: () {})),
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: ProvidersPage(client: client, onOpenSettings: () {}),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.text('Moonshot Kimi'), findsOneWidget,
-        reason: '两条同厂商记录并入一卡,厂商名只出现一次');
+    expect(
+      find.text('Moonshot Kimi'),
+      findsOneWidget,
+      reason: '两条同厂商记录并入一卡,厂商名只出现一次',
+    );
     expect(find.text('订阅 · 全球'), findsOneWidget);
     expect(find.text('按量计费 · 中国'), findsOneWidget);
     final subTop = tester.getTopLeft(find.text('订阅 · 全球')).dy;

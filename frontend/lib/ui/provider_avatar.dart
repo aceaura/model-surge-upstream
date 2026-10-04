@@ -19,6 +19,7 @@ class ProviderAvatar extends StatelessWidget {
     'kimi': ('assets/providers/kimi.svg', null),
     'deepseek': ('assets/providers/deepseek.svg', Color(0xFF4D6BFE)),
     'ark': ('assets/providers/ark.png', null),
+    'bailian': ('assets/providers/bailian.svg', Color(0xFF624AFF)),
   };
 
   /// (底色, 字色) 柔和色板,明暗两套,供未知厂商字母头像与

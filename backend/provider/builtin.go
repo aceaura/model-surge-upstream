@@ -101,4 +101,15 @@ func init() {
 		},
 		Models: &ModelsAPI{Path: "/models", Method: "GET"},
 	})
+	register(Spec{
+		ID:          "bailian",
+		DisplayName: "Aliyun Bailian",
+		Website:     "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
+		BaseURL:     "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode",
+		Protocols:   []string{ProtocolChatCompletions},
+		Auth:        AuthBearer,
+		Credential:  CredAPIKey,
+		Billing:     BillingSubscription,
+		Region:      RegionCN,
+	})
 }

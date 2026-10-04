@@ -208,7 +208,7 @@ Authorization: Bearer <密钥>
 | `models.path` | string | 同上 | 列举端点路径 |
 | `models.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
 
-当前注册序（固定顺序，共 7 家）：
+当前注册序（固定顺序，共 8 家）：
 
 | id | base_url | protocols | auth | quota | models |
 |---|---|---|---|---|---|
@@ -219,8 +219,11 @@ Authorization: Bearer <密钥>
 | `kimi` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
 | `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
 | `deepseek` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | `{path: "/user/balance", method: "GET", kind: "balance", unit: "currency", reset: "prepaid"}` | `/models` |
+| `bailian` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions` | `bearer` | — | — |
 
-> 除 `deepseek` 外五家均未声明 `quota`：它们没有可用的额度端点。注意速率窗口维度不依赖 `quota` 声明的形态字段，只要额度端点通了就会从响应头一并读出（见 3.6）。
+> `bailian` 是阿里云百炼 Token Plan 中国版（`subscription` / `CN` / `api_key`，使用套餐专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。暂不声明未经验证的上游模型列举、Responses 和额度查询能力。
+
+> 除 `deepseek` 外的提供商均未声明 `quota`。注意速率窗口维度不依赖 `quota` 声明的形态字段，只要额度端点通了就会从响应头一并读出（见 3.6）。
 
 > `ark` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
@@ -417,7 +420,7 @@ GET /admin/providers
 
 | 字段 | 类型 | 取值与含义 |
 |---|---|---|
-| `providers` | array of Provider | 元素结构见 3.1；按固定注册序排列，当前恒为 6 个元素 |
+| `providers` | array of Provider | 元素结构见 3.1；按固定注册序排列，当前恒为 8 个元素 |
 
 **错误**：无领域错误。
 
