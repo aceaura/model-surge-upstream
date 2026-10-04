@@ -21,6 +21,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/ringlog"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
@@ -346,6 +347,9 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	if q := stripKeyQuery(r.URL.RawQuery); q != "" {
 		url += "?" + q
 	}
+	// 调试日志:最终发给上游的请求体(长文本字段换占位,参数原样)。
+	ringlog.Push(ringlog.LevelInfo, "proxy", fmt.Sprintf("→ %s %s model=%s native=%s body=%s",
+		r.Method, url, target.ModelID, target.NativeModel, marshalDebug(requestDebugView(body))))
 	// 请求体字节固定,重试时按新头集重建请求。
 	build := func(headers map[string]string) (*http.Request, error) {
 		up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(encoded))
@@ -381,6 +385,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	}
 	resp, err := h.client.Do(up)
 	if err != nil {
+		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s: %v", target.ModelID, err))
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
 		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 		return
@@ -390,6 +395,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	if resp.StatusCode == http.StatusUnauthorized && h.invalidator != nil && target.ProviderID == codex.ProviderID {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
+		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← 401 model=%s account=%s: invalidate access token and retry once",
+			target.ModelID, target.Account))
 		h.invalidator.Invalidate(target.Account, bearerTokenValue(target.Headers))
 		fresh, rerr := h.resolver.Resolve(r.Context(), target.ModelID)
 		if rerr != nil {
@@ -402,6 +409,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 			resp, err = h.client.Do(up)
 		}
 		if err != nil {
+			ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s: %v", target.ModelID, err))
 			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream retry failed", err))
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 			return
@@ -420,10 +428,19 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	copyHeaders(w.Header(), resp.Header, stripResponseHeaders)
 	w.WriteHeader(resp.StatusCode)
 	// 每次写入后立即 flush：SSE 逐事件到达客户端，不等缓冲区填满。
-	_, _ = io.Copy(out, resp.Body)
+	// 旁路捕获响应字节(限长)供调试日志,不影响透传本身。
+	capBody := &cappedWriter{}
+	n, _ := io.Copy(out, io.TeeReader(resp.Body, capBody))
 
 	u, _ := sniffer.Result()
 	h.record(r.Context(), target, isStream, u, resp.StatusCode, out.latency, time.Since(start))
+
+	level := ringlog.LevelInfo
+	if resp.StatusCode >= 400 {
+		level = ringlog.LevelWarn
+	}
+	ringlog.Push(level, "proxy", fmt.Sprintf("← %d %s model=%s (%d bytes) body=%s",
+		resp.StatusCode, contentType, target.ModelID, n, responseDebugText(capBody.buf.Bytes(), n)))
 }
 
 // bearerTokenValue 从头集里取出 Bearer 载荷;取不到返回空串。
