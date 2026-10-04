@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -194,5 +195,126 @@ func TestRunAutoFallbackOnNoCutPoint(t *testing.T) {
 	out, _, _ := r.Run(context.Background(), tgt, body, nil)
 	if len(out["messages"].([]any)) != 3 {
 		t.Fatal("无安全切点应原样转发")
+	}
+}
+
+// longResponsesBody 构造一个估算必超窗口的 Responses 请求体。
+func longResponsesBody(turns int) map[string]any {
+	var items []any
+	pad := strings.Repeat("很长的中文内容用来撑估算。", 20)
+	for i := 0; i < turns; i++ {
+		items = append(items,
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": pad}}},
+			map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": pad}}},
+		)
+	}
+	return map[string]any{"model": "alias", "instructions": "你是助手", "input": items}
+}
+
+func responsesTarget(baseURL string, window int) resolve.ResolvedTarget {
+	return resolve.ResolvedTarget{
+		ModelID:       "m1",
+		Account:       "acc",
+		Protocol:      provider.ProtocolResponses,
+		BaseURL:       baseURL,
+		NativeModel:   "gpt-native",
+		ContextWindow: window,
+		Headers:       map[string]string{"Authorization": "Bearer k"},
+		Compact:       json.RawMessage(`{"mode":"auto"}`),
+	}
+}
+
+func TestRunAutoCompactsResponses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("摘要调用路径 = %s, want /v1/responses", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(raw), "压缩为一份详尽摘要") {
+			t.Error("压缩路径下不应出现非摘要调用")
+		}
+		var req map[string]any
+		_ = json.Unmarshal(raw, &req)
+		if _, streaming := req["stream"]; streaming {
+			t.Error("通用 responses 供应商的摘要请求应非流式")
+		}
+		_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"[SUMMARY]"}]}],"usage":{"input_tokens":500,"output_tokens":10}}`))
+	}))
+	defer srv.Close()
+	r := NewRunner(DefaultConfig())
+	r.logf = func(string, ...any) {}
+
+	var recorded usage.Usage
+	out, _, reject := r.Run(context.Background(), responsesTarget(srv.URL, 100), longResponsesBody(10),
+		func(u usage.Usage, _ int, _, _ time.Duration) { recorded = u })
+	if reject {
+		t.Fatal("auto 模式不应 reject")
+	}
+	items := out["input"].([]any)
+	// 摘要 user + 最近 6 轮（12 条）
+	if len(items) != 13 {
+		t.Fatalf("压缩后 input = %d, want 13", len(items))
+	}
+	first := items[0].(map[string]any)
+	if first["role"] != "user" || first["type"] != "message" {
+		t.Fatalf("首条应为摘要 user 消息, got %v", first)
+	}
+	text := first["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "[SUMMARY]") {
+		t.Fatalf("首条应为摘要, got %v", text)
+	}
+	if out["instructions"] != "你是助手" {
+		t.Fatal("instructions 应原样保留")
+	}
+	if recorded.InputTokens != 500 || recorded.OutputTokens != 10 {
+		t.Fatalf("摘要用量未记录: %+v", recorded)
+	}
+}
+
+func TestRunAutoCompactsCodexSubscription(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// MapSuffix:/v1/responses → /responses
+		if r.URL.Path != "/responses" {
+			t.Errorf("codex 摘要调用路径 = %s, want /responses", r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		_ = json.Unmarshal(raw, &req)
+		// ShapeBody 硬约束:store=false、stream=true、剥 max_output_tokens、instructions 非空
+		if req["store"] != false || req["stream"] != true {
+			t.Errorf("codex 摘要请求缺硬约束: store=%v stream=%v", req["store"], req["stream"])
+		}
+		if _, ok := req["max_output_tokens"]; ok {
+			t.Error("codex 摘要请求应剥掉 max_output_tokens")
+		}
+		if s, _ := req["instructions"].(string); strings.TrimSpace(s) == "" {
+			t.Error("codex 摘要请求 instructions 应非空")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"[SUMMARY]\"}]}],\"usage\":{\"input_tokens\":700,\"output_tokens\":20}}}\n\n"))
+	}))
+	defer srv.Close()
+	r := NewRunner(DefaultConfig())
+	r.logf = func(string, ...any) {}
+
+	tgt := responsesTarget(srv.URL, 100)
+	tgt.ProviderID = codex.ProviderID
+	var recorded usage.Usage
+	out, _, reject := r.Run(context.Background(), tgt, longResponsesBody(10),
+		func(u usage.Usage, _ int, _, _ time.Duration) { recorded = u })
+	if reject {
+		t.Fatal("auto 模式不应 reject")
+	}
+	items := out["input"].([]any)
+	if len(items) != 13 {
+		t.Fatalf("压缩后 input = %d, want 13", len(items))
+	}
+	text := items[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "[SUMMARY]") {
+		t.Fatalf("首条应为摘要, got %v", text)
+	}
+	if recorded.InputTokens != 700 || recorded.OutputTokens != 20 {
+		t.Fatalf("SSE 摘要用量未记录: %+v", recorded)
 	}
 }

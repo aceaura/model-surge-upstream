@@ -29,6 +29,11 @@ type anthropicImpl struct{}
 
 func (anthropicImpl) Estimate(body map[string]any) int { return estimateBody(body) }
 
+func (anthropicImpl) Messages(body map[string]any) []any {
+	msgs, _ := body["messages"].([]any)
+	return msgs
+}
+
 // Cut 从后往前数第 keepTurns 个「真人发言」（不含 tool_result 块的 user
 // 消息），其下标为切点。tail 首条因此必为真人发言——不会出现引用了
 // prefix 里 tool_use 的悬空 tool_result。prefix 里未闭合的工具链

@@ -17,6 +17,11 @@ type chatImpl struct{}
 
 func (chatImpl) Estimate(body map[string]any) int { return estimateBody(body) }
 
+func (chatImpl) Messages(body map[string]any) []any {
+	msgs, _ := body["messages"].([]any)
+	return msgs
+}
+
 // Cut 切点只落在 role=user 的消息之前（头部连续 system 不参与切割）。
 // tail 首条必为 user——不会出现引用了 prefix 里 tool_calls 的悬空
 // role=tool 消息。i 扫到 start+1，保证 prefix（不含 system）非空。

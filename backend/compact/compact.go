@@ -6,7 +6,7 @@
 //
 // 全程 fail-open：估算未超、未声明窗口、切不出安全点、摘要调用失败、
 // 响应解析失败——一律原样转发，压缩是优化不是前提，不给转发链路
-// 引入新的故障模式。Gemini/Responses 协议二期再覆盖（implFor 返回 nil）。
+// 引入新的故障模式。Gemini 协议二期再覆盖（implFor 返回 nil）。
 package compact
 
 import (
@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -99,6 +100,9 @@ func effective(raw json.RawMessage, g Defaults) config {
 type protocolImpl interface {
 	// Estimate 估算整个请求体的输入 token。
 	Estimate(body map[string]any) int
+	// Messages 取请求体里的消息/item 列表（Anthropic/Chat 是 messages，
+	// Responses 是 input）。取不到时返回 nil，Cut 失败走 fail-open。
+	Messages(body map[string]any) []any
 	// Cut 找安全切点：prefix 进摘要，tail 原样保留。ok=false 表示
 	// 没有可切的安全点（如整条会话就是一个工具链）。
 	Cut(messages []any, keepTurns int) (prefix, tail []any, ok bool)
@@ -116,8 +120,10 @@ func implFor(protocol string) protocolImpl {
 		return anthropicImpl{}
 	case provider.ProtocolChatCompletions:
 		return chatImpl{}
+	case provider.ProtocolResponses:
+		return responsesImpl{}
 	default:
-		// Gemini / Responses 二期覆盖。
+		// Gemini 二期覆盖。
 		return nil
 	}
 }
@@ -171,7 +177,7 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 		return nil, estimated, true
 	}
 
-	messages, _ := body["messages"].([]any)
+	messages := impl.Messages(body)
 	prefix, tail, ok := impl.Cut(messages, cfg.KeepTurns)
 	if !ok {
 		r.logf("compact: model=%s estimated %d tokens exceeds window but no safe cut point, forwarding as-is",
@@ -183,6 +189,13 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 	if err != nil {
 		r.logf("compact: model=%s build summary request failed: %v, forwarding as-is", target.ModelID, err)
 		return body, estimated, false
+	}
+	// codex 订阅端点的硬约束(store/stream/剥采样参数/instructions)与
+	// 路径映射同样适用于摘要调用:与转发面同一套 ShapeBody/MapSuffix。
+	// stream 被强制为 true,ExtractSummary 按 SSE 解析。
+	if target.ProviderID == codex.ProviderID {
+		reqBody = codex.ShapeBody(reqBody, target.NativeModel)
+		suffix = codex.MapSuffix(suffix)
 	}
 
 	// 摘要调用挂在请求上下文上：客户端断开则摘要一并取消，不泄漏连接。
