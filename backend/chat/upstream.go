@@ -154,8 +154,10 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 }
 
 // applyEffort 把对话页选定的推理档写进请求体,与转发面 reasoning_level
-// 数字档共用同一份映射逻辑(effort.Apply):responses 进 reasoning.effort,
-// chat_completions 用顶层 reasoning_effort;anthropic/gemini 忽略。
+// 数字档共用同一份映射逻辑(effort.Apply 按协议定字段:responses=
+// reasoning.effort、chat_completions=reasoning_effort、anthropic=
+// output_config.effort 或 none 时 thinking disabled、gemini=
+// thinkingConfig.thinkingLevel)。
 func applyEffort(protocol string, body map[string]any, value string) {
 	effort.Apply(protocol, body, value)
 }

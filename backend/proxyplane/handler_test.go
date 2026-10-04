@@ -73,6 +73,10 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			Headers:   map[string]string{"x-api-key": "real-account-key", "anthropic-version": "2023-06-01"},
 			Defaults:  json.RawMessage(`{"temperature":0.6,"thinking":{"type":"enabled","budget_tokens":1000}}`),
 			Overrides: json.RawMessage(`{"max_tokens":8192,"thinking":{"budget_tokens":2000}}`),
+			Efforts: []effort.Entry{
+				{Name: "0", Value: "none"},
+				{Name: "1", Value: "high"},
+			},
 		},
 		"my-gpt": {
 			ModelID: "my-gpt", Account: "openai-1", ProviderID: "openai",
@@ -290,6 +294,77 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 	}
 	if _, assigned := got["reasoning_effort"]; assigned {
 		t.Fatalf("未命中档位不应赋 reasoning_effort: %v", got)
+	}
+
+	// anthropic:1→high 进 output_config.effort;0→none 改写 thinking disabled
+	// (defaults 的 thinking 深合并,type 被客户端参数层的映射压盖)。
+	rec = doRequest(t, h, http.MethodPost, "/v1/messages",
+		map[string]string{"x-api-key": testKey},
+		`{"model":"my-claude","max_tokens":1024,"messages":[],"reasoning_level":"1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got = upstreamBody()
+	output, _ := got["output_config"].(map[string]any)
+	if output["effort"] != "high" {
+		t.Fatalf("anthropic output_config = %v, want effort=high", got)
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+
+	rec = doRequest(t, h, http.MethodPost, "/v1/messages",
+		map[string]string{"x-api-key": testKey},
+		`{"model":"my-claude","max_tokens":1024,"messages":[],"reasoning_level":"0"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	got = upstreamBody()
+	thinking, _ := got["thinking"].(map[string]any)
+	if thinking["type"] != "disabled" {
+		t.Fatalf("anthropic 0 档 thinking = %v, want type=disabled", got)
+	}
+	if _, assigned := got["output_config"]; assigned {
+		t.Fatalf("anthropic 0 档不应写 output_config: %v", got)
+	}
+}
+
+// TestReasoningLevelYieldsToOverrides 锁定优先级:reasoning_level 映射
+// 写在客户端参数层,overrides(JSON 覆盖参数)最后合并,恒压映射值。
+func TestReasoningLevelYieldsToOverrides(t *testing.T) {
+	cap := &captured{}
+	up := httptest.NewServer(cap.handler(http.StatusOK, `{"ok":true}`))
+	defer up.Close()
+	resolver := fakeResolver{targets: map[string]resolve.ResolvedTarget{
+		"my-gpt": {
+			ModelID: "my-gpt", Account: "openai-1", ProviderID: "openai",
+			Protocol: "chat_completions", BaseURL: up.URL, NativeModel: "gpt-5",
+			Headers:   map[string]string{"Authorization": "Bearer real-openai-key"},
+			Overrides: json.RawMessage(`{"reasoning_effort":"low"}`),
+			Efforts: []effort.Entry{
+				{Name: "0", Value: "none"},
+				{Name: "2", Value: "high"},
+			},
+		},
+	}}
+	h := NewHandler(testKey, resolver, nil)
+
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"my-gpt","messages":[],"reasoning_level":"2"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	body, _, _ := cap.snapshot()
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("upstream body not json: %v", err)
+	}
+	if got["reasoning_effort"] != "low" {
+		t.Fatalf("overrides 应压过映射: reasoning_effort = %v, want low", got["reasoning_effort"])
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
 	}
 }
 

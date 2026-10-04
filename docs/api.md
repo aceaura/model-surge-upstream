@@ -1275,7 +1275,7 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 **转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
-2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并按映射值给思考参数赋值：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`，0 档映射 `none` 即关闭思考；`anthropic`/`gemini` 无通用 effort 语义只消费不赋值；值不在声明列表里（或形态不对）则原样透传不动体。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
+2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并按映射值给思考参数赋值（2026-10-04 逐协议核对官方 SDK/文档）：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`（两协议值域均含 `none`=关闭思考）；`anthropic` 写 `output_config.effort`（官方值域 low/medium/high/xhigh/max），`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel`（枚举大写 MINIMAL/LOW/MEDIUM/HIGH），`none` 不动体（3.x 全系不可关思考、2.5 走 thinkingBudget 预算制，无通用映射）。赋值落在客户端参数层，优先级 `defaults < 映射 < overrides`——JSON 覆盖参数恒可压盖映射结果；值不在声明列表里（或形态不对）则原样透传不动体。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
 3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
 4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
 5. 逐跳头（Connection 等）按 HTTP 规范不转发。

@@ -543,8 +543,10 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 
 // applyReasoningLevel 消费请求顶层的 reasoning_level 数字档:命中模型
 // 声明的档位(名=档号)即从体里删除(网关自有字段不进上游),并按映射出
-// 的档位值给思考开关/档位参数赋值(effort.Apply:0 档映射 none=关闭
-// 思考);未提供的、形态不对的、值不在声明列表里的都原样透传。
+// 的档位值给思考开关/档位参数赋值(effort.Apply 按协议定位置,0 档映射
+// none=关闭思考);未提供的、形态不对的、值不在声明列表里的都原样透传。
+// 赋值落在客户端参数层:优先级 defaults < 映射 < overrides,JSON 覆盖
+// 参数恒可压盖映射结果。
 func applyReasoningLevel(protocol string, efforts []effort.Entry, body map[string]any) {
 	level, ok := reasoningLevel(body["reasoning_level"])
 	if !ok {

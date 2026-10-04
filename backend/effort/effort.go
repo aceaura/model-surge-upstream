@@ -144,10 +144,16 @@ func LevelOf(list []Entry, level string) (string, bool) {
 	return "", false
 }
 
-// Apply 把映射出的档位值写进上行请求体:responses 进 reasoning.effort
-// (不覆盖已有的其他 reasoning 键),chat_completions 用顶层
-// reasoning_effort;值 none 即关闭思考(两协议都认 none 档)。
-// anthropic/gemini 没有通用的 effort 语义,忽略。
+// Apply 把映射出的档位值按协议写进上行请求体(2026-10-04 逐协议核对
+// 官方 SDK/文档):
+//   - responses:reasoning.effort(不动其他 reasoning 键),值域含 none;
+//   - chat_completions:顶层 reasoning_effort,值域含 none;
+//   - anthropic:档位写 output_config.effort(官方值域 low/medium/high/
+//     xhigh/max);none 没有档位语义,改写为 thinking {type:disabled}
+//     (关闭思考);不动 output_config/thinking 里的其他键;
+//   - gemini:档位写 generationConfig.thinkingConfig.thinkingLevel(线协议
+//     枚举大写 MINIMAL/LOW/MEDIUM/HIGH);3.x 全系不可关思考、2.5 走
+//     thinkingBudget 预算制,none 无通用映射,不动体。
 func Apply(protocol string, body map[string]any, value string) {
 	switch protocol {
 	case provider.ProtocolResponses:
@@ -159,6 +165,37 @@ func Apply(protocol string, body map[string]any, value string) {
 		reasoning["effort"] = value
 	case provider.ProtocolChatCompletions:
 		body["reasoning_effort"] = value
+	case provider.ProtocolAnthropic:
+		if value == "none" {
+			thinking, _ := body["thinking"].(map[string]any)
+			if thinking == nil {
+				thinking = map[string]any{}
+				body["thinking"] = thinking
+			}
+			thinking["type"] = "disabled"
+			return
+		}
+		output, _ := body["output_config"].(map[string]any)
+		if output == nil {
+			output = map[string]any{}
+			body["output_config"] = output
+		}
+		output["effort"] = value
+	case provider.ProtocolGemini:
+		if value == "none" {
+			return
+		}
+		generation, _ := body["generationConfig"].(map[string]any)
+		if generation == nil {
+			generation = map[string]any{}
+			body["generationConfig"] = generation
+		}
+		thinking, _ := generation["thinkingConfig"].(map[string]any)
+		if thinking == nil {
+			thinking = map[string]any{}
+			generation["thinkingConfig"] = thinking
+		}
+		thinking["thinkingLevel"] = strings.ToUpper(value)
 	}
 }
 

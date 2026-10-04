@@ -123,9 +123,10 @@ func TestLevelOf(t *testing.T) {
 	}
 }
 
-// TestApply 锁定映射值写进上行体的协议差异:responses 深合并进
-// reasoning(不动其他 reasoning 键),chat_completions 顶层直写,
-// 0 档值 none 即关闭思考;anthropic/gemini 无通用语义不动体。
+// TestApply 锁定映射值写进上行体的协议差异(2026-10-04 核对官方
+// SDK/文档):responses 深合并进 reasoning;chat_completions 顶层直写;
+// anthropic 档位进 output_config.effort、none 改写 thinking disabled;
+// gemini 档位进 thinkingConfig.thinkingLevel(大写)、none 不动体。
 func TestApply(t *testing.T) {
 	body := map[string]any{"reasoning": map[string]any{"summary": "auto"}}
 	Apply("responses", body, "none")
@@ -140,14 +141,27 @@ func TestApply(t *testing.T) {
 		t.Errorf("chat_completions body = %v, want reasoning_effort=high", chat)
 	}
 
-	anthropic := map[string]any{"thinking": map[string]any{"type": "enabled"}}
+	anthropic := map[string]any{"output_config": map[string]any{"format": "json"}}
 	Apply("anthropic", anthropic, "high")
-	if len(anthropic) != 1 {
-		t.Errorf("anthropic body 被动过: %v", anthropic)
+	output := anthropic["output_config"].(map[string]any)
+	if output["effort"] != "high" || output["format"] != "json" {
+		t.Errorf("anthropic 档位 body = %v, want output_config.effort=high 且保留 format", anthropic)
 	}
-	gemini := map[string]any{}
-	Apply("gemini", gemini, "low")
-	if len(gemini) != 0 {
-		t.Errorf("gemini body 被动过: %v", gemini)
+	Apply("anthropic", anthropic, "none")
+	thinking := anthropic["thinking"].(map[string]any)
+	if thinking["type"] != "disabled" {
+		t.Errorf("anthropic none body = %v, want thinking.type=disabled", anthropic)
+	}
+
+	gemini := map[string]any{"generationConfig": map[string]any{"temperature": 0.6}}
+	Apply("gemini", gemini, "medium")
+	generation := gemini["generationConfig"].(map[string]any)
+	thinkingConfig := generation["thinkingConfig"].(map[string]any)
+	if thinkingConfig["thinkingLevel"] != "MEDIUM" || generation["temperature"] != 0.6 {
+		t.Errorf("gemini 档位 body = %v, want thinkingLevel=MEDIUM 且保留 temperature", gemini)
+	}
+	Apply("gemini", gemini, "none")
+	if generation["thinkingConfig"].(map[string]any)["thinkingLevel"] != "MEDIUM" {
+		t.Errorf("gemini none 不应动体: %v", gemini)
 	}
 }
