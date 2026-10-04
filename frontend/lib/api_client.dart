@@ -207,6 +207,7 @@ class ApiClient {
     required Map<String, dynamic> overrides,
     Map<String, dynamic>? compact,
     List<EffortEntry>? efforts,
+    String? effortScript,
     bool enabled = true,
   }) async {
     final body = await _send('POST', '/admin/models', body: {
@@ -220,6 +221,8 @@ class ApiClient {
       'compact': ?compact,
       // efforts 恒带键:数组=显式声明(空数组=不支持);null=自动仅存量兼容,表单不写。
       'efforts': efforts?.map((e) => e.toJson()).toList(),
+      // 表单恒带键:空串=无脚本走内置映射;服务端对非空脚本做语法预检。
+      'effort_script': ?effortScript,
       'enabled': enabled,
     });
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);
@@ -235,6 +238,7 @@ class ApiClient {
     Map<String, dynamic>? overrides,
     Map<String, dynamic>? compact,
     List<EffortEntry>? efforts,
+    String? effortScript,
     required bool enabled,
   }) async {
     final body = await _send('PUT', '/admin/models/$id', body: {
@@ -247,6 +251,7 @@ class ApiClient {
       'compact': ?compact,
       // 表单总是知道目标形态(自动/显式),恒带键提交;null=恢复自动。
       'efforts': efforts?.map((e) => e.toJson()).toList(),
+      'effort_script': ?effortScript,
       'enabled': enabled,
     });
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);

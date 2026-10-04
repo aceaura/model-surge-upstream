@@ -125,6 +125,7 @@ Authorization: Bearer <密钥>
 | `invalid_json` | 400 | 请求体不是合法 JSON、含未知字段、defaults/overrides 不是 JSON 对象 |
 | `invalid_request` | 400 | 必填字段缺失、`base_url` 非法、`context_window` 为负等 |
 | `quota_unavailable` | 502 | 上游额度接口请求失败或返回非 2xx |
+| `effort_script_failed` | 502 | 模型档位映射脚本运行失败（求值/调用/超时），请求未发上游 |
 | `upstream_unavailable` | 502 | 上游自身接口（如模型列举）请求失败或返回非 2xx |
 | `storage_error` | 500 | PostgreSQL 故障；其他非领域错误的兜底 |
 
@@ -255,6 +256,7 @@ Authorization: Bearer <密钥>
 | `context_window` | int | 恒有（管理面形态） | 上下文窗口 token 数声明；`0` 表示未声明 |
 | `defaults` | object | 恒有 | 缺省填充参数：调用方缺什么补什么；空对象表示无 |
 | `overrides` | object | 恒有 | 强制覆盖参数：无论调用方给什么都压盖；空对象表示无 |
+| `effort_script` | string | 恒有（管理面形态） | 档位映射脚本（`{ apply: function(ctx) {...} }` 对象字面量）：空串=走协议内置映射；非空即接管 effort 写入位置，`ctx` 带 `level`/`value`/`protocol`/`efforts`/`request`，返回完整新请求体 |
 | `enabled` | bool | 恒有 | 模型开关；`false` 时 resolve 返回 `409 model_disabled` |
 | `created_at` | time | 恒有 | |
 | `updated_at` | time | 恒有 | |
@@ -855,6 +857,7 @@ POST /admin/models
 | `context_window` | int | 否 | ≥ 0；缺省或 `0` = 未声明 | 上下文窗口 token 数 |
 | `defaults` | object | 否 | 须为 JSON 对象（数组/标量返回 `400 invalid_json`）；缺省或 `null` 落库为 `{}` | 缺省填充参数 |
 | `overrides` | object | 否 | 同 `defaults` | 强制覆盖参数 |
+| `effort_script` | string | 否 | 缺省或空串 = 无脚本（协议内置映射）；非空做语法预检，非法返回 `400` | 档位映射脚本，见 3.3 与 7.2 第 2 条 |
 | `enabled` | bool | 否 | 缺省 `true` | 模型开关 |
 
 **请求体结构**：
@@ -959,6 +962,7 @@ PUT /admin/models/{id...}
 | `account` / `native_model` / `protocol` | **保留原值** |
 | `context_window` | 置 `0`（清除声明） |
 | `defaults` / `overrides` | 置 `{}`（清除） |
+| `effort_script` | **省略（`null`）保留原值**；显式空串 = 清除脚本回内置映射 |
 | `enabled` | 置 `true`（重新启用） |
 
 **请求体结构**（完整替换形态；`id` 不出现在请求体中）：
@@ -1275,7 +1279,7 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 **转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
-2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并按映射值给思考参数赋值（2026-10-04 逐协议核对官方 SDK/文档）：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`（两协议值域均含 `none`=关闭思考）；`anthropic` 写 `output_config.effort`（官方值域 low/medium/high/xhigh/max），`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel`（枚举大写 MINIMAL/LOW/MEDIUM/HIGH），`none` 不动体（3.x 全系不可关思考、2.5 走 thinkingBudget 预算制，无通用映射）。赋值落在客户端参数层，优先级 `defaults < 映射 < overrides`——JSON 覆盖参数恒可压盖映射结果；值不在声明列表里（或形态不对）则原样透传不动体。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
+2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并按映射值给思考参数赋值。赋值落点两级：**模型配了映射脚本（`effort_script`）即由脚本接管**——脚本是 JS 对象字面量 `{ apply: function(ctx) {...} }`（额度脚本同款 goja 机制，2s 上限），`ctx` 带 `level`（档号）、`value`（映射值）、`protocol`、`efforts`（元数据声明）与 `request`（当前请求体），返回完整新请求体，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关）；脚本运行失败回 502（`effort_script_failed`）。**未配脚本走协议内置映射**（2026-10-04 逐协议核对官方 SDK/文档）：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`（两协议值域均含 `none`=关闭思考）；`anthropic` 写 `output_config.effort`（官方值域 low/medium/high/xhigh/max），`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel`（枚举大写 MINIMAL/LOW/MEDIUM/HIGH），`none` 不动体（3.x 全系不可关思考、2.5 走 thinkingBudget 预算制，无通用映射）。赋值落在客户端参数层，优先级 `defaults < 映射 < overrides`——JSON 覆盖参数恒可压盖映射（含脚本）结果；值不在声明列表里（或形态不对）则原样透传不动体。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
 3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
 4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
 5. 逐跳头（Connection 等）按 HTTP 规范不转发。

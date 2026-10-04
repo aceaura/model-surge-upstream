@@ -321,6 +321,13 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
 
+    // 映射脚本编辑器在元数据下方:填入脚本随提交上行(空串=内置映射)。
+    await tester.ensureVisible(
+        find.byKey(const ValueKey('model-effort-script')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('model-effort-script')),
+        '({ apply: function(ctx) { ctx.request.reasoning_effort = ctx.value; return ctx.request; } })');
+
     await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -335,6 +342,8 @@ void main() {
       {'name': '0', 'value': 'none'},
       {'name': '1', 'value': 'ultra'},
     ]);
+    expect(sentBody!['effort_script'],
+        '({ apply: function(ctx) { ctx.request.reasoning_effort = ctx.value; return ctx.request; } })');
 
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();

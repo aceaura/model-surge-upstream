@@ -30,6 +30,7 @@ var statusByCode = map[apperr.Code]int{
 	apperr.InvalidJSON:         http.StatusBadRequest,
 	apperr.InvalidRequest:      http.StatusBadRequest,
 	apperr.QuotaUnavailable:    http.StatusBadGateway,
+	apperr.EffortScriptFailed:  http.StatusBadGateway,
 	apperr.UpstreamUnavailable: http.StatusBadGateway,
 	apperr.StorageError:        http.StatusInternalServerError,
 }

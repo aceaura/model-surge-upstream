@@ -44,7 +44,9 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 	// 每条消息的显式选择压过模型 defaults/overrides,且先于 codex 整形
 	// (ShapeBody 看到 reasoning 会补 include)。
 	if effort != "" {
-		applyEffort(target.Protocol, body, effort)
+		if err := applyEffort(target, body, effort); err != nil {
+			return "", usage.Usage{}, 0, err
+		}
 	}
 	// codex 硬约束(store/stream/剥采样参数/instructions)与路径映射最后应用，
 	// 压过 defaults/overrides——与转发面、连通性检测同一顺序。
@@ -154,12 +156,41 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 }
 
 // applyEffort 把对话页选定的推理档写进请求体,与转发面 reasoning_level
-// 数字档共用同一份映射逻辑(effort.Apply 按协议定字段:responses=
+// 数字档共用同一份映射逻辑:模型配了映射脚本(effort_script)即由脚本
+// 接管写入位置,否则走协议内置映射(effort.Apply:responses=
 // reasoning.effort、chat_completions=reasoning_effort、anthropic=
 // output_config.effort 或 none 时 thinking disabled、gemini=
 // thinkingConfig.thinkingLevel)。
-func applyEffort(protocol string, body map[string]any, value string) {
-	effort.Apply(protocol, body, value)
+func applyEffort(target resolve.ResolvedTarget, body map[string]any, value string) error {
+	if target.EffortScript == "" {
+		effort.Apply(target.Protocol, body, value)
+		return nil
+	}
+	// 对话页按值选档,反查档号喂脚本 ctx.level(声明按值唯一)。
+	level := ""
+	for _, e := range target.Efforts {
+		if e.Value == value {
+			level = e.Name
+			break
+		}
+	}
+	out, err := effort.RunScript(target.EffortScript, effort.ScriptContext{
+		Level:    level,
+		Value:    value,
+		Protocol: target.Protocol,
+		Efforts:  target.Efforts,
+		Request:  body,
+	})
+	if err != nil {
+		return err
+	}
+	for k := range body {
+		delete(body, k)
+	}
+	for k, v := range out {
+		body[k] = v
+	}
+	return nil
 }
 
 // messageList 生成 [{role, content}] 形态；content 由 perMessage 决定。

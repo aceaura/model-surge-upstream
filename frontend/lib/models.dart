@@ -241,6 +241,7 @@ class UpstreamModel {
     required this.enabled,
     this.efforts,
     this.effortsEffective = const [],
+    this.effortScript = '',
   });
 
   final String id;
@@ -264,6 +265,11 @@ class UpstreamModel {
   /// 服务端算好的有效支持列表(存量自动模式=上游声明),空列表=不支持。
   final List<EffortEntry> effortsEffective;
 
+  /// 档位映射脚本({apply: function(ctx){...}} 对象字面量):空=走协议
+  /// 内置映射;非空即接管 effort 写入位置,承接「协议外壳+自家字段」
+  /// 的厂商差异(如 kimi 顶层 reasoning_effort)。
+  final String effortScript;
+
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
         id: json['id'] as String,
         account: json['account'] as String? ?? '',
@@ -281,6 +287,7 @@ class UpstreamModel {
             (json['efforts_effective'] as List<dynamic>? ?? const [])
                 .map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
                 .toList(),
+        effortScript: json['effort_script'] as String? ?? '',
       );
 }
 

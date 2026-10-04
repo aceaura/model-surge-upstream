@@ -102,6 +102,33 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			Protocol: "gemini", BaseURL: upstreamURL, NativeModel: "gemini-2.5-pro",
 			Headers: map[string]string{"Authorization": "Bearer real-gemini-key"},
 		},
+		// my-kimi 配了映射脚本:anthropic 外壳但档位走顶层 reasoning_effort
+		// (kimi K3 官方口径),脚本接管写入位置、内置映射不再生效。
+		"my-kimi": {
+			ModelID: "my-kimi", Account: "kimi-1", ProviderID: "kimi",
+			Protocol: "anthropic", BaseURL: upstreamURL, NativeModel: "k3-256k",
+			Headers: map[string]string{"x-api-key": "real-account-key"},
+			Efforts: []effort.Entry{
+				{Name: "1", Value: "low"},
+				{Name: "2", Value: "high"},
+				{Name: "3", Value: "max"},
+			},
+			EffortScript: `({apply: function(ctx) {
+				ctx.request.reasoning_effort = ctx.value;
+				ctx.request.seen_level = ctx.level;
+				return ctx.request;
+			}})`,
+		},
+		// my-badscript 的脚本运行期必抛错,验证失败按 502 家族错误外壳回。
+		"my-badscript": {
+			ModelID: "my-badscript", Account: "openai-1", ProviderID: "openai",
+			Protocol: "chat_completions", BaseURL: upstreamURL, NativeModel: "gpt-5",
+			Headers: map[string]string{"Authorization": "Bearer real-openai-key"},
+			Efforts: []effort.Entry{
+				{Name: "1", Value: "low"},
+			},
+			EffortScript: `({apply: function(ctx){ throw new Error("boom"); }})`,
+		},
 	}}
 	if upstreamURL == "" {
 		// 调用方不关心桩地址时用 httptest 自动分配的。
@@ -365,6 +392,60 @@ func TestReasoningLevelYieldsToOverrides(t *testing.T) {
 	}
 	if _, leaked := got["reasoning_level"]; leaked {
 		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+}
+
+// 映射脚本接管:模型配了 effort_script 即由脚本决定写入位置(顶层
+// reasoning_effort),协议内置映射(anthropic 本应写 output_config)不
+// 再生效;ctx 带档号与映射值,reasoning_level 照例消费不泄漏。
+func TestReasoningLevelScriptTakesOver(t *testing.T) {
+	h, cap, cleanup := newTestHandler(t, "")
+	defer cleanup()
+
+	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
+		map[string]string{"x-api-key": testKey},
+		`{"model":"my-kimi","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"reasoning_level":"1"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	body, _, _ := cap.snapshot()
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("upstream body not json: %v", err)
+	}
+	if got["reasoning_effort"] != "low" {
+		t.Fatalf("脚本应写顶层 reasoning_effort: %v", got)
+	}
+	if got["seen_level"] != "1" {
+		t.Fatalf("ctx.level 未传给脚本: %v", got)
+	}
+	if _, ok := got["output_config"]; ok {
+		t.Fatalf("脚本接管后内置映射不应再写 output_config: %v", got)
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+	if got["model"] != "k3-256k" {
+		t.Fatalf("model = %v, want k3-256k", got["model"])
+	}
+}
+
+// 脚本运行期失败:请求按 502 家族错误外壳回,不把坏请求发上游。
+func TestReasoningLevelScriptFailure(t *testing.T) {
+	h, cap, cleanup := newTestHandler(t, "")
+	defer cleanup()
+
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"my-badscript","messages":[],"reasoning_level":"1"}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "effort_script_failed") {
+		t.Fatalf("body = %s, want effort_script_failed", rec.Body.String())
+	}
+	if body, _, _ := cap.snapshot(); len(body) != 0 {
+		t.Fatalf("脚本失败的请求不应发上游: %s", body)
 	}
 }
 

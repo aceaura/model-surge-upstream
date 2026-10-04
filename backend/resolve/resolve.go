@@ -40,6 +40,9 @@ type ResolvedTarget struct {
 	// Efforts 是模型的有效推理档列表（自动模式=上游声明，显式数组=管理员
 	// 声明），对话页发送侧按它校验所选档位；空列表表示该模型不支持 effort。
 	Efforts []effort.Entry `json:"efforts,omitempty"`
+	// EffortScript 是模型的档位映射脚本：空=走协议内置映射，非空即由脚本
+	// 接管 effort 写入位置（厂商差异的承接点）。
+	EffortScript string `json:"effort_script,omitempty"`
 }
 
 // 认证头名。
@@ -160,6 +163,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Overrides:     m.Overrides,
 		Compact:       m.Compact,
 		Efforts:       r.effectiveEfforts(ctx, acc.Name, m),
+		EffortScript:  m.EffortScript,
 	}, nil
 }
 

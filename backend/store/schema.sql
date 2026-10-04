@@ -37,6 +37,12 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS compact JSONB NOT NULL DEFAULT '{}';
 -- 数组=管理员显式声明（空数组即该模型不支持 effort）。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS efforts JSONB NOT NULL DEFAULT 'null';
 
+-- effort_script 为档位映射脚本（JS 对象字面量 {apply: function(ctx){...}}）：
+-- 空串=未配置走协议内置映射；非空即接管——apply 读元数据（数字档声明）与
+-- 当前请求体，返回写入了 effort 的完整新请求体，承接「协议外壳+自家字段」
+-- 的厂商差异（如 kimi 顶层 reasoning_effort）。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_script TEXT NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 
 -- 代理转发面配置：单行表（id 恒为 1）。api_key 为空表示转发面关闭。

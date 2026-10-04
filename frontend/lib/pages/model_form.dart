@@ -89,6 +89,10 @@ class _ModelFormState extends State<ModelForm> {
   late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
   late bool _disableThinking = _effortInit.off;
   late final List<_EffortRow> _effortRows = _effortInit.rows;
+  // 档位映射脚本:留空=协议内置映射(output_config.effort 等);非空即由
+  // 脚本接管 effort 写入位置,承接「协议外壳+自家字段」的厂商差异。
+  late final TextEditingController _effortScript =
+      TextEditingController(text: _source?.effortScript ?? '');
 
   ({bool off, List<_EffortRow> rows}) _initialEffort() {
     final source = _source;
@@ -125,6 +129,7 @@ class _ModelFormState extends State<ModelForm> {
     _overrides.dispose();
     _compactThreshold.dispose();
     _compactKeepTurns.dispose();
+    _effortScript.dispose();
     for (final r in _effortRows) {
       r.dispose();
     }
@@ -194,6 +199,7 @@ class _ModelFormState extends State<ModelForm> {
           overrides: overrides!,
           compact: _buildCompact(),
           efforts: _efforts,
+          effortScript: _effortScript.text.trim(),
           enabled: _enabled,
         );
       } else {
@@ -207,6 +213,7 @@ class _ModelFormState extends State<ModelForm> {
           overrides: overrides!,
           compact: _buildCompact(),
           efforts: _efforts,
+          effortScript: _effortScript.text.trim(),
           enabled: _enabled,
         );
       }
@@ -480,8 +487,8 @@ class _ModelFormState extends State<ModelForm> {
         if (_effortRows[i].value.text.trim().isNotEmpty)
           '${i + 1}·${_effortRows[i].value.text.trim()}',
     ];
-    if (levels.isEmpty) return '不支持';
-    return levels.join(' / ');
+    final base = levels.isEmpty ? '不支持' : levels.join(' / ');
+    return _effortScript.text.trim().isEmpty ? base : '$base · 脚本';
   }
 
   Widget _effortSection() {
@@ -557,6 +564,36 @@ class _ModelFormState extends State<ModelForm> {
                 onPressed: () => setState(() => _effortRows.add(_EffortRow())),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('添加档位'),
+              ),
+            ),
+            const SizedBox(height: 14),
+            LabeledField(
+              key: const ValueKey('model-effort-script-field'),
+              label: '映射脚本',
+              hint: '选档后决定 effort 写进请求的哪个位置：apply(ctx) 可读 ctx.level（档号）、ctx.value（映射值）、ctx.protocol、ctx.efforts（上面元数据）与 ctx.request（当前请求体），返回完整请求体；留空走协议内置映射。脚本配置压过内置映射，但仍可被下方 JSON 覆盖参数压盖',
+              child: TextFormField(
+                key: const ValueKey('model-effort-script'),
+                controller: _effortScript,
+                maxLines: 10,
+                minLines: 4,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontFamily: 'Consolas',
+                  fontFamilyFallback: ['monospace'],
+                  height: 1.45,
+                ),
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  hintText:
+                      '({ apply: function(ctx) { ctx.request.reasoning_effort = ctx.value; return ctx.request; } })',
+                  hintStyle: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).hintColor,
+                    fontFamily: 'Consolas',
+                    fontFamilyFallback: const ['monospace'],
+                  ),
+                ),
+                onChanged: (_) => setState(() {}),
               ),
             ),
           ],
