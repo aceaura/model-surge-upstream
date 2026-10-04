@@ -208,24 +208,35 @@ class _LogsPageState extends State<LogsPage> {
               ),
             ),
             const SizedBox(width: 8),
-            IconButton(
-              tooltip: _follow ? '自动跟随：开' : '自动跟随：关',
-              icon: Icon(
-                _follow
-                    ? Icons.vertical_align_bottom_rounded
-                    : Icons.pause_circle_outline_rounded,
-                size: 18,
-                color: _follow ? t.primaryInk : t.faint,
+            Tooltip(
+              message: _follow ? '自动跟随：开（点击释放）' : '自动跟随：关（点击激活）',
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _follow ? t.primaryInk : null,
+                ),
+                onPressed: () {
+                  setState(() {
+                    _follow = !_follow;
+                    _autoPaused = false; // 手动开关优先，不被自动恢复覆盖
+                  });
+                  if (_follow) _followToEnd();
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _follow
+                          ? Icons.vertical_align_bottom_rounded
+                          : Icons.pause_circle_outline_rounded,
+                      size: 15,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text('跟随'),
+                  ],
+                ),
               ),
-              onPressed: () {
-                setState(() {
-                  _follow = !_follow;
-                  _autoPaused = false; // 手动开关优先，不被自动恢复覆盖
-                });
-                if (_follow) _followToEnd();
-              },
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: 8),
             OutlinedButton(
               onPressed: _clear,
               child: const Row(
