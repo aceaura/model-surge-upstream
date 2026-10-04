@@ -224,12 +224,13 @@ func TestBuildRequestUnknownProtocol(t *testing.T) {
 	}
 }
 
-// TestBuildRequestMergeParams 校验 defaults 补缺、overrides 压盖的合并语义。
+// TestBuildRequestMergeParams 校验 buildRequest 只做 defaults 补缺;
+// overrides 合并已移到 Complete(档位写入之后),由 TestCompleteEffort 覆盖。
 func TestBuildRequestMergeParams(t *testing.T) {
 	tgt := target(provider.ProtocolAnthropic)
 	// defaults 提供 temperature（body 无此键，应补入）与 max_tokens（body 已有，不应覆盖）。
 	tgt.Defaults = json.RawMessage(`{"temperature":0.3,"max_tokens":99}`)
-	// overrides 强制压盖 max_tokens。
+	// overrides 不在 buildRequest 内合并。
 	tgt.Overrides = json.RawMessage(`{"max_tokens":512}`)
 
 	_, body, err := buildRequest(tgt, history())
@@ -239,9 +240,8 @@ func TestBuildRequestMergeParams(t *testing.T) {
 	if body["temperature"] != 0.3 {
 		t.Fatalf("temperature = %v, 期望 defaults 补入 0.3", body["temperature"])
 	}
-	// overrides 优先于 body 默认的 2048。
-	if got, _ := body["max_tokens"].(float64); got != 512 {
-		t.Fatalf("max_tokens = %v, 期望 overrides 压盖为 512", body["max_tokens"])
+	if body["max_tokens"] != 2048 {
+		t.Fatalf("max_tokens = %v, 期望保留骨架 2048(overrides 不在此合并)", body["max_tokens"])
 	}
 }
 
@@ -529,6 +529,23 @@ func TestCompleteEffortInjection(t *testing.T) {
 		}
 		if (*got)["reasoning_effort"] != "low" {
 			t.Errorf("reasoning_effort = %v, want low", (*got)["reasoning_effort"])
+		}
+	})
+
+	t.Run("overrides 压选定档", func(t *testing.T) {
+		srv, got := capture(t, `{"output_text":"ok"}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolResponses,
+			BaseURL: srv.URL, NativeModel: "b",
+			// overrides 钉死 low,对话页选 high 也被压盖。
+			Overrides: json.RawMessage(`{"reasoning":{"effort":"low"}}`),
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		reasoning, _ := (*got)["reasoning"].(map[string]any)
+		if reasoning["effort"] != "low" {
+			t.Errorf("reasoning.effort = %v, want overrides 压盖为 low", reasoning["effort"])
 		}
 	})
 

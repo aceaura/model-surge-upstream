@@ -41,13 +41,16 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 	if err != nil {
 		return "", usage.Usage{}, 0, err
 	}
-	// 每条消息的显式选择压过模型 defaults/overrides,且先于 codex 整形
-	// (ShapeBody 看到 reasoning 会补 include)。
+	// 档位写进骨架+defaults 后的体,再由 overrides 合并压盖:
+	// 优先级 overrides > 对话页选定档 > defaults,与转发面
+	// (overrides > reasoning_level 映射 > 请求参数 > defaults)同一形态。
+	// applyEffort 先于 codex 整形(ShapeBody 看到 reasoning 会补 include)。
 	if effort != "" {
 		if err := applyEffort(target, body, effort); err != nil {
 			return "", usage.Usage{}, 0, err
 		}
 	}
+	body = mergeParams(body, rawObject(target.Overrides))
 	// codex 硬约束(store/stream/剥采样参数/instructions)与路径映射最后应用，
 	// 压过 defaults/overrides——与转发面、连通性检测同一顺序。
 	if target.ProviderID == codex.ProviderID {
@@ -116,8 +119,8 @@ func snippet(raw []byte) string {
 }
 
 // buildRequest 按协议生成上游路径后缀与请求体。体先按协议形态构造，
-// 再叠模型的 defaults（缺失才填）与 overrides（强制压盖），
-// 与转发面给调用方的合并语义保持一致。
+// 再叠模型的 defaults（缺失才填）；overrides 由 Complete 在档位写入后
+// 合并，保证 overrides 恒可压盖对话页选定档。
 func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map[string]any, error) {
 	var suffix string
 	var body map[string]any
@@ -151,7 +154,6 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 			fmt.Sprintf("model %q speaks unknown protocol %q", target.ModelID, target.Protocol))
 	}
 	body = mergeParams(rawObject(target.Defaults), body)
-	body = mergeParams(body, rawObject(target.Overrides))
 	return suffix, body, nil
 }
 
