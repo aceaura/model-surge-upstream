@@ -256,7 +256,7 @@ Authorization: Bearer <密钥>
 | `context_window` | int | 恒有（管理面形态） | 上下文窗口 token 数声明；`0` 表示未声明 |
 | `defaults` | object | 恒有 | 缺省填充参数：调用方缺什么补什么；空对象表示无 |
 | `overrides` | object | 恒有 | 强制覆盖参数：无论调用方给什么都压盖；空对象表示无 |
-| `effort_script` | string | 恒有（管理面形态） | 档位映射脚本（`{ apply: function(ctx) {...} }` 对象字面量）：空串=走协议内置映射；非空即接管 effort 写入位置，`ctx` 带 `level`/`protocol`/`efforts`/`request`，返回完整新请求体；元数据（`efforts`）只作档位清单与展示，上行值由脚本按档号自行决定 |
+| `effort_script` | string | 恒有（管理面形态） | 档位映射脚本（`{ apply: function(ctx) {...} }` 对象字面量）：空串=走协议内置映射；非空即接管 effort 写入位置，`ctx` 带 `level`/`protocol`/`efforts`/`request`，返回完整新请求体；网关不做查表（`ctx` 不带映射值），上行值由脚本按 `level` 在 `efforts` 元数据里查出后自行写入 |
 | `enabled` | bool | 恒有 | 模型开关；`false` 时 resolve 返回 `409 model_disabled` |
 | `created_at` | time | 恒有 | |
 | `updated_at` | time | 恒有 | |
@@ -1279,7 +1279,7 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 **转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
-2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并给思考参数赋值。赋值落点两级：**模型配了映射脚本（`effort_script`）即由脚本接管**——脚本是 JS 对象字面量 `{ apply: function(ctx) {...} }`（额度脚本同款 goja 机制，2s 上限），`ctx` 带 `level`（档号）、`protocol`、`efforts`（元数据声明）与 `request`（当前请求体），返回完整新请求体，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关）；**元数据不参与映射**——`efforts` 只作档位清单与界面/清单展示，档号到上行值的翻译表写在脚本体内按 `ctx.level` 自查（如 `var e = { "1": "low", "2": "high", "3": "max" }[ctx.level]`），查不到就不落字段、上游吃自家默认。未传 `reasoning_level` 时脚本不执行；档号不在声明列表里（或形态不对）则原样透传不动体、脚本也不执行。脚本运行失败回 502（`effort_script_failed`）。**未配脚本走协议内置映射**（2026-10-04 逐协议核对官方 SDK/文档）：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`（两协议值域均含 `none`=关闭思考）；`anthropic` 写 `output_config.effort`（官方值域 low/medium/high/xhigh/max），`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel`（枚举大写 MINIMAL/LOW/MEDIUM/HIGH），`none` 不动体（3.x 全系不可关思考、2.5 走 thinkingBudget 预算制，无通用映射）。赋值落在客户端参数层，优先级 `defaults < 映射 < overrides`——JSON 覆盖参数恒可压盖映射（含脚本）结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
+2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并给思考参数赋值。赋值落点两级：**模型配了映射脚本（`effort_script`）即由脚本接管**——脚本是 JS 对象字面量 `{ apply: function(ctx) {...} }`（额度脚本同款 goja 机制，2s 上限），`ctx` 带 `level`（档号）、`protocol`、`efforts`（元数据声明）与 `request`（当前请求体），返回完整新请求体，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关）；**网关不做查表**（`ctx` 不带映射值）——路由由脚本读元数据完成：按 `ctx.level` 在 `ctx.efforts` 里查 `value` 再写入目标位置（如 `for (var i = 0; i < ctx.efforts.length; i++) { if (ctx.efforts[i].name === ctx.level) { ctx.request.reasoning_effort = ctx.efforts[i].value; break; } }`），查不到就不落字段、上游吃自家默认。未传 `reasoning_level` 时脚本不执行；档号不在声明列表里（或形态不对）则原样透传不动体、脚本也不执行。脚本运行失败回 502（`effort_script_failed`）。**未配脚本走协议内置映射**（2026-10-04 逐协议核对官方 SDK/文档）：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`（两协议值域均含 `none`=关闭思考）；`anthropic` 写 `output_config.effort`（官方值域 low/medium/high/xhigh/max），`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel`（枚举大写 MINIMAL/LOW/MEDIUM/HIGH），`none` 不动体（3.x 全系不可关思考、2.5 走 thinkingBudget 预算制，无通用映射）。赋值落在客户端参数层，优先级 `defaults < 映射 < overrides`——JSON 覆盖参数恒可压盖映射（含脚本）结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
 3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
 4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
 5. 逐跳头（Connection 等）按 HTTP 规范不转发。

@@ -1,9 +1,10 @@
 // 档位映射脚本的执行器,账号额度脚本同款 goja 机制:
 // 脚本是一个 JS 对象字面量 ({ apply: function(ctx) {...} }),apply 按
-// ctx.level 自行决定上行值与写入位置(映射表写在脚本体内,元数据只作
-// 档位清单与界面展示),返回完整的新请求体。模型的协议内置映射(Apply)
-// 只覆盖四协议官方字段,「anthropic 外壳+自家字段」这类厂商差异(kimi
-// 顶层 reasoning_effort)由脚本承接:配了脚本即接管,没配走内置映射。
+// ctx.level 在 ctx.efforts 元数据里查上行值、自行决定写入位置(网关
+// 不做查表,ctx 不带映射值),返回完整的新请求体。模型的协议内置映射
+// (Apply)只覆盖四协议官方字段,「anthropic 外壳+自家字段」这类厂商
+// 差异(kimi 顶层 reasoning_effort)由脚本承接:配了脚本即接管,没配
+// 走内置映射。
 package effort
 
 import (
@@ -19,16 +20,17 @@ import (
 // 不像额度脚本那样可配——映射在请求热路径上,必须快且确定。
 const scriptTimeout = 2 * time.Second
 
-// ScriptContext 是传给 apply 的 ctx 形参。元数据(数字档声明)只作档位
-// 清单与界面展示,不参与映射——上行值由脚本按 level 自行决定。
+// ScriptContext 是传给 apply 的 ctx 形参。网关不做档号查表(ctx 不带
+// 映射值)——路由由脚本读元数据完成:按 level 在 efforts 里查 value,
+// 再自行决定写进请求的哪个位置。
 type ScriptContext struct {
 	// Level 是命中的数字档号(如 "2");对话页按值选档时反查档号,
 	// 查不到(值不在声明里)传空串。
 	Level string
 	// Protocol 是出站协议(anthropic/chat_completions/responses/gemini)。
 	Protocol string
-	// Efforts 是模型的有效数字档声明 [{name,value}],仅供脚本参考
-	// (如按档号取展示名),映射表应写在脚本体内。
+	// Efforts 是模型的有效数字档声明 [{name,value}],脚本按 level
+	// 在其中查上行值。
 	Efforts []Entry
 	// Request 是当前请求体。转发面在 defaults/overrides 合并前调用
 	// (脚本结果仍可被 overrides 压盖);对话页在 defaults 合并后、
@@ -56,10 +58,16 @@ func RunScript(code string, sc ScriptContext) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// efforts 摊成 {name,value} 小写键的 map 喂脚本,与 API JSON 形态一致
+	// (goja 对 Go 结构体暴露的是大写字段名,直接传结构体脚本侧取不到)。
+	efforts := make([]map[string]any, len(sc.Efforts))
+	for i, e := range sc.Efforts {
+		efforts[i] = map[string]any{"name": e.Name, "value": e.Value}
+	}
 	ctx := vm.ToValue(map[string]any{
 		"level":    sc.Level,
 		"protocol": sc.Protocol,
-		"efforts":  sc.Efforts,
+		"efforts":  efforts,
 		"request":  sc.Request,
 	})
 	res, err := apply(goja.Undefined(), ctx)

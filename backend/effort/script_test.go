@@ -8,14 +8,18 @@ import (
 )
 
 // kimiScript 是 kimi K3 的档位映射:思考不可关,档位走顶层
-// reasoning_effort(anthropic 外壳但不吃 output_config)。元数据不参与
-// 映射——档号到上行值的表写在脚本体内,查不到(未声明档)不落字段,
+// reasoning_effort(anthropic 外壳但不吃 output_config)。脚本按
+// ctx.level 在 ctx.efforts 元数据里查上行值再写入——网关不做查表,
+// 路由由脚本读元数据完成;查不到(未声明档)或映射 none 不落字段,
 // 上游吃自家默认 max。
 const kimiScript = `({
 	apply: function(ctx) {
-		var effort = { "1": "low", "2": "high", "3": "max" }[ctx.level];
-		if (effort) {
-			ctx.request.reasoning_effort = effort;
+		var hit = null;
+		for (var i = 0; i < ctx.efforts.length; i++) {
+			if (ctx.efforts[i].name === ctx.level) { hit = ctx.efforts[i]; break; }
+		}
+		if (hit && hit.value !== "none") {
+			ctx.request.reasoning_effort = hit.value;
 		}
 		return ctx.request;
 	}

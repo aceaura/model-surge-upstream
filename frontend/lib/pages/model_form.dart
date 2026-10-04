@@ -570,7 +570,7 @@ class _ModelFormState extends State<ModelForm> {
             LabeledField(
               key: const ValueKey('model-effort-script-field'),
               label: '映射脚本',
-              hint: '选档后决定 effort 写进请求的哪个位置：apply(ctx) 可读 ctx.level（档号）、ctx.protocol、ctx.efforts（上面元数据，仅作档位清单与展示）与 ctx.request（当前请求体），返回完整请求体；上行值由脚本按档号自行决定，档号查不到就不落字段（上游吃自家默认）。留空走协议内置映射；脚本结果仍可被下方 JSON 覆盖参数压盖',
+              hint: '选档后决定 effort 写进请求的哪个位置：apply(ctx) 可读 ctx.level（档号）、ctx.protocol、ctx.efforts（上面元数据）与 ctx.request（当前请求体），返回完整请求体；上行值由脚本按档号在元数据里查出再写入，查不到就不落字段（上游吃自家默认）。留空走协议内置映射；脚本结果仍可被下方 JSON 覆盖参数压盖',
               child: TextFormField(
                 key: const ValueKey('model-effort-script'),
                 controller: _effortScript,
@@ -585,7 +585,7 @@ class _ModelFormState extends State<ModelForm> {
                 decoration: InputDecoration(
                   border: const OutlineInputBorder(),
                   hintText:
-                      '({ apply: function(ctx) { var e = { "1": "low", "2": "high" }[ctx.level]; if (e) { ctx.request.reasoning_effort = e; } return ctx.request; } })',
+                      '({ apply: function(ctx) { for (var i = 0; i < ctx.efforts.length; i++) { if (ctx.efforts[i].name === ctx.level) { ctx.request.reasoning_effort = ctx.efforts[i].value; break; } } return ctx.request; } })',
                   hintStyle: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).hintColor,
