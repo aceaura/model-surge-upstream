@@ -494,7 +494,7 @@ class _ModelFormState extends State<ModelForm> {
       initiallyExpanded: true,
       child: LabeledField(
         key: const ValueKey('model-effort-mode-field'),
-        label: '支持档位',
+        label: '元数据',
         hint: '关闭思考开关=提供不思考选项（上行值 none）；每行一个档位：名是显示名（留空按值命名），值是发上游的档位字符串；开关关且删掉所有行即声明不支持推理档',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
