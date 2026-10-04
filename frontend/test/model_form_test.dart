@@ -326,7 +326,7 @@ void main() {
         find.byKey(const ValueKey('model-effort-script')));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('model-effort-script')),
-        '({ apply: function(ctx) { ctx.request.reasoning_effort = ctx.value; return ctx.request; } })');
+        '({ apply: function(ctx) { var e = { "1": "low" }[ctx.level]; if (e) { ctx.request.reasoning_effort = e; } return ctx.request; } })');
 
     await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
     await tester.pumpAndSettle();
@@ -343,7 +343,7 @@ void main() {
       {'name': '1', 'value': 'ultra'},
     ]);
     expect(sentBody!['effort_script'],
-        '({ apply: function(ctx) { ctx.request.reasoning_effort = ctx.value; return ctx.request; } })');
+        '({ apply: function(ctx) { var e = { "1": "low" }[ctx.level]; if (e) { ctx.request.reasoning_effort = e; } return ctx.request; } })');
 
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();

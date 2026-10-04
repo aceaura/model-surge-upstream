@@ -7,12 +7,15 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
+// kimiScript 是 kimi K3 的档位映射:思考不可关,档位走顶层
+// reasoning_effort(anthropic 外壳但不吃 output_config)。元数据不参与
+// 映射——档号到上行值的表写在脚本体内,查不到(未声明档)不落字段,
+// 上游吃自家默认 max。
 const kimiScript = `({
 	apply: function(ctx) {
-		// kimi K3:思考不可关,档位走顶层 reasoning_effort(anthropic 外壳
-		// 但不吃 output_config);0 档 none 不落字段(官方默认 max)。
-		if (ctx.value !== "none") {
-			ctx.request.reasoning_effort = ctx.value;
+		var effort = { "1": "low", "2": "high", "3": "max" }[ctx.level];
+		if (effort) {
+			ctx.request.reasoning_effort = effort;
 		}
 		return ctx.request;
 	}
@@ -44,7 +47,7 @@ func TestRunScript(t *testing.T) {
 		"messages":   []any{map[string]any{"role": "user", "content": "hi"}},
 	}
 	out, err := RunScript(kimiScript, ScriptContext{
-		Level: "2", Value: "high", Protocol: "anthropic",
+		Level: "2", Protocol: "anthropic",
 		Efforts: efforts, Request: body,
 	})
 	if err != nil {
@@ -62,16 +65,16 @@ func TestRunScript(t *testing.T) {
 	}
 }
 
-func TestRunScriptNoneSkipsField(t *testing.T) {
+func TestRunScriptUnknownLevelSkipsField(t *testing.T) {
 	out, err := RunScript(kimiScript, ScriptContext{
-		Level: "0", Value: "none", Protocol: "anthropic",
+		Level: "9", Protocol: "anthropic",
 		Request: map[string]any{"model": "k3-256k"},
 	})
 	if err != nil {
 		t.Fatalf("RunScript: %v", err)
 	}
 	if _, ok := out["reasoning_effort"]; ok {
-		t.Fatalf("none should not set reasoning_effort: %v", out)
+		t.Fatalf("unknown level should not set reasoning_effort: %v", out)
 	}
 }
 
@@ -82,7 +85,7 @@ func TestRunScriptFailures(t *testing.T) {
 		"missing fn":   `({map: function(ctx){ return ctx.request; }})`,
 		"syntax error": `({apply: function(})`,
 	} {
-		_, err := RunScript(code, ScriptContext{Value: "low", Request: map[string]any{}})
+		_, err := RunScript(code, ScriptContext{Level: "1", Request: map[string]any{}})
 		if err == nil {
 			t.Fatalf("%s: expected error", name)
 		}
@@ -94,11 +97,11 @@ func TestRunScriptFailures(t *testing.T) {
 
 func TestRunScriptReadsContext(t *testing.T) {
 	code := `({apply: function(ctx) {
-		ctx.request.echo = [ctx.level, ctx.value, ctx.protocol, String(ctx.efforts.length)];
+		ctx.request.echo = [ctx.level, String(ctx.value), ctx.protocol, String(ctx.efforts.length)];
 		return ctx.request;
 	}})`
 	out, err := RunScript(code, ScriptContext{
-		Level: "1", Value: "low", Protocol: "chat_completions",
+		Level: "1", Protocol: "chat_completions",
 		Efforts: []Entry{{Name: "1", Value: "low"}},
 		Request: map[string]any{},
 	})
@@ -109,14 +112,15 @@ func TestRunScriptReadsContext(t *testing.T) {
 	if !ok || len(echo) != 4 {
 		t.Fatalf("echo = %v", out["echo"])
 	}
-	if echo[0] != "1" || echo[1] != "low" || echo[2] != "chat_completions" || echo[3] != "1" {
+	// ctx 不再带 value(元数据不参与映射),读出来是 undefined。
+	if echo[0] != "1" || echo[1] != "undefined" || echo[2] != "chat_completions" || echo[3] != "1" {
 		t.Fatalf("echo = %v", echo)
 	}
 }
 
 func TestRunScriptTimeout(t *testing.T) {
 	_, err := RunScript(`({apply: function(ctx){ for(;;){} }})`,
-		ScriptContext{Value: "low", Request: map[string]any{}})
+		ScriptContext{Level: "1", Request: map[string]any{}})
 	if err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("err = %v, want timeout interrupt", err)
 	}

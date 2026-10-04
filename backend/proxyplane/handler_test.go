@@ -114,7 +114,8 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "3", Value: "max"},
 			},
 			EffortScript: `({apply: function(ctx) {
-				ctx.request.reasoning_effort = ctx.value;
+				var m = { "1": "low", "2": "high", "3": "max" };
+				ctx.request.reasoning_effort = m[ctx.level];
 				ctx.request.seen_level = ctx.level;
 				return ctx.request;
 			}})`,

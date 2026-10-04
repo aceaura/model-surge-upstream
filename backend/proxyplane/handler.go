@@ -553,12 +553,12 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 }
 
 // applyReasoningLevel 消费请求顶层的 reasoning_level 数字档:命中模型
-// 声明的档位(名=档号)即从体里删除(网关自有字段不进上游),并按映射出
-// 的档位值给思考开关/档位参数赋值;未提供的、形态不对的、值不在声明
-// 列表里的都原样透传。赋值落点两级:模型配了映射脚本(effort_script)
-// 即由脚本接管写入位置,否则走协议内置映射(effort.Apply,0 档映射
-// none=关闭思考)。赋值落在客户端参数层:优先级 defaults < 映射 <
-// overrides,JSON 覆盖参数恒可压盖映射结果。
+// 声明的档位(名=档号)即从体里删除(网关自有字段不进上游);未提供的、
+// 形态不对的、值不在声明列表里的都原样透传。赋值落点两级:模型配了映射
+// 脚本(effort_script)即由脚本按档号自行决定上行值与写入位置(元数据
+// 只作档位清单,不参与映射),否则走协议内置映射按元数据值赋值
+// (effort.Apply,0 档映射 none=关闭思考)。赋值落在客户端参数层:优先级
+// defaults < 映射 < overrides,JSON 覆盖参数恒可压盖映射结果。
 func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) error {
 	level, ok := reasoningLevel(body["reasoning_level"])
 	if !ok {
@@ -575,7 +575,6 @@ func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) err
 	}
 	out, err := effort.RunScript(target.EffortScript, effort.ScriptContext{
 		Level:    level,
-		Value:    mapped,
 		Protocol: target.Protocol,
 		Efforts:  target.Efforts,
 		Request:  body,

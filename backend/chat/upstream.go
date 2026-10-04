@@ -178,7 +178,6 @@ func applyEffort(target resolve.ResolvedTarget, body map[string]any, value strin
 	}
 	out, err := effort.RunScript(target.EffortScript, effort.ScriptContext{
 		Level:    level,
-		Value:    value,
 		Protocol: target.Protocol,
 		Efforts:  target.Efforts,
 		Request:  body,
