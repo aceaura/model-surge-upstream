@@ -786,6 +786,17 @@ String _fmtTokens(int n) {
   return '${(n / 1000000).toStringAsFixed(2)}M';
 }
 
+/// 整数的千分位格式：11893774 → 11,893,774。
+String _fmtInt(int n) {
+  final s = n.abs().toString();
+  final buf = StringBuffer(n < 0 ? '-' : '');
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+    buf.write(s[i]);
+  }
+  return buf.toString();
+}
+
 String _fmtTime(DateTime t) {
   final l = t.toLocal();
   String two(int v) => v.toString().padLeft(2, '0');
@@ -883,7 +894,7 @@ class _TrendChartState extends State<_TrendChart> {
                         child: Row(children: [
                           Container(width: 7, height: 7, decoration: BoxDecoration(color: row.$3, shape: BoxShape.circle)),
                           const SizedBox(width: 8),
-                          Expanded(child: Text('${row.$1}: ${row.$2}', style: TextStyle(fontSize: 12, color: row.$3))),
+                          Expanded(child: Text('${row.$1}: ${_fmtInt(row.$2)}', style: TextStyle(fontSize: 12, color: row.$3))),
                         ]),
                       ),
                   ],

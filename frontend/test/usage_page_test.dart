@@ -267,7 +267,7 @@ void main() {
       {
         'bucket': '2026-10-03T14:00:00Z',
         'input_tokens': 700, 'output_tokens': 60,
-        'cache_write_tokens': 9, 'cache_read_tokens': 500,
+        'cache_write_tokens': 9, 'cache_read_tokens': 11893774,
       },
     ];
     await _pumpUsage(tester, client: _stubClient(buckets: buckets));
@@ -292,18 +292,18 @@ void main() {
     expect(find.byKey(const ValueKey('usage-trend-tooltip')), findsOneWidget);
     expect(find.text('输入: 700'), findsOneWidget);
     expect(find.text('缓存创建: 9'), findsOneWidget);
-    expect(find.text('缓存命中: 500'), findsOneWidget);
+    expect(find.text('缓存命中: 11,893,774'), findsOneWidget);
     expect(find.text('输出: 60'), findsOneWidget);
     final tooltipTexts = tester.widgetList<Text>(find.descendant(
       of: find.byKey(const ValueKey('usage-trend-tooltip')),
       matching: find.byType(Text),
     )).map((text) => text.data).toList();
     expect(tooltipTexts.skip(1).toList(),
-        ['输入: 700', '输出: 60', '缓存创建: 9', '缓存命中: 500']);
+        ['输入: 700', '输出: 60', '缓存创建: 9', '缓存命中: 11,893,774']);
     for (final pair in [
       ('输入: 700', '输出: 60'),
       ('输出: 60', '缓存创建: 9'),
-      ('缓存创建: 9', '缓存命中: 500'),
+      ('缓存创建: 9', '缓存命中: 11,893,774'),
     ]) {
       expect(tester.getTopLeft(find.text(pair.$2)).dy,
           greaterThan(tester.getTopLeft(find.text(pair.$1)).dy));
