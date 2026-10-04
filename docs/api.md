@@ -219,9 +219,9 @@ Authorization: Bearer <密钥>
 | `kimi` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
 | `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
 | `deepseek` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | `{path: "/user/balance", method: "GET", kind: "balance", unit: "currency", reset: "prepaid"}` | `/models` |
-| `bailian` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions` | `bearer` | — | — |
+| `bailian` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions`, `responses` | `bearer` | — | `GET /v1/models` |
 
-> `bailian` 是阿里云百炼 Token Plan 中国版（`subscription` / `CN` / `api_key`，使用套餐专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。暂不声明未经验证的上游模型列举、Responses 和额度查询能力。
+> `bailian` 是阿里云百炼 Token Plan 中国版（`subscription` / `CN` / `api_key`，使用套餐专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。真实探针已验证模型列举和 Responses 可用，声明 `GET /v1/models` 与两种 OpenAI 协议；额度查询能力尚未验证，不声明 Quota。
 
 > 除 `deepseek` 外的提供商均未声明 `quota`。注意速率窗口维度不依赖 `quota` 声明的形态字段，只要额度端点通了就会从响应头一并读出（见 3.6）。
 

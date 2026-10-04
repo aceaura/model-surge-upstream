@@ -215,11 +215,14 @@ func TestBailianSpec(t *testing.T) {
 	if s.DisplayName != "Aliyun Bailian" || s.Auth != AuthBearer || s.Credential != CredAPIKey {
 		t.Errorf("unexpected bailian spec: %+v", s)
 	}
-	if len(s.Protocols) != 1 || !s.Supports(ProtocolChatCompletions) {
-		t.Errorf("protocols = %v, want chat_completions only", s.Protocols)
+	if len(s.Protocols) != 2 || !s.Supports(ProtocolChatCompletions) || !s.Supports(ProtocolResponses) {
+		t.Errorf("protocols = %v, want chat_completions and responses", s.Protocols)
 	}
-	if s.Models != nil || s.Quota != nil {
-		t.Errorf("unverified endpoints must not be declared: %+v", s)
+	if s.Models == nil || s.Models.Path != "/v1/models" || s.Models.Method != "GET" {
+		t.Errorf("models = %+v, want GET /v1/models", s.Models)
+	}
+	if s.Quota != nil {
+		t.Errorf("unverified quota endpoint must not be declared: %+v", s.Quota)
 	}
 }
 

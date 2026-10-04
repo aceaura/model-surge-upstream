@@ -106,10 +106,11 @@ func init() {
 		DisplayName: "Aliyun Bailian",
 		Website:     "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
 		BaseURL:     "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode",
-		Protocols:   []string{ProtocolChatCompletions},
+		Protocols:   []string{ProtocolChatCompletions, ProtocolResponses},
 		Auth:        AuthBearer,
 		Credential:  CredAPIKey,
 		Billing:     BillingSubscription,
 		Region:      RegionCN,
+		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 }
