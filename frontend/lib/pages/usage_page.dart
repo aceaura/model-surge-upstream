@@ -9,7 +9,7 @@ import '../ui/feedback.dart';
 import '../ui/page_header.dart';
 import 'all_models_page.dart' show SearchSeed;
 
-/// 用量统计页：四桶 token（新增输入/输出/缓存创建/缓存命中）的总指标、
+/// 用量统计页：四桶 token（输入/输出/缓存创建/缓存命中）的总指标、
 /// 按小时或按天的趋势、以及请求日志/账号/模型三个维度的明细。
 /// 口径与 CC Switch 使用统计对齐：输入为扣缓存后的净输入，
 /// 真实消耗 = 净输入 + 输出 + 缓存创建 + 缓存命中。
@@ -436,7 +436,7 @@ class _UsagePageState extends State<UsagePage> {
   Widget _statCards(AppTokens t) {
     final s = _summary;
     final cards = [
-      _statCard(t, '新增输入', Icons.arrow_downward, t.primary,
+      _statCard(t, '输入', Icons.arrow_downward, t.primary,
           s == null ? '—' : _fmtTokens(s.input)),
       _statCard(t, '输出', Icons.arrow_upward, t.success,
           s == null ? '—' : _fmtTokens(s.output)),
@@ -634,7 +634,7 @@ class _UsagePageState extends State<UsagePage> {
       _tableHeader(t, [
         (keyLabel, 2.2),
         ('请求', 1),
-        ('新增输入', 1.2),
+        ('输入', 1.2),
         ('输出', 1.2),
         ('缓存创建', 1.2),
         ('缓存命中', 1.2),

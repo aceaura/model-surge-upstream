@@ -70,13 +70,13 @@ void main() {
     await _pumpUsage(tester);
 
     final cards = [
-      find.text('新增输入'),
+      find.text('输入').first,
       find.text('输出').first,
       find.text('缓存创建').first,
       find.text('缓存命中').first,
     ];
     final legends = [
-      find.text('输入').first,
+      find.text('输入').at(1),
       find.text('输出').at(1),
       find.text('缓存创建').at(1),
       find.text('缓存命中').at(1),
@@ -146,7 +146,7 @@ void main() {
         expect(headers, ['时间', '来源', '账号', '模型', '输入', '输出', '缓存创建', '缓存命中', '用时', '状态']);
         expect(values.sublist(4, 8), ['111', '444', '222', '333']);
       } else {
-        expect(headers, [tab == '账号统计' ? '账号' : '模型', '请求', '新增输入', '输出', '缓存创建', '缓存命中', '命中率']);
+        expect(headers, [tab == '账号统计' ? '账号' : '模型', '请求', '输入', '输出', '缓存创建', '缓存命中', '命中率']);
         expect(values, ['group-key', '7', '555', '888', '666', '777', '25.0%']);
       }
       final start = tab == '请求日志' ? 4 : 2;
