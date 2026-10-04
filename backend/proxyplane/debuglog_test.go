@@ -19,6 +19,12 @@ func TestRequestDebugViewOmitsLongTextKeepsParams(t *testing.T) {
 		"stream":      true,
 		"temperature": 0.6,
 		"thinking":    map[string]any{"type": "enabled", "budget_tokens": float64(2000)},
+		"tools": []any{
+			// anthropic 形态:顶层 name。
+			map[string]any{"name": "Read", "description": strings.Repeat("d", 9000), "input_schema": map[string]any{"type": "object"}},
+			// openai 形态:function.name。
+			map[string]any{"type": "function", "function": map[string]any{"name": "Bash", "description": "x"}},
+		},
 	}
 	view := requestDebugView(body)
 
@@ -27,6 +33,9 @@ func TestRequestDebugViewOmitsLongTextKeepsParams(t *testing.T) {
 	}
 	if got := view["system"]; got != "(100 chars omitted)" {
 		t.Fatalf("system placeholder = %v", got)
+	}
+	if got := view["tools"]; got != "(2 tools: Read, Bash)" {
+		t.Fatalf("tools placeholder = %v", got)
 	}
 	if got := view["max_tokens"]; got != float64(8192) {
 		t.Fatalf("max_tokens = %v", got)

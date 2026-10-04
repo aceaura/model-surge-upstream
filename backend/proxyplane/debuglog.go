@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // longTextKeys 是各协议承载对话正文的顶层字段:调试看的是参数与合并结果,
@@ -32,13 +33,17 @@ const (
 	captureLimit = 64 << 10
 )
 
-// requestDebugView 返回请求体的调试视图:长文本字段换占位说明,其余参数
-// 原样保留,藏在他处的超长字符串截断兜底。
+// requestDebugView 返回请求体的调试视图:长文本字段换占位说明,工具清单
+// 压成名字列表,其余参数原样保留,藏在他处的超长字符串截断兜底。
 func requestDebugView(body map[string]any) map[string]any {
 	out := make(map[string]any, len(body))
 	for k, v := range body {
 		if longTextKeys[k] {
 			out[k] = omittedNote(v)
+			continue
+		}
+		if k == "tools" {
+			out[k] = toolsNote(v)
 			continue
 		}
 		out[k] = clampStrings(v)
@@ -56,6 +61,33 @@ func omittedNote(v any) string {
 	default:
 		return "(omitted)"
 	}
+}
+
+// toolsNote 把工具清单压成名字列表:调试要确认「给了哪些工具」,每个工具的
+// description/input_schema 展开可达几十 KB,原样输出只会刷屏。名字取两种
+// 原生位置:anthropic/gemini 的顶层 name、openai 的 function.name。
+func toolsNote(v any) any {
+	items, ok := v.([]any)
+	if !ok {
+		return clampStrings(v)
+	}
+	names := make([]string, 0, len(items))
+	for _, it := range items {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := m["name"].(string); ok {
+			names = append(names, name)
+			continue
+		}
+		if fn, ok := m["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	return fmt.Sprintf("(%d tools: %s)", len(items), strings.Join(names, ", "))
 }
 
 // clampStrings 深遍历并截断超长字符串,其余类型原样。
