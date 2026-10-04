@@ -70,18 +70,9 @@ class _ChatPageState extends State<ChatPage> {
     return const [];
   }
 
-  /// 档位值 → 显示名:''是「默认(不下发)」,其余取有效列表里的名。
-  String _effortLabel(String value) {
-    if (value == '') return '默认';
-    for (final m in _models) {
-      if (m.id == _modelId) {
-        for (final e in m.effortsEffective) {
-          if (e.value == value) return e.name;
-        }
-      }
-    }
-    return value;
-  }
+  /// 档位值 → 显示名:''是「默认(不下发)」,其余直接显示上行值原文
+  /// (英文档位名),不做中文转译避免歧义。
+  String _effortLabel(String value) => value == '' ? '默认' : value;
 
   @override
   void initState() {

@@ -662,7 +662,8 @@ void main() {
 
   testWidgets('推理档选择器按所选模型的支持列表渲染,选择后随发送上行', (tester) async {
     // kimi-1/k2 有效支持列表为空:选择器不露面;切到 codex-1/gpt-6.1-sol
-    // (有效列表 minimal~high)出现且只渲染这些档,选「高」后 POST body 带
+    // (有效列表 minimal~high)出现且只渲染这些档。菜单显示上行值原文
+    // (英文档位名,不显示条目 name 的中文转译),选 high 后 POST body 带
     // effort=high。
     final sent = <Map<String, dynamic>>[];
     final client = ApiClient(
@@ -764,11 +765,13 @@ void main() {
 
     await tester.tap(find.text('默认'));
     await tester.pumpAndSettle();
-    expect(find.text('最小'), findsOneWidget);
-    expect(find.text('超高'), findsNothing, reason: '词表有但模型不支持的不渲染');
+    expect(find.text('minimal'), findsOneWidget);
+    expect(find.text('最小'), findsNothing, reason: '显示上行值原文,不做中文转译');
+    expect(find.text('高'), findsNothing, reason: '条目 name 不露面');
+    expect(find.text('xhigh'), findsNothing, reason: '模型不支持的档不渲染');
 
-    // 选「高」并发送。
-    await tester.tap(find.text('高'));
+    // 选 high 并发送。
+    await tester.tap(find.text('high'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'hi');
     await tester.tap(find.byIcon(Icons.send_rounded));
