@@ -119,9 +119,23 @@ void main() {
     // 行首拖拽柄:每行一个
     expect(find.byType(ReorderableDragStartListener), findsNWidgets(3));
 
+    // 命中区不再是 18px 小图标:28 宽、撑满行高
+    final grip =
+        tester.getSize(find.byType(ReorderableDragStartListener).first);
+    expect(grip.width, 28);
+    expect(grip.height, greaterThan(40));
+
     // 拖 a-1 的柄越过两行落到底部
-    await tester.drag(
-        find.byType(ReorderableDragStartListener).first, const Offset(0, 260));
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(ReorderableDragStartListener).first));
+    await gesture.moveBy(const Offset(0, 260));
+    await tester.pump();
+    // 拖起时悬浮层垫透明 Material:不再垫白底(卡片下方白边回归)
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Material && w.type == MaterialType.transparency),
+        findsWidgets);
+    await gesture.up();
     await tester.pumpAndSettle();
 
     expect(captured, hasLength(1));

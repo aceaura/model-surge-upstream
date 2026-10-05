@@ -330,6 +330,10 @@ class _AllModelsPageState extends State<AllModelsPage> {
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             // 拖拽柄只在行首;默认柄会让整行抢占滚动手势
             buildDefaultDragHandles: false,
+            // 默认 proxyDecorator 垫一层白色 Material,拖起时卡片底部
+            // padding 处露白边;透明 Material 保持悬浮层与列表底色一致。
+            proxyDecorator: (child, index, animation) =>
+                Material(type: MaterialType.transparency, child: child),
             itemCount: visible.length,
             onReorderItem: (o, n) => _onReorder(visible, o, n),
             itemBuilder: (context, i) => Padding(
@@ -399,89 +403,97 @@ class _AllModelsPageState extends State<AllModelsPage> {
     return HoverCard(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            // 拖拽柄常驻行首(仿 CC Switch 的 GripVertical),弱色不抢眼
-            if (dragIndex != null) ...[
-              ReorderableDragStartListener(
-                index: dragIndex,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.grab,
-                  child: Icon(Icons.drag_indicator, size: 18, color: t.faint),
+        child: IntrinsicHeight(
+          child: Row(
+            children: [
+              // 拖拽柄常驻行首(仿 CC Switch 的 GripVertical),弱色不抢眼;
+              // 命中区撑满行高、28 宽——18 图标本身太小,整条左边带都可抓。
+              // 透明底色不能省:无色的 Container 不参与命中测试。
+              if (dragIndex != null)
+                ReorderableDragStartListener(
+                  index: dragIndex,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.grab,
+                    child: Container(
+                      width: 28,
+                      height: double.infinity,
+                      color: Colors.transparent,
+                      alignment: Alignment.centerLeft,
+                      child: Icon(Icons.drag_indicator, size: 18, color: t.faint),
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-            ],
-            ProviderAvatar(providerId: providerId),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          m.id,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: t.ink,
+              ProviderAvatar(providerId: providerId),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            m.id,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: t.ink,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      ProviderTag(m.protocol),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    [
-                      '账号 ${m.account}',
-                      '上游 ${m.nativeModel}',
-                      '窗口 ${m.contextWindow == 0 ? '未声明' : '${tokensToK(m.contextWindow)}k'}',
-                      if (m.defaults.isNotEmpty) '默认参数 ${m.defaults.length} 项',
-                      if (m.overrides.isNotEmpty) '覆盖参数 ${m.overrides.length} 项',
-                    ].join('   '),
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: t.faint),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            if (_toggling.contains(m.id))
-              const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else
-              Switch(
-                value: m.enabled,
-                onChanged: (_) => _toggle(m),
-              ),
-            _action(Icons.edit_outlined, '编辑',
-                () => _edit(m, accounts, providers), t),
-            _action(Icons.copy_outlined, '拷贝',
-                () => _copy(m, accounts, providers), t),
-            // 排位仿 CC Switch(编辑/拷贝/检测/统计/删除),检测中换行内 spinner。
-            if (_testing.contains(m.id))
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                        const SizedBox(width: 8),
+                        ProviderTag(m.protocol),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        '账号 ${m.account}',
+                        '上游 ${m.nativeModel}',
+                        '窗口 ${m.contextWindow == 0 ? '未声明' : '${tokensToK(m.contextWindow)}k'}',
+                        if (m.defaults.isNotEmpty) '默认参数 ${m.defaults.length} 项',
+                        if (m.overrides.isNotEmpty) '覆盖参数 ${m.overrides.length} 项',
+                      ].join('   '),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: t.faint),
+                    ),
+                  ],
                 ),
-              )
-            else
-              _action(Icons.network_check, '检测连通性', () => _test(m), t),
-            if (widget.onOpenUsage != null)
-              _action(Icons.bar_chart, '统计', () => widget.onOpenUsage!(m), t),
-            _action(Icons.delete_outline, '删除', () => _delete(m), t),
-          ],
+              ),
+              const SizedBox(width: 8),
+              if (_toggling.contains(m.id))
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Switch(
+                  value: m.enabled,
+                  onChanged: (_) => _toggle(m),
+                ),
+              _action(Icons.edit_outlined, '编辑',
+                  () => _edit(m, accounts, providers), t),
+              _action(Icons.copy_outlined, '拷贝',
+                  () => _copy(m, accounts, providers), t),
+              // 排位仿 CC Switch(编辑/拷贝/检测/统计/删除),检测中换行内 spinner。
+              if (_testing.contains(m.id))
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                _action(Icons.network_check, '检测连通性', () => _test(m), t),
+              if (widget.onOpenUsage != null)
+                _action(Icons.bar_chart, '统计', () => widget.onOpenUsage!(m), t),
+              _action(Icons.delete_outline, '删除', () => _delete(m), t),
+            ],
+          ),
         ),
       ),
     );

@@ -123,6 +123,12 @@ void main() {
     expect(yOf('b-1/m2') < yOf('c-1/m3'), isTrue);
     expect(find.byType(ReorderableDragStartListener), findsNWidgets(3));
 
+    // 命中区不再是 18px 小图标:28 宽、撑满行高
+    final grip =
+        tester.getSize(find.byType(ReorderableDragStartListener).first);
+    expect(grip.width, 28);
+    expect(grip.height, greaterThan(40));
+
     await tester.drag(
         find.byType(ReorderableDragStartListener).first, const Offset(0, 260));
     await tester.pumpAndSettle();

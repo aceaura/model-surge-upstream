@@ -311,6 +311,13 @@ class _AccountsPageState extends State<AccountsPage> {
                           padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                           // 拖拽柄只在行首;默认柄会让整行抢占滚动手势
                           buildDefaultDragHandles: false,
+                          // 默认 proxyDecorator 垫一层白色 Material,拖起时
+                          // 卡片底部 padding 处露白边;透明 Material 保持
+                          // 悬浮层与列表底色一致。
+                          proxyDecorator: (child, index, animation) =>
+                              Material(
+                                  type: MaterialType.transparency,
+                                  child: child),
                           itemCount: visible.length,
                           onReorderItem: (o, n) => _onReorder(visible, o, n),
                           itemBuilder: (context, i) => Padding(
@@ -348,96 +355,104 @@ class _AccountsPageState extends State<AccountsPage> {
     return HoverCard(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            // 拖拽柄常驻行首(仿 CC Switch 的 GripVertical),弱色不抢眼
-            if (dragIndex != null) ...[
-              ReorderableDragStartListener(
-                index: dragIndex,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.grab,
-                  child: Icon(Icons.drag_indicator, size: 18, color: t.faint),
+        child: IntrinsicHeight(
+          child: Row(
+            children: [
+              // 拖拽柄常驻行首(仿 CC Switch 的 GripVertical),弱色不抢眼;
+              // 命中区撑满行高、28 宽——18 图标本身太小,整条左边带都可抓。
+              // 透明底色不能省:无色的 Container 不参与命中测试。
+              if (dragIndex != null)
+                ReorderableDragStartListener(
+                  index: dragIndex,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.grab,
+                    child: Container(
+                      width: 28,
+                      height: double.infinity,
+                      color: Colors.transparent,
+                      alignment: Alignment.centerLeft,
+                      child: Icon(Icons.drag_indicator, size: 18, color: t.faint),
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-            ],
-            ProviderAvatar(providerId: a.providerId),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          a.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: t.ink,
+              ProviderAvatar(providerId: a.providerId),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            a.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: t.ink,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      ProviderTag(a.providerId),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    [
-                      effectiveUrl,
-                      if (a.headers.isNotEmpty)
-                        '自定义头 ${a.headers.length} 个',
-                    ].join('   '),
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: t.faint),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            // 行内额度摘要(CC Switch 式):提供商声明了额度接口或账号
-            // 启用了额度脚本才出现,加载后自动查询一次;脚本配了自动
-            // 间隔则按间隔自刷
-            QuotaInline(
-              client: widget.client,
-              accountName: a.name,
-              queryable: (spec?.quotaQueryable ?? false) ||
-                  (a.quotaScript?.active ?? false),
-              autoIntervalMinutes: a.quotaScript?.autoIntervalMinutes ?? 0,
-            ),
-            const SizedBox(width: 16),
-            if (_toggling.contains(a.name))
-              const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else
-              Switch(
-                value: a.enabled,
-                onChanged: (_) => _toggle(a),
-              ),
-            // 操作顺序仿 CC Switch:编辑、拷贝、检测、删除;「模型」是 msu
-            // 独有按钮,顺延到第四
-            _action(Icons.edit_outlined, '编辑', () => _edit(a, providers), t),
-            _action(Icons.copy_outlined, '拷贝', () => _copy(a, providers), t),
-            if (_testing.contains(a.name))
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                        const SizedBox(width: 8),
+                        ProviderTag(a.providerId),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        effectiveUrl,
+                        if (a.headers.isNotEmpty)
+                          '自定义头 ${a.headers.length} 个',
+                      ].join('   '),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: t.faint),
+                    ),
+                  ],
                 ),
-              )
-            else
-              _action(Icons.network_check, '检测连通性', () => _test(a), t),
-            _action(Icons.list_alt, '模型', () => _openModels(a), t),
-            _action(Icons.delete_outline, '删除', () => _delete(a), t),
-          ],
+              ),
+              const SizedBox(width: 8),
+              // 行内额度摘要(CC Switch 式):提供商声明了额度接口或账号
+              // 启用了额度脚本才出现,加载后自动查询一次;脚本配了自动
+              // 间隔则按间隔自刷
+              QuotaInline(
+                client: widget.client,
+                accountName: a.name,
+                queryable: (spec?.quotaQueryable ?? false) ||
+                    (a.quotaScript?.active ?? false),
+                autoIntervalMinutes: a.quotaScript?.autoIntervalMinutes ?? 0,
+              ),
+              const SizedBox(width: 16),
+              if (_toggling.contains(a.name))
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Switch(
+                  value: a.enabled,
+                  onChanged: (_) => _toggle(a),
+                ),
+              // 操作顺序仿 CC Switch:编辑、拷贝、检测、删除;「模型」是 msu
+              // 独有按钮,顺延到第四
+              _action(Icons.edit_outlined, '编辑', () => _edit(a, providers), t),
+              _action(Icons.copy_outlined, '拷贝', () => _copy(a, providers), t),
+              if (_testing.contains(a.name))
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else
+                _action(Icons.network_check, '检测连通性', () => _test(a), t),
+              _action(Icons.list_alt, '模型', () => _openModels(a), t),
+              _action(Icons.delete_outline, '删除', () => _delete(a), t),
+            ],
+          ),
         ),
       ),
     );
