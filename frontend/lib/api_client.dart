@@ -189,6 +189,14 @@ class ApiClient {
     return (body['deleted_models'] as List<dynamic>? ?? const []).cast<String>();
   }
 
+  /// 账号页拖拽排序落库:全量账号名的新顺序。
+  Future<void> reorderAccounts(List<String> names) =>
+      _send('POST', '/admin/accounts/reorder', body: {'names': names});
+
+  /// 模型页拖拽排序落库:全量模型 id 的新顺序。
+  Future<void> reorderModels(List<String> ids) =>
+      _send('POST', '/admin/models/reorder', body: {'ids': ids});
+
   Future<List<UpstreamModel>> listModels({String? account}) async {
     final body = await _send('GET', '/admin/models',
         query: account == null ? null : {'account': account});

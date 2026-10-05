@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_script, enabled, created_at, updated_at`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_script, enabled, created_at, updated_at, sort_order`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -60,12 +60,17 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 	now := time.Now().UTC()
 	m.CreatedAt, m.UpdatedAt = now, now
 
+	// 新模型排到现有手动序之后;全空库从 0 起。
+	if err := r.pool.QueryRow(ctx, `SELECT COALESCE(MAX(sort_order), -1) + 1 FROM models`).Scan(&m.SortOrder); err != nil {
+		return Model{}, apperr.Wrap(apperr.StorageError, "next sort_order", err)
+	}
+
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortScript, m.Enabled, m.CreatedAt, m.UpdatedAt)
+			m.EffortScript, m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -90,10 +95,10 @@ func (r *Repo) Get(ctx context.Context, id string) (Model, error) {
 
 // List 直读 PG。account 为空表示不过滤。
 func (r *Repo) List(ctx context.Context, account string) ([]Model, error) {
-	query := `SELECT ` + columns + ` FROM models ORDER BY id`
+	query := `SELECT ` + columns + ` FROM models ORDER BY sort_order, id`
 	args := []any{}
 	if account != "" {
-		query = `SELECT ` + columns + ` FROM models WHERE account=$1 ORDER BY id`
+		query = `SELECT ` + columns + ` FROM models WHERE account=$1 ORDER BY sort_order, id`
 		args = append(args, account)
 	}
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -141,6 +146,7 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 		return Model{}, err
 	}
 	m.CreatedAt = existing.CreatedAt
+	m.SortOrder = existing.SortOrder
 	m.UpdatedAt = time.Now().UTC()
 
 	persist := func() error {
@@ -163,6 +169,34 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 		return Model{}, err
 	}
 	return m, nil
+}
+
+// Reorder 按给定模型 id 顺序把 sort_order 依次写为 0..n-1,单事务提交;
+// 任一 id 不存在即整批回滚报 NotFound。缓存里的 Model 带旧序号,一并失效。
+func (r *Repo) Reorder(ctx context.Context, ids []string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.StorageError, "begin tx", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for i, id := range ids {
+		tag, err := tx.Exec(ctx, `UPDATE models SET sort_order=$1 WHERE id=$2`, i, id)
+		if err != nil {
+			return apperr.Wrap(apperr.StorageError, "reorder models", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return apperr.New(apperr.NotFound, fmt.Sprintf("model %q not found", id))
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return apperr.Wrap(apperr.StorageError, "commit reorder", err)
+	}
+	keys := make([]string, 0, len(ids))
+	for _, id := range ids {
+		keys = append(keys, cache.ModelKey(id))
+	}
+	r.cache.Invalidate(ctx, keys...)
+	return nil
 }
 
 // Delete 只删模型行，不影响其所属账号。
@@ -335,7 +369,7 @@ func scan(s scanner) (Model, error) {
 		efforts   []byte
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &compact, &efforts, &m.EffortScript, &m.Enabled, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&defaults, &overrides, &compact, &efforts, &m.EffortScript, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)

@@ -32,7 +32,8 @@ const (
 // ---- 内存桩 ----
 
 type stubAccounts struct {
-	data map[string]account.Account
+	data  map[string]account.Account
+	order []string
 }
 
 func (s *stubAccounts) Create(_ context.Context, in account.Input) (account.Account, error) {
@@ -65,10 +66,29 @@ func (s *stubAccounts) Get(_ context.Context, name string) (account.Account, err
 
 func (s *stubAccounts) List(context.Context) ([]account.Account, error) {
 	out := []account.Account{}
+	seen := map[string]bool{}
+	for _, n := range s.order {
+		if a, ok := s.data[n]; ok {
+			out = append(out, a)
+			seen[n] = true
+		}
+	}
 	for _, a := range s.data {
-		out = append(out, a)
+		if !seen[a.Name] {
+			out = append(out, a)
+		}
 	}
 	return out, nil
+}
+
+func (s *stubAccounts) Reorder(_ context.Context, names []string) error {
+	for _, n := range names {
+		if _, ok := s.data[n]; !ok {
+			return apperr.New(apperr.NotFound, "account "+n+" not found")
+		}
+	}
+	s.order = append([]string(nil), names...)
+	return nil
 }
 
 func (s *stubAccounts) Update(_ context.Context, in account.Input) (account.Account, error) {
@@ -103,7 +123,8 @@ func (s *stubAccounts) CountModels(_ context.Context, name string) (int, error) 
 }
 
 type stubModels struct {
-	data map[string]model.Model
+	data  map[string]model.Model
+	order []string
 }
 
 func (s *stubModels) Create(_ context.Context, in model.Input) (model.Model, error) {
@@ -133,12 +154,34 @@ func (s *stubModels) Get(_ context.Context, id string) (model.Model, error) {
 
 func (s *stubModels) List(_ context.Context, accountName string) ([]model.Model, error) {
 	out := []model.Model{}
+	seen := map[string]bool{}
+	for _, id := range s.order {
+		if m, ok := s.data[id]; ok {
+			seen[id] = true
+			if accountName == "" || m.Account == accountName {
+				out = append(out, m)
+			}
+		}
+	}
 	for _, m := range s.data {
+		if seen[m.ID] {
+			continue
+		}
 		if accountName == "" || m.Account == accountName {
 			out = append(out, m)
 		}
 	}
 	return out, nil
+}
+
+func (s *stubModels) Reorder(_ context.Context, ids []string) error {
+	for _, id := range ids {
+		if _, ok := s.data[id]; !ok {
+			return apperr.New(apperr.NotFound, "model "+id+" not found")
+		}
+	}
+	s.order = append([]string(nil), ids...)
+	return nil
 }
 
 func (s *stubModels) Update(_ context.Context, in model.Input) (model.Model, error) {
@@ -562,6 +605,102 @@ func TestDeleteAccountReportsCascade(t *testing.T) {
 	}
 	if len(body.DeletedModels) != 1 {
 		t.Errorf("deleted_models = %v, want the cascaded ids", body.DeletedModels)
+	}
+}
+
+func TestReorderAccounts(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "POST", "/admin/accounts", adminKey,
+		`{"name":"ds-1","provider_id":"deepseek","api_key":"`+secret+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create ds-1 = %d: %s", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, "POST", "/admin/accounts/reorder", adminKey, `{"names":["ds-1","kimi-1"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reorder = %d: %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, "GET", "/admin/accounts", adminKey, "")
+	var body struct {
+		Accounts []struct {
+			Name string `json:"name"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Accounts) != 2 || body.Accounts[0].Name != "ds-1" || body.Accounts[1].Name != "kimi-1" {
+		t.Errorf("list order = %+v, want ds-1 then kimi-1", body.Accounts)
+	}
+}
+
+func TestReorderAccountsValidation(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want int
+	}{
+		"empty names":   {`{"names":[]}`, http.StatusBadRequest},
+		"missing names": {`{}`, http.StatusBadRequest},
+		"duplicate":     {`{"names":["kimi-1","kimi-1"]}`, http.StatusBadRequest},
+		"unknown name":  {`{"names":["kimi-1","ghost"]}`, http.StatusNotFound},
+		"unknown field": {`{"names":["kimi-1"],"extra":1}`, http.StatusBadRequest},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			rec := f.do(t, "POST", "/admin/accounts/reorder", adminKey, tc.body)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+		})
+	}
+}
+
+func TestReorderModels(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "POST", "/admin/models", adminKey,
+		`{"id":"kimi-1/k3","account":"kimi-1","native_model":"kimi-k3","protocol":"anthropic"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create model = %d: %s", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, "POST", "/admin/models/reorder", adminKey, `{"ids":["kimi-1/k3","kimi-1/k2"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reorder = %d: %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, "GET", "/admin/models", adminKey, "")
+	var body struct {
+		Models []struct {
+			ID string `json:"id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Models) != 2 || body.Models[0].ID != "kimi-1/k3" || body.Models[1].ID != "kimi-1/k2" {
+		t.Errorf("list order = %+v, want kimi-1/k3 then kimi-1/k2", body.Models)
+	}
+}
+
+func TestReorderModelsValidation(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want int
+	}{
+		"empty ids":     {`{"ids":[]}`, http.StatusBadRequest},
+		"missing ids":   {`{}`, http.StatusBadRequest},
+		"duplicate":     {`{"ids":["kimi-1/k2","kimi-1/k2"]}`, http.StatusBadRequest},
+		"unknown id":    {`{"ids":["kimi-1/k2","ghost/x"]}`, http.StatusNotFound},
+		"unknown field": {`{"ids":["kimi-1/k2"],"extra":1}`, http.StatusBadRequest},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			rec := f.do(t, "POST", "/admin/models/reorder", adminKey, tc.body)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+		})
 	}
 }
 

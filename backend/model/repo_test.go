@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -352,6 +353,51 @@ func TestListFiltersByAccount(t *testing.T) {
 	}
 	if len(only) != 1 || only[0].ID != "ds-1/v4" {
 		t.Errorf("filtered list = %+v", only)
+	}
+}
+
+func TestListOrderAndReorder(t *testing.T) {
+	repo, _ := fixtures(t)
+	ctx := context.Background()
+	ids := []string{"kimi-1/c", "kimi-1/a", "kimi-1/b"}
+	for _, id := range ids {
+		in := input()
+		in.ID = id
+		in.NativeModel = "m-" + id
+		if _, err := repo.Create(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listIDs := func() []string {
+		got, err := repo.List(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(got))
+		for _, m := range got {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+	// 新模型 sort_order 按创建序递增,列表即手动序(创建序),不再 id 序
+	if got := listIDs(); !slices.Equal(got, ids) {
+		t.Errorf("list = %v, want creation order %v", got, ids)
+	}
+
+	want := []string{"kimi-1/b", "kimi-1/c", "kimi-1/a"}
+	if err := repo.Reorder(ctx, want); err != nil {
+		t.Fatalf("reorder: %v", err)
+	}
+	if got := listIDs(); !slices.Equal(got, want) {
+		t.Errorf("list = %v, want %v", got, want)
+	}
+
+	// 混入不存在的 id 整批拒,已写的序号随事务回滚
+	if err := repo.Reorder(ctx, []string{"kimi-1/a", "ghost/x"}); !apperr.Is(err, apperr.NotFound) {
+		t.Errorf("err = %v, want not_found", err)
+	}
+	if got := listIDs(); !slices.Equal(got, want) {
+		t.Errorf("failed reorder should not persist, list = %v, want %v", got, want)
 	}
 }
 

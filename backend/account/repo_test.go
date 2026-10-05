@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -250,7 +251,8 @@ func TestUpdateNotFound(t *testing.T) {	repo := newRepo(t)
 }
 
 func TestList(t *testing.T) {
-	repo := newRepo(t)
+	s := testenv.Store(t)
+	repo := NewRepo(s.Pool(), testenv.Cache(t))
 	ctx := context.Background()
 	for _, name := range []string{"kimi-2", "kimi-1"} {
 		if _, err := repo.Create(ctx, input(name, "kimi")); err != nil {
@@ -261,8 +263,57 @@ func TestList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 新账号 sort_order 按创建序递增,列表即手动序(创建序),不再 name 序
+	if len(got) != 2 || got[0].Name != "kimi-2" || got[1].Name != "kimi-1" {
+		t.Errorf("list should follow creation order, got %+v", got)
+	}
+	// 老库 sort_order 全并列时回落 name 序,与拖拽功能存在之前一致
+	if _, err := s.Pool().Exec(ctx, `UPDATE accounts SET sort_order=0`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 2 || got[0].Name != "kimi-1" || got[1].Name != "kimi-2" {
-		t.Errorf("list should be ordered by name, got %+v", got)
+		t.Errorf("tied sort_order should fall back to name order, got %+v", got)
+	}
+}
+
+func TestReorder(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+	for _, name := range []string{"a-1", "a-2", "a-3"} {
+		if _, err := repo.Create(ctx, input(name, "kimi")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func() []string {
+		got, err := repo.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(got))
+		for _, a := range got {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+
+	want := []string{"a-3", "a-1", "a-2"}
+	if err := repo.Reorder(ctx, want); err != nil {
+		t.Fatalf("reorder: %v", err)
+	}
+	if got := names(); !slices.Equal(got, want) {
+		t.Errorf("list = %v, want %v", got, want)
+	}
+
+	// 混入不存在的名字整批拒,已写的序号随事务回滚
+	if err := repo.Reorder(ctx, []string{"a-2", "ghost"}); !apperr.Is(err, apperr.NotFound) {
+		t.Errorf("err = %v, want not_found", err)
+	}
+	if got := names(); !slices.Equal(got, want) {
+		t.Errorf("failed reorder should not persist, list = %v, want %v", got, want)
 	}
 }
 

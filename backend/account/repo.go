@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `name, provider_id, credential, base_url, headers, quota_script, enabled, created_at, updated_at`
+const columns = `name, provider_id, credential, base_url, headers, quota_script, enabled, created_at, updated_at, sort_order`
 
 type Repo struct {
 	pool  *pgxpool.Pool
@@ -53,10 +53,14 @@ func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
+	// 新账号排到现有手动序之后;全空库从 0 起。
+	if err := r.pool.QueryRow(ctx, `SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts`).Scan(&acc.SortOrder); err != nil {
+		return Account{}, apperr.Wrap(apperr.StorageError, "next sort_order", err)
+	}
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO accounts (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, scriptRaw, acc.Enabled, acc.CreatedAt, acc.UpdatedAt)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, scriptRaw, acc.Enabled, acc.CreatedAt, acc.UpdatedAt, acc.SortOrder)
 		return mapWriteErr(err, "account", acc.Name)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.AccountKey(acc.Name), acc, persist); err != nil {
@@ -81,7 +85,7 @@ func (r *Repo) Get(ctx context.Context, name string) (Account, error) {
 
 // List 直读 PG：管理面列举频率低，列表缓存的失效面不划算。
 func (r *Repo) List(ctx context.Context) ([]Account, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+columns+` FROM accounts ORDER BY name`)
+	rows, err := r.pool.Query(ctx, `SELECT `+columns+` FROM accounts ORDER BY sort_order, name`)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.StorageError, "list accounts", err)
 	}
@@ -99,6 +103,34 @@ func (r *Repo) List(ctx context.Context) ([]Account, error) {
 		return nil, apperr.Wrap(apperr.StorageError, "list accounts", err)
 	}
 	return out, nil
+}
+
+// Reorder 按给定账号名顺序把 sort_order 依次写为 0..n-1,单事务提交;
+// 任一名字不存在即整批回滚报 NotFound。缓存里的 Account 带旧序号,一并失效。
+func (r *Repo) Reorder(ctx context.Context, names []string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return apperr.Wrap(apperr.StorageError, "begin tx", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for i, name := range names {
+		tag, err := tx.Exec(ctx, `UPDATE accounts SET sort_order=$1 WHERE name=$2`, i, name)
+		if err != nil {
+			return apperr.Wrap(apperr.StorageError, "reorder accounts", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return apperr.New(apperr.NotFound, fmt.Sprintf("account %q not found", name))
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return apperr.Wrap(apperr.StorageError, "commit reorder", err)
+	}
+	keys := make([]string, 0, len(names))
+	for _, n := range names {
+		keys = append(keys, cache.AccountKey(n))
+	}
+	r.cache.Invalidate(ctx, keys...)
+	return nil
 }
 
 func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
@@ -131,6 +163,7 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 		return Account{}, err
 	}
 	acc.CreatedAt = existing.CreatedAt
+	acc.SortOrder = existing.SortOrder
 	acc.UpdatedAt = time.Now().UTC()
 
 	credRaw, headersRaw, scriptRaw, err := encode(acc)
@@ -340,7 +373,7 @@ func scan(s scanner) (Account, error) {
 		headersRaw []byte
 		scriptRaw  []byte
 	)
-	if err := s.Scan(&a.Name, &a.ProviderID, &credRaw, &a.BaseURL, &headersRaw, &scriptRaw, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := s.Scan(&a.Name, &a.ProviderID, &credRaw, &a.BaseURL, &headersRaw, &scriptRaw, &a.Enabled, &a.CreatedAt, &a.UpdatedAt, &a.SortOrder); err != nil {
 		return Account{}, err
 	}
 	cred, err := credential.Decode(credRaw)

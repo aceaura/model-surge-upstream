@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS accounts (
 -- auto_interval_minutes),CC Switch usage_script 同款机制,'{}' 即未配置。
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS quota_script JSONB NOT NULL DEFAULT '{}';
 
+-- sort_order 承载账号页拖拽排序:小者在前。老库与新建账号同为 0 起,
+-- 并列时列表回落 name 序,即拖拽功能存在之前的显示顺序。
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS models (
     id             TEXT PRIMARY KEY,
     account        TEXT        NOT NULL REFERENCES accounts(name) ON DELETE CASCADE,
@@ -42,6 +46,10 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS efforts JSONB NOT NULL DEFAULT 'null
 -- 当前请求体，返回写入了 effort 的完整新请求体，承接「协议外壳+自家字段」
 -- 的厂商差异（如 kimi 顶层 reasoning_effort）。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_script TEXT NOT NULL DEFAULT '';
+
+-- sort_order 承载模型页拖拽排序,语义同 accounts.sort_order:小者在前,
+-- 并列回落 id 序(即拖拽功能存在之前的显示顺序)。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 

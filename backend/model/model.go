@@ -34,6 +34,9 @@ type Model struct {
 	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。
 	EffortsEffective []effort.Entry `json:"efforts_effective"`
 	Enabled          bool           `json:"enabled"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	// SortOrder 模型页拖拽排序序号,小者在前;并列回落 id 序。不落视图:
+	// 列表数组顺序即顺序。
+	SortOrder int       `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }

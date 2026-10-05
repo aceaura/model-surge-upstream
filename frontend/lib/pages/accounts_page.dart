@@ -43,6 +43,11 @@ class _AccountsPageState extends State<AccountsPage> {
   final _testing = <String>{};
   String _query = '';
 
+  /// 拖拽排序的用户序(全量账号名)。非空时乐观覆盖服务器返回顺序,
+  /// 后台落库失败即清掉回落服务器序;按名合并,服务器侧新增账号随其
+  /// 原序追加在尾。
+  List<String>? _order;
+
   /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
   AccountForm? _form;
 
@@ -65,6 +70,57 @@ class _AccountsPageState extends State<AccountsPage> {
   void _reload() => setState(() {
         _future = _load();
       });
+
+  /// 手动序与服务器列表的合并:_order 里仍在的账号按拖拽序排前,
+  /// 其余(新增等)按服务器序追加。_order 为空即原样。
+  List<Account> _ordered(List<Account> accounts) {
+    final order = _order;
+    if (order == null) return accounts;
+    final remaining = <String, Account>{for (final a in accounts) a.name: a};
+    final out = <Account>[];
+    for (final n in order) {
+      final a = remaining.remove(n);
+      if (a != null) out.add(a);
+    }
+    for (final a in accounts) {
+      if (remaining.containsKey(a.name)) out.add(a);
+    }
+    return out;
+  }
+
+  /// 拖拽落点:先乐观换序渲染,再后台落库;失败提示并回落服务器序。
+  /// onReorderItem 的 newIndex 已是移除旧项后的修正值,直接插入。
+  void _onReorder(List<Account> shown, int oldIndex, int newIndex) {
+    final names = shown.map((a) => a.name).toList();
+    final moved = names.removeAt(oldIndex);
+    names.insert(newIndex, moved);
+    setState(() => _order = names);
+    _persistOrder(names);
+  }
+
+  Future<void> _persistOrder(List<String> names) async {
+    try {
+      await widget.client.reorderAccounts(names);
+      if (!mounted) return;
+      // 落库成功后服务器序已等于手动序,放手重拉:不留着 _order,
+      // 否则它会永久盖住外部(API/他端)后来的顺序变更——激活重拉也救不回。
+      // 连拖时 _order 已被下一次拖拽改写,只对得上的那次才清。
+      if (_order != null && _sameNames(_order!, names)) _order = null;
+      _reload();
+    } catch (e) {
+      if (!mounted) return;
+      showError(context, e);
+      setState(() => _order = null);
+    }
+  }
+
+  bool _sameNames(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   /// 卡片尾部的小号操作按钮:18 图标 + 弱色,hover 才有底色反馈。
   Widget _action(
@@ -202,7 +258,9 @@ class _AccountsPageState extends State<AccountsPage> {
             onOpenSettings: widget.onOpenSettings,
           );
         }
-        final (accounts, providers) = snapshot.data!;
+        final (raw, providers) = snapshot.data!;
+        // 拖拽过的列表按用户手动序渲染(乐观序,失败会回落)
+        final accounts = _ordered(raw);
         final t = context.tokens;
         // 摘要带:按提供商统计账号数;搜索按名称/提供商/地址过滤
         final counts = <String, int>{};
@@ -248,121 +306,140 @@ class _AccountsPageState extends State<AccountsPage> {
                       child: Text(
                           accounts.isEmpty ? '还没有账号，先新建一个。' : '没有匹配的账号。',
                           style: TextStyle(color: t.faint)))
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                      itemCount: visible.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 12),
-                      itemBuilder: (context, i) {
-                        final a = visible[i];
-                        final spec = providers
-                            .where((p) => p.id == a.providerId)
-                            .firstOrNull;
-                        // 副标题显示实际生效的请求地址(覆盖优先,否则提供商
-                        // 默认),比脱敏密钥更能区分账号;密钥只在编辑弹窗出现
-                        final effectiveUrl =
-                            a.baseUrl.isNotEmpty ? a.baseUrl : spec?.baseUrl ?? '';
-                        return HoverCard(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
-                            child: Row(
-                              children: [
-                                ProviderAvatar(providerId: a.providerId),
-                                const SizedBox(width: 13),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Flexible(
-                                            child: Text(
-                                              a.name,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                fontSize: 15,
-                                                fontWeight: FontWeight.w600,
-                                                color: t.ink,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          ProviderTag(a.providerId),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        [
-                                          effectiveUrl,
-                                          if (a.headers.isNotEmpty)
-                                            '自定义头 ${a.headers.length} 个',
-                                        ].join('   '),
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                            fontSize: 12, color: t.faint),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                // 行内额度摘要(CC Switch 式):提供商声明了额度
-                                // 接口或账号启用了额度脚本才出现,加载后自动
-                                // 查询一次;脚本配了自动间隔则按间隔自刷
-                                QuotaInline(
-                                  client: widget.client,
-                                  accountName: a.name,
-                                  queryable: (spec?.quotaQueryable ?? false) ||
-                                      (a.quotaScript?.active ?? false),
-                                  autoIntervalMinutes:
-                                      a.quotaScript?.autoIntervalMinutes ?? 0,
-                                ),
-                                const SizedBox(width: 16),
-                                if (_toggling.contains(a.name))
-                                  const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2),
-                                  )
-                                else
-                                  Switch(
-                                    value: a.enabled,
-                                    onChanged: (_) => _toggle(a),
-                                  ),
-                                // 操作顺序仿 CC Switch:编辑、拷贝、检测、
-                                // 删除;「模型」是 msu 独有按钮,顺延到第四
-                                _action(Icons.edit_outlined, '编辑',
-                                    () => _edit(a, providers), t),
-                                _action(Icons.copy_outlined, '拷贝',
-                                    () => _copy(a, providers), t),
-                                if (_testing.contains(a.name))
-                                  const Padding(
-                                    padding: EdgeInsets.all(12),
-                                    child: SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    ),
-                                  )
-                                else
-                                  _action(Icons.network_check, '检测连通性',
-                                      () => _test(a), t),
-                                _action(Icons.list_alt, '模型',
-                                    () => _openModels(a), t),
-                                _action(Icons.delete_outline, '删除',
-                                    () => _delete(a), t),
-                              ],
-                            ),
+                  : _query.isEmpty
+                      ? ReorderableListView.builder(
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                          // 拖拽柄只在行首;默认柄会让整行抢占滚动手势
+                          buildDefaultDragHandles: false,
+                          itemCount: visible.length,
+                          onReorderItem: (o, n) => _onReorder(visible, o, n),
+                          itemBuilder: (context, i) => Padding(
+                            key: ValueKey(visible[i].name),
+                            padding: EdgeInsets.only(
+                                bottom: i == visible.length - 1 ? 0 : 12),
+                            child:
+                                _card(visible[i], providers, t, dragIndex: i),
                           ),
-                        );
-                      },
-                    ),
+                        )
+                      : ListView.separated(
+                          // 过滤态禁拖:子集换序映射回全量顺序有歧义
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                          itemCount: visible.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 12),
+                          itemBuilder: (context, i) =>
+                              _card(visible[i], providers, t),
+                        ),
             ),
           ],
         );
       },
+    );
+  }
+
+  /// 账号行卡片。dragIndex 非空时行首附拖拽柄(仅未过滤列表;过滤子集
+  /// 换序映射回全量顺序有歧义,过滤态禁拖)。
+  Widget _card(Account a, List<ProviderSpec> providers, AppTokens t,
+      {int? dragIndex}) {
+    final spec = providers.where((p) => p.id == a.providerId).firstOrNull;
+    // 副标题显示实际生效的请求地址(覆盖优先,否则提供商默认),比脱敏
+    // 密钥更能区分账号;密钥只在编辑弹窗出现
+    final effectiveUrl = a.baseUrl.isNotEmpty ? a.baseUrl : spec?.baseUrl ?? '';
+    return HoverCard(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            // 拖拽柄常驻行首(仿 CC Switch 的 GripVertical),弱色不抢眼
+            if (dragIndex != null) ...[
+              ReorderableDragStartListener(
+                index: dragIndex,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.grab,
+                  child: Icon(Icons.drag_indicator, size: 18, color: t.faint),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            ProviderAvatar(providerId: a.providerId),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          a.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: t.ink,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ProviderTag(a.providerId),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    [
+                      effectiveUrl,
+                      if (a.headers.isNotEmpty)
+                        '自定义头 ${a.headers.length} 个',
+                    ].join('   '),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: t.faint),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // 行内额度摘要(CC Switch 式):提供商声明了额度接口或账号
+            // 启用了额度脚本才出现,加载后自动查询一次;脚本配了自动
+            // 间隔则按间隔自刷
+            QuotaInline(
+              client: widget.client,
+              accountName: a.name,
+              queryable: (spec?.quotaQueryable ?? false) ||
+                  (a.quotaScript?.active ?? false),
+              autoIntervalMinutes: a.quotaScript?.autoIntervalMinutes ?? 0,
+            ),
+            const SizedBox(width: 16),
+            if (_toggling.contains(a.name))
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Switch(
+                value: a.enabled,
+                onChanged: (_) => _toggle(a),
+              ),
+            // 操作顺序仿 CC Switch:编辑、拷贝、检测、删除;「模型」是 msu
+            // 独有按钮,顺延到第四
+            _action(Icons.edit_outlined, '编辑', () => _edit(a, providers), t),
+            _action(Icons.copy_outlined, '拷贝', () => _copy(a, providers), t),
+            if (_testing.contains(a.name))
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else
+              _action(Icons.network_check, '检测连通性', () => _test(a), t),
+            _action(Icons.list_alt, '模型', () => _openModels(a), t),
+            _action(Icons.delete_outline, '删除', () => _delete(a), t),
+          ],
+        ),
+      ),
     );
   }
 }

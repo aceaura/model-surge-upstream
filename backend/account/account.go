@@ -65,8 +65,11 @@ type Account struct {
 	// QuotaScript 为 nil 表示未配置额度脚本。
 	QuotaScript *QuotaScript `json:"quota_script,omitempty"`
 	Enabled     bool         `json:"enabled"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	// SortOrder 账号页拖拽排序序号,小者在前;并列回落 name 序。
+	// 不进管理面视图:列表数组顺序即顺序,单账号读取无需暴露它。
+	SortOrder int       `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // View 是管理面读取形态：凭据脱敏。

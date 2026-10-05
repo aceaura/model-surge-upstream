@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
@@ -136,6 +137,36 @@ func (h handler) updateAccount(w http.ResponseWriter, r *http.Request) {
 	h.Quota.Forget(name)
 	h.UpstreamModels.Forget(name)
 	writeJSON(w, http.StatusOK, map[string]any{"account": h.viewOf(acc)})
+}
+
+type reorderRequest struct {
+	Names []string `json:"names"`
+}
+
+// reorderAccounts 承接账号页拖拽排序:body 给全量账号名的新顺序,
+// 仓储按序重写 sort_order。名字缺失/重复都拒,避免半截顺序落库。
+func (h handler) reorderAccounts(w http.ResponseWriter, r *http.Request) {
+	var req reorderRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if len(req.Names) == 0 {
+		writeCode(w, apperr.InvalidRequest, "names is required")
+		return
+	}
+	seen := make(map[string]bool, len(req.Names))
+	for _, n := range req.Names {
+		if seen[n] {
+			writeCode(w, apperr.InvalidRequest, fmt.Sprintf("duplicate account %q in names", n))
+			return
+		}
+		seen[n] = true
+	}
+	if err := h.Accounts.Reorder(r.Context(), req.Names); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h handler) deleteAccount(w http.ResponseWriter, r *http.Request) {

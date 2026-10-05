@@ -464,7 +464,7 @@ GET /admin/accounts
 
 | 字段 | 类型 | 取值与含义 |
 |---|---|---|
-| `accounts` | array of Account View | 元素结构见 3.2；按 `name` 升序；**凭据一律脱敏** |
+| `accounts` | array of Account View | 元素结构见 3.2；按手动序返回（`sort_order` 升序，见 5.16；并列回落 `name` 序，未拖拽过的老库即 name 序）；**凭据一律脱敏** |
 
 **错误**：无领域错误。
 
@@ -828,7 +828,7 @@ GET /admin/models?account={name}
 
 | 字段 | 类型 | 取值与含义 |
 |---|---|---|
-| `models` | array of Model | 元素结构见 3.3；按 `id` 升序 |
+| `models` | array of Model | 元素结构见 3.3；按手动序返回（`sort_order` 升序，见 5.17；并列回落 `id` 序，未拖拽过的老库即 id 序） |
 
 > `account` 指向不存在的账号**不报错**，返回空数组 `[]`（过滤条件而非资源引用）。
 
@@ -1096,6 +1096,72 @@ PUT /admin/proxy-settings
 |---|---|---|
 | 400 | `invalid_json` | 请求体非法、含未知字段 |
 | 400 | `invalid_request` | `port` 越界；`api_key` 含空白；监听绑定失败（端口被占等，message 含地址） |
+
+### 5.16 账号重排序（拖拽排序）
+
+**使用场景**：管理客户端账号页拖拽换序，落点后把全量账号名的新顺序持久化。仓储在单事务内把各账号 `sort_order` 重写为 0..n-1，列举接口（5.2）随即按新顺序返回。
+
+```
+POST /admin/accounts/reorder
+```
+
+**请求体字段**：
+
+| 字段 | 类型 | 必填 | 约束与含义 |
+|---|---|---|---|
+| `names` | array of string | 是 | 全量账号名的新顺序；缺席、空数组、含重复名均 `400`；含不存在的名字 `404` 且整批回滚 |
+
+**响应** `200`：
+
+```json
+{ "ok": true }
+```
+
+**错误**：
+
+| HTTP | code | 触发条件 |
+|---|---|---|
+| 400 | `invalid_request` | `names` 缺席/为空/含重复名 |
+| 404 | `not_found` | `names` 含不存在的账号（整批不落库） |
+
+**示例**：
+
+```bash
+curl -X POST http://localhost:8080/admin/accounts/reorder   -H "Authorization: Bearer $MSU_ADMIN_KEY"   -d '{"names":["kimi-2","kimi-1","ds-1"]}'
+```
+
+### 5.17 模型重排序（拖拽排序）
+
+**使用场景**：管理客户端模型页拖拽换序，落点后把全量模型 id 的新顺序持久化。仓储在单事务内把各模型 `sort_order` 重写为 0..n-1，列举接口（5.9）随即按新顺序返回。
+
+```
+POST /admin/models/reorder
+```
+
+**请求体字段**：
+
+| 字段 | 类型 | 必填 | 约束与含义 |
+|---|---|---|---|
+| `ids` | array of string | 是 | 全量模型 id 的新顺序；缺席、空数组、含重复 id 均 `400`；含不存在的 id `404` 且整批回滚 |
+
+**响应** `200`：
+
+```json
+{ "ok": true }
+```
+
+**错误**：
+
+| HTTP | code | 触发条件 |
+|---|---|---|
+| 400 | `invalid_request` | `ids` 缺席/为空/含重复 id |
+| 404 | `not_found` | `ids` 含不存在的模型（整批不落库） |
+
+**示例**：
+
+```bash
+curl -X POST http://localhost:8080/admin/models/reorder   -H "Authorization: Bearer $MSU_ADMIN_KEY"   -d '{"ids":["kimi-1/k2","ds-1/v4"]}'
+```
 
 ---
 

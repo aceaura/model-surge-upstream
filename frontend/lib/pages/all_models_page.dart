@@ -58,6 +58,11 @@ class _AllModelsPageState extends State<AllModelsPage> {
   final _searchController = TextEditingController();
   String _query = '';
 
+  /// 拖拽排序的用户序(全量模型 id)。非空时乐观覆盖服务器返回顺序,
+  /// 后台落库失败即清掉回落服务器序;按 id 合并,服务器侧新增模型随其
+  /// 原序追加在尾。
+  List<String>? _order;
+
   /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
   ModelForm? _form;
 
@@ -104,6 +109,57 @@ class _AllModelsPageState extends State<AllModelsPage> {
   void _reload() => setState(() {
         _future = _load();
       });
+
+  /// 手动序与服务器列表的合并:_order 里仍在的模型按拖拽序排前,
+  /// 其余(新增等)按服务器序追加。_order 为空即原样。
+  List<UpstreamModel> _ordered(List<UpstreamModel> models) {
+    final order = _order;
+    if (order == null) return models;
+    final remaining = <String, UpstreamModel>{for (final m in models) m.id: m};
+    final out = <UpstreamModel>[];
+    for (final id in order) {
+      final m = remaining.remove(id);
+      if (m != null) out.add(m);
+    }
+    for (final m in models) {
+      if (remaining.containsKey(m.id)) out.add(m);
+    }
+    return out;
+  }
+
+  /// 拖拽落点:先乐观换序渲染,再后台落库;失败提示并回落服务器序。
+  /// onReorderItem 的 newIndex 已是移除旧项后的修正值,直接插入。
+  void _onReorder(List<UpstreamModel> shown, int oldIndex, int newIndex) {
+    final ids = shown.map((m) => m.id).toList();
+    final moved = ids.removeAt(oldIndex);
+    ids.insert(newIndex, moved);
+    setState(() => _order = ids);
+    _persistOrder(ids);
+  }
+
+  Future<void> _persistOrder(List<String> ids) async {
+    try {
+      await widget.client.reorderModels(ids);
+      if (!mounted) return;
+      // 落库成功后服务器序已等于手动序,放手重拉:不留着 _order,
+      // 否则它会永久盖住外部(API/他端)后来的顺序变更——激活重拉也救不回。
+      // 连拖时 _order 已被下一次拖拽改写,只对得上的那次才清。
+      if (_order != null && _sameIds(_order!, ids)) _order = null;
+      _reload();
+    } catch (e) {
+      if (!mounted) return;
+      showError(context, e);
+      setState(() => _order = null);
+    }
+  }
+
+  bool _sameIds(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   /// 卡片尾部的小号操作按钮:18 图标 + 弱色(与账号页一致)。
   Widget _action(
@@ -233,7 +289,8 @@ class _AllModelsPageState extends State<AllModelsPage> {
       builder: (context, snapshot) {
         final loaded =
             snapshot.connectionState == ConnectionState.done && !snapshot.hasError;
-        final models = loaded ? snapshot.data!.$1 : const <UpstreamModel>[];
+        final models =
+            loaded ? _ordered(snapshot.data!.$1) : const <UpstreamModel>[];
         final accounts = loaded ? snapshot.data!.$2 : const <Account>[];
         final providers = loaded ? snapshot.data!.$3 : const <ProviderSpec>[];
 
@@ -268,7 +325,23 @@ class _AllModelsPageState extends State<AllModelsPage> {
               style: TextStyle(color: t.faint),
             ),
           );
+        } else if (_query.isEmpty) {
+          content = ReorderableListView.builder(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            // 拖拽柄只在行首;默认柄会让整行抢占滚动手势
+            buildDefaultDragHandles: false,
+            itemCount: visible.length,
+            onReorderItem: (o, n) => _onReorder(visible, o, n),
+            itemBuilder: (context, i) => Padding(
+              key: ValueKey(visible[i].id),
+              padding:
+                  EdgeInsets.only(bottom: i == visible.length - 1 ? 0 : 12),
+              child:
+                  _modelCard(visible[i], accounts, providers, t, dragIndex: i),
+            ),
+          );
         } else {
+          // 过滤态禁拖:子集换序映射回全量顺序有歧义
           content = ListView.separated(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             itemCount: visible.length,
@@ -312,8 +385,11 @@ class _AllModelsPageState extends State<AllModelsPage> {
     );
   }
 
+  /// 模型行卡片。dragIndex 非空时行首附拖拽柄(仅未过滤列表;过滤子集
+  /// 换序映射回全量顺序有歧义,过滤态禁拖)。
   Widget _modelCard(UpstreamModel m, List<Account> accounts,
-      List<ProviderSpec> providers, AppTokens t) {
+      List<ProviderSpec> providers, AppTokens t,
+      {int? dragIndex}) {
     // 头像继承账号所属提供商的官方 Logo;账号找不到时回落模型名首字母。
     final providerId = accounts
             .where((a) => a.name == m.account)
@@ -325,6 +401,17 @@ class _AllModelsPageState extends State<AllModelsPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
+            // 拖拽柄常驻行首(仿 CC Switch 的 GripVertical),弱色不抢眼
+            if (dragIndex != null) ...[
+              ReorderableDragStartListener(
+                index: dragIndex,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.grab,
+                  child: Icon(Icons.drag_indicator, size: 18, color: t.faint),
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
             ProviderAvatar(providerId: providerId),
             const SizedBox(width: 13),
             Expanded(

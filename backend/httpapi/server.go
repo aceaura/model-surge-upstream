@@ -25,6 +25,8 @@ type Accounts interface {
 	Update(ctx context.Context, in account.Input) (account.Account, error)
 	Delete(ctx context.Context, name string) ([]string, error)
 	CountModels(ctx context.Context, name string) (int, error)
+	// Reorder 按给定顺序重写账号手动排序序号。
+	Reorder(ctx context.Context, names []string) error
 }
 
 type Models interface {
@@ -33,6 +35,8 @@ type Models interface {
 	List(ctx context.Context, account string) ([]model.Model, error)
 	Update(ctx context.Context, in model.Input) (model.Model, error)
 	Delete(ctx context.Context, id string) error
+	// Reorder 按给定顺序重写模型手动排序序号。
+	Reorder(ctx context.Context, ids []string) error
 }
 
 type Resolver interface {
@@ -136,6 +140,7 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/providers", h.listProviders)
 	admin.HandleFunc("GET /admin/accounts", h.listAccounts)
 	admin.HandleFunc("POST /admin/accounts", h.createAccount)
+	admin.HandleFunc("POST /admin/accounts/reorder", h.reorderAccounts)
 	admin.HandleFunc("GET /admin/accounts/{name}", h.getAccount)
 	admin.HandleFunc("PUT /admin/accounts/{name}", h.updateAccount)
 	admin.HandleFunc("DELETE /admin/accounts/{name}", h.deleteAccount)
@@ -146,6 +151,7 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/accounts/{name}/upstream-models", h.upstreamModels)
 	admin.HandleFunc("GET /admin/models", h.listModels)
 	admin.HandleFunc("POST /admin/models", h.createModel)
+	admin.HandleFunc("POST /admin/models/reorder", h.reorderModels)
 	admin.HandleFunc("GET /admin/models/{id...}", h.getModel)
 	admin.HandleFunc("PUT /admin/models/{id...}", h.updateModel)
 	admin.HandleFunc("DELETE /admin/models/{id...}", h.deleteModel)

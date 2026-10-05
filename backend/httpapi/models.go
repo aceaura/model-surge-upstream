@@ -3,8 +3,10 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
+	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 )
@@ -117,4 +119,34 @@ func (h handler) deleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type reorderModelsRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// reorderModels 承接模型页拖拽排序:body 给全量模型 id 的新顺序,
+// 仓储按序重写 sort_order。id 缺失/重复都拒,避免半截顺序落库。
+func (h handler) reorderModels(w http.ResponseWriter, r *http.Request) {
+	var req reorderModelsRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if len(req.IDs) == 0 {
+		writeCode(w, apperr.InvalidRequest, "ids is required")
+		return
+	}
+	seen := make(map[string]bool, len(req.IDs))
+	for _, id := range req.IDs {
+		if seen[id] {
+			writeCode(w, apperr.InvalidRequest, fmt.Sprintf("duplicate model %q in ids", id))
+			return
+		}
+		seen[id] = true
+	}
+	if err := h.Models.Reorder(r.Context(), req.IDs); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
