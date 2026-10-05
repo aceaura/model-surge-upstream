@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -162,6 +163,89 @@ void main() {
     await tester.pumpAndSettle();
     expect(yOf('c-1') < yOf('a-1'), isTrue);
     expect(yOf('a-1') < yOf('b-1'), isTrue);
+  });
+
+  testWidgets('落库后重拉途中列表不闪 loading:旧数据继续渲染,新数据到达顺序不跳',
+      (tester) async {
+    // 第二次 GET /admin/accounts(落库后的重拉)用 Completer 卡住,
+    // 断言途中不整页 loading、行序保持乐观序。
+    var serverOrder = ['a-1', 'b-1', 'c-1'];
+    var accountsCalls = 0;
+    var gate = Completer<void>();
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final path = request.url.path;
+        final Map<String, dynamic> payload;
+        if (path == '/admin/accounts/reorder') {
+          serverOrder =
+              (jsonDecode(request.body)['names'] as List).cast<String>();
+          payload = {'ok': true};
+        } else if (path == '/admin/accounts') {
+          accountsCalls++;
+          if (accountsCalls > 1) await gate.future;
+          payload = {
+            'accounts': [
+              for (final n in serverOrder)
+                {
+                  'name': n,
+                  'provider_id': 'deepseek',
+                  'credential': {'api_key': 'sk-***'},
+                  'base_url': 'https://api.deepseek.com',
+                  'headers': <String, dynamic>{},
+                  'enabled': true,
+                }
+            ]
+          };
+        } else if (path == '/admin/providers') {
+          payload = {'providers': <dynamic>[]};
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: AccountsPage(
+          client: client,
+          onOpenSettings: () {},
+          onOpenModels: (_) {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    double yOf(String name) => tester.getCenter(find.text(name)).dy;
+
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(ReorderableDragStartListener).first));
+    await gesture.moveBy(const Offset(0, 260));
+    await tester.pump();
+    await gesture.up();
+    // 落库 POST 立即应答,_reload 发出的第二次 GET 被 gate 卡住:途中状态
+    await tester.pump();
+    await tester.pump();
+
+    // 不整页 loading(修复前 FutureBuilder 回到等待态,列表被 spinner 替换)
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    // 行仍在,且保持乐观序
+    expect(yOf('b-1') < yOf('c-1'), isTrue);
+    expect(yOf('c-1') < yOf('a-1'), isTrue);
+
+    // 放行重拉:服务器序已是手动序,放手 _order 后顺序不跳
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(yOf('b-1') < yOf('c-1'), isTrue);
+    expect(yOf('c-1') < yOf('a-1'), isTrue);
   });
 
   testWidgets('搜索过滤态禁拖:行首不出现拖拽柄', (tester) async {

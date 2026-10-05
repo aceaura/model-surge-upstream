@@ -63,6 +63,14 @@ class _AllModelsPageState extends State<AllModelsPage> {
   /// 原序追加在尾。
   List<String>? _order;
 
+  /// 最近一次成功加载的数据。重拉(_reload)期间继续渲染它,否则
+  /// FutureBuilder 回到等待态,整页列表被 loading 替换闪一下。
+  (List<UpstreamModel>, List<Account>, List<ProviderSpec>)? _lastData;
+
+  /// 落库成功后待释放的 _order 快照:重拉带回新数据(服务器序已是手动序)
+  /// 时才清 _order,顺序不跳;期间被更新的拖拽改写则不动(见 _persistOrder)。
+  List<String>? _releaseOrderOnData;
+
   /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
   ModelForm? _form;
 
@@ -141,10 +149,13 @@ class _AllModelsPageState extends State<AllModelsPage> {
     try {
       await widget.client.reorderModels(ids);
       if (!mounted) return;
-      // 落库成功后服务器序已等于手动序,放手重拉:不留着 _order,
+      // 落库成功后服务器序已等于手动序,挂起释放标记后重拉:新数据到达
+      // 才清 _order(见 build),既不闪 loading 也不跳序;不留着 _order,
       // 否则它会永久盖住外部(API/他端)后来的顺序变更——激活重拉也救不回。
-      // 连拖时 _order 已被下一次拖拽改写,只对得上的那次才清。
-      if (_order != null && _sameIds(_order!, ids)) _order = null;
+      // 连拖时 _order 已被下一次拖拽改写,只对得上的那次才挂。
+      if (_order != null && _sameIds(_order!, ids)) {
+        _releaseOrderOnData = ids;
+      }
       _reload();
     } catch (e) {
       if (!mounted) return;
@@ -287,12 +298,24 @@ class _AllModelsPageState extends State<AllModelsPage> {
     return FutureBuilder<(List<UpstreamModel>, List<Account>, List<ProviderSpec>)>(
       future: _future,
       builder: (context, snapshot) {
-        final loaded =
-            snapshot.connectionState == ConnectionState.done && !snapshot.hasError;
+        if (snapshot.connectionState == ConnectionState.done &&
+            !snapshot.hasError &&
+            snapshot.data != null) {
+          _lastData = snapshot.data;
+          // 落库后的重拉带回服务器序(=已落库的手动序),此刻放手 _order:
+          // 渲染顺序不变,不跳。_order 期间被更新的拖拽改写则保留。
+          final release = _releaseOrderOnData;
+          if (release != null) {
+            _releaseOrderOnData = null;
+            if (_order != null && _sameIds(_order!, release)) _order = null;
+          }
+        }
+        final data = _lastData;
+        final loaded = data != null;
         final models =
-            loaded ? _ordered(snapshot.data!.$1) : const <UpstreamModel>[];
-        final accounts = loaded ? snapshot.data!.$2 : const <Account>[];
-        final providers = loaded ? snapshot.data!.$3 : const <ProviderSpec>[];
+            data == null ? const <UpstreamModel>[] : _ordered(data.$1);
+        final accounts = data == null ? const <Account>[] : data.$2;
+        final providers = data == null ? const <ProviderSpec>[] : data.$3;
 
         // 摘要带:按协议计数 + 搜索过滤(标识/上游模型名/所属账号)。
         final counts = <String, int>{};
@@ -310,14 +333,14 @@ class _AllModelsPageState extends State<AllModelsPage> {
                 .toList();
 
         final Widget content;
-        if (snapshot.connectionState != ConnectionState.done) {
-          content = const Center(child: CircularProgressIndicator());
-        } else if (snapshot.hasError) {
-          content = ErrorPanel(
-            error: snapshot.error!,
-            onRetry: _reload,
-            onOpenSettings: widget.onOpenSettings,
-          );
+        if (!loaded) {
+          content = snapshot.hasError
+              ? ErrorPanel(
+                  error: snapshot.error!,
+                  onRetry: _reload,
+                  onOpenSettings: widget.onOpenSettings,
+                )
+              : const Center(child: CircularProgressIndicator());
         } else if (visible.isEmpty) {
           content = Center(
             child: Text(

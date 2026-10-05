@@ -48,6 +48,14 @@ class _AccountsPageState extends State<AccountsPage> {
   /// 原序追加在尾。
   List<String>? _order;
 
+  /// 最近一次成功加载的数据。重拉(_reload)期间继续渲染它,否则
+  /// FutureBuilder 回到等待态,整页列表被 loading 替换闪一下。
+  (List<Account>, List<ProviderSpec>)? _lastData;
+
+  /// 落库成功后待释放的 _order 快照:重拉带回新数据(服务器序已是手动序)
+  /// 时才清 _order,顺序不跳;期间被更新的拖拽改写则不动(见 _persistOrder)。
+  List<String>? _releaseOrderOnData;
+
   /// 非空时页内内联显示整页表单(替代列表),侧边栏保持可见。
   AccountForm? _form;
 
@@ -102,10 +110,13 @@ class _AccountsPageState extends State<AccountsPage> {
     try {
       await widget.client.reorderAccounts(names);
       if (!mounted) return;
-      // 落库成功后服务器序已等于手动序,放手重拉:不留着 _order,
+      // 落库成功后服务器序已等于手动序,挂起释放标记后重拉:新数据到达
+      // 才清 _order(见 build),既不闪 loading 也不跳序;不留着 _order,
       // 否则它会永久盖住外部(API/他端)后来的顺序变更——激活重拉也救不回。
-      // 连拖时 _order 已被下一次拖拽改写,只对得上的那次才清。
-      if (_order != null && _sameNames(_order!, names)) _order = null;
+      // 连拖时 _order 已被下一次拖拽改写,只对得上的那次才挂。
+      if (_order != null && _sameNames(_order!, names)) {
+        _releaseOrderOnData = names;
+      }
       _reload();
     } catch (e) {
       if (!mounted) return;
@@ -248,17 +259,30 @@ class _AccountsPageState extends State<AccountsPage> {
     return FutureBuilder<(List<Account>, List<ProviderSpec>)>(
       future: _future,
       builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            !snapshot.hasError &&
+            snapshot.data != null) {
+          _lastData = snapshot.data;
+          // 落库后的重拉带回服务器序(=已落库的手动序),此刻放手 _order:
+          // 渲染顺序不变,不跳。_order 期间被更新的拖拽改写则保留。
+          final release = _releaseOrderOnData;
+          if (release != null) {
+            _releaseOrderOnData = null;
+            if (_order != null && _sameNames(_order!, release)) _order = null;
+          }
+        }
+        final data = _lastData;
+        if (data == null) {
+          if (snapshot.hasError) {
+            return ErrorPanel(
+              error: snapshot.error!,
+              onRetry: _reload,
+              onOpenSettings: widget.onOpenSettings,
+            );
+          }
           return const Center(child: CircularProgressIndicator());
         }
-        if (snapshot.hasError) {
-          return ErrorPanel(
-            error: snapshot.error!,
-            onRetry: _reload,
-            onOpenSettings: widget.onOpenSettings,
-          );
-        }
-        final (raw, providers) = snapshot.data!;
+        final (raw, providers) = data;
         // 拖拽过的列表按用户手动序渲染(乐观序,失败会回落)
         final accounts = _ordered(raw);
         final t = context.tokens;
