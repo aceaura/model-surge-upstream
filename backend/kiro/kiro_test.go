@@ -366,10 +366,12 @@ func TestTextOnlyEstimatesAndStopReasons(t *testing.T) {
 					output, input = number(usage["completion_tokens"]), number(usage["prompt_tokens"])
 					expected = "length"
 				}
-				if output != 3 || input <= 0 || input == 99 || reason != expected {
+				// contextUsagePercentage=99 无绝对 input:total=int(0.99×200000)
+				// =198000,prompt=198000-3=197997(streaming_core.py:510-535)。
+				if output != 3 || input != 197997 || reason != expected {
 					t.Fatalf("usage=%v reason=%s", usage, reason)
 				}
-				if !strings.HasPrefix(str(obj(usage["kiro_usage_source"])["input_tokens"]), "estimated:") {
+				if str(obj(usage["kiro_usage_source"])["input_tokens"]) != "derived:context_usage_percentage" {
 					t.Fatal(usage)
 				}
 			})

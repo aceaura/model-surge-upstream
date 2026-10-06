@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
 const (
@@ -134,7 +136,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return t.base.RoundTrip(req)
 	}
 	if req.Method != http.MethodPost {
-		return nil, fmt.Errorf("kiro: unsupported method %s", req.Method)
+		return nil, apperr.New(apperr.InvalidRequest, "kiro: unsupported method "+req.Method)
 	}
 	protocol := ""
 	switch req.URL.Path {
@@ -145,10 +147,10 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	case "/v1/messages/count_tokens":
 		protocol = "count_tokens"
 	default:
-		return nil, fmt.Errorf("kiro: unsupported API path %q", req.URL.Path)
+		return nil, apperr.New(apperr.InvalidRequest, fmt.Sprintf("kiro: unsupported API path %q", req.URL.Path))
 	}
 	if req.Body == nil {
-		return nil, fmt.Errorf("kiro: missing request body")
+		return nil, apperr.New(apperr.InvalidRequest, "kiro: missing request body")
 	}
 	// GetBody preserves replayable caller bodies. As with any RoundTripper, a
 	// non-replayable body is consumed and closed, but no request fields are changed.
@@ -157,16 +159,16 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		var err error
 		source, err = req.GetBody()
 		if err != nil {
-			return nil, err
+			return nil, apperr.Wrap(apperr.InvalidRequest, "kiro: read request", err)
 		}
 	}
 	raw, err := io.ReadAll(io.LimitReader(source, maxRequestBytes+1))
 	source.Close()
 	if err != nil {
-		return nil, fmt.Errorf("kiro: read request: %w", err)
+		return nil, apperr.Wrap(apperr.InvalidRequest, "kiro: read request", err)
 	}
 	if len(raw) > maxRequestBytes {
-		return nil, fmt.Errorf("kiro: request exceeds %d bytes", maxRequestBytes)
+		return nil, apperr.New(apperr.InvalidRequest, fmt.Sprintf("kiro: request exceeds %d bytes", maxRequestBytes))
 	}
 	if protocol == "count_tokens" {
 		// routes_anthropic.py count_tokens_endpoint: 纯本地估算,不打上游;
@@ -174,7 +176,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// (含 system/tools/图片),返回 {"input_tokens": n}。
 		_, options, err := convertRequest(raw, "anthropic", req.Header.Get(HeaderProfileARN))
 		if err != nil {
-			return nil, err
+			return nil, apperr.Wrap(apperr.InvalidRequest, "kiro", err)
 		}
 		data, err := json.Marshal(object{"input_tokens": options.inputEstimate})
 		if err != nil {
@@ -192,19 +194,19 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if protocol == "anthropic" {
 		var probe map[string]any
 		if err := json.Unmarshal(raw, &probe); err == nil && probe["max_tokens"] == nil {
-			return nil, fmt.Errorf("kiro: invalid request: max_tokens is required")
+			return nil, apperr.New(apperr.InvalidRequest, "kiro: invalid request: max_tokens is required")
 		}
 	}
 	payload, options, err := convertRequest(raw, protocol, req.Header.Get(HeaderProfileARN))
 	if err != nil {
-		return nil, err
+		return nil, apperr.Wrap(apperr.InvalidRequest, "kiro", err)
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 	if len(encoded) > maxPayloadBytes {
-		return nil, fmt.Errorf("kiro: native payload exceeds %d bytes (history is not silently trimmed)", maxPayloadBytes)
+		return nil, apperr.New(apperr.InvalidRequest, fmt.Sprintf("kiro: native payload exceeds %d bytes (history is not silently trimmed)", maxPayloadBytes))
 	}
 	ctx, cancel := context.WithCancel(req.Context())
 	upstream := req.Clone(ctx)
@@ -288,9 +290,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if resp.Body == nil {
 			return nil, nil, fmt.Errorf("kiro: upstream returned no body")
 		}
-		rawBody := resp.Body
+		rawBody := io.ReadCloser(&stallBody{body: resp.Body})
 		if len(firstChunk) > 0 {
-			rawBody = &prependBody{Reader: io.MultiReader(bytes.NewReader(firstChunk), resp.Body), Closer: resp.Body}
+			rawBody = &prependBody{Reader: io.MultiReader(bytes.NewReader(firstChunk), rawBody), Closer: rawBody}
 		}
 		return resp, rawBody, nil
 	}
@@ -420,6 +422,28 @@ type prependBody struct {
 }
 
 var errFirstTokenTimeout = errors.New("kiro: first token timeout")
+
+// streamStallTimeout 对齐 http_client.py STREAMING_READ_TIMEOUT=300:流中段
+// 单次读停滞超时即关闭 body 报错,防挂死连接占住会话。测试替换以缩短等待。
+var streamStallTimeout = 300 * time.Second
+
+// stallBody 给流式响应中段每次 Read 套停滞超时;超时关闭底层 body 并以
+// 停滞错误代替底层的关闭错误返回。
+type stallBody struct{ body io.ReadCloser }
+
+func (b *stallBody) Read(p []byte) (int, error) {
+	tctx, stop := context.WithTimeout(context.Background(), streamStallTimeout)
+	defer stop()
+	done := context.AfterFunc(tctx, func() { _ = b.body.Close() })
+	defer done()
+	n, err := b.body.Read(p)
+	if n == 0 && tctx.Err() == context.DeadlineExceeded {
+		return 0, fmt.Errorf("kiro: upstream stream stalled for %s", streamStallTimeout)
+	}
+	return n, err
+}
+
+func (b *stallBody) Close() error { return b.body.Close() }
 
 // firstTokenTimeout 对齐 config.py: 基准 15s,按 effort 倍率放大
 // (low 1.5/medium 2/high 4/xhigh 6/max 8),封顶 120s。

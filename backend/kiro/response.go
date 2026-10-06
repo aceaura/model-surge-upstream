@@ -19,6 +19,11 @@ const maxResponseBytes = 32 << 20
 const maxToolBytes = 8 << 20
 const maxBracketScanBytes = 8 << 20
 
+// kiroMaxInputTokens 对齐 config.py DEFAULT_MAX_INPUT_TOKENS:从
+// contextUsagePercentage 反推 token 数时的上下文上限。Python 按模型读
+// ListAvailableModels 缓存的 tokenLimits,传输层无此缓存,用默认上限。
+const kiroMaxInputTokens = 200000
+
 // toolViolation 是严格 tool_choice 下的语义违规(streaming_core.py
 // ToolChoiceViolation):传输层缓冲校验后注入恢复指令重试一次。
 type toolViolation struct{ msg string }
@@ -44,6 +49,8 @@ type responseState struct {
 	seenNameArgs                  map[[sha256.Size]byte]bool
 	credits                       float64
 	hasCredits                    bool
+	contextPct                    float64
+	hasContextPct                 bool
 	parser                        *thinkingParser
 	fullText                      strings.Builder
 	fullTextOverflow              bool
@@ -350,8 +357,13 @@ func (s *responseState) accept(e wireEvent) error {
 			s.updateUsage(obj(d["usage"]))
 		}
 	}
-	if _, ok := d["contextUsagePercentage"]; ok {
+	if v, ok := d["contextUsagePercentage"]; ok {
 		s.terminal = true
+		if n, ok := v.(json.Number); ok {
+			if f, err := n.Float64(); err == nil {
+				s.contextPct, s.hasContextPct = f, true
+			}
+		}
 	}
 	if strings.Contains(strings.ToLower(e.kind), "usage") || e.kind == "metadataEvent" {
 		s.updateUsage(d)
@@ -576,14 +588,34 @@ func (s *responseState) usageSource() object {
 	in, out := "estimated:unicode_chars/4+1;message_overhead;image=100;claude=1.15", "estimated:unicode_chars/4+1;claude=1.15"
 	if s.inputAbsolute {
 		in = "upstream:absolute_tokens"
+	} else if _, ok := s.contextDerivedInput(s.outputCount()); ok {
+		in = "derived:context_usage_percentage"
 	}
 	if s.outputAbsolute {
 		out = "upstream:absolute_tokens"
 	}
 	return object{"input_tokens": in, "output_tokens": out}
 }
+
+// contextDerivedInput 对齐 streaming_core.py:510-535 的反推:无绝对 input
+// 值时,total=int(pct/100×上限),prompt=max(0, total-completion)。
+func (s *responseState) contextDerivedInput(output int) (int, bool) {
+	if !s.hasContextPct || s.contextPct <= 0 || s.inputAbsolute {
+		return 0, false
+	}
+	total := int(s.contextPct / 100 * kiroMaxInputTokens)
+	prompt := total - output
+	if prompt < 0 {
+		prompt = 0
+	}
+	return prompt, true
+}
 func (s *responseState) anthropicUsage() object {
-	usage := object{"input_tokens": s.inputTokens, "output_tokens": s.outputCount(), "kiro_usage_source": s.usageSource()}
+	input := s.inputTokens
+	if derived, ok := s.contextDerivedInput(s.outputCount()); ok {
+		input = derived
+	}
+	usage := object{"input_tokens": input, "output_tokens": s.outputCount(), "kiro_usage_source": s.usageSource()}
 	if s.cacheReadAbs {
 		usage["cache_read_input_tokens"] = s.cacheRead
 	}
@@ -597,7 +629,13 @@ func (s *responseState) anthropicUsage() object {
 }
 func (s *responseState) openAIUsage() object {
 	out := s.outputCount()
-	usage := object{"prompt_tokens": s.inputTokens, "completion_tokens": out, "total_tokens": s.inputTokens + out, "kiro_usage_source": s.usageSource()}
+	prompt := s.inputTokens
+	total := prompt + out
+	if derived, ok := s.contextDerivedInput(out); ok {
+		prompt = derived
+		total = int(s.contextPct / 100 * kiroMaxInputTokens)
+	}
+	usage := object{"prompt_tokens": prompt, "completion_tokens": out, "total_tokens": total, "kiro_usage_source": s.usageSource()}
 	if s.hasCredits {
 		usage["credits_used"] = s.credits
 	}

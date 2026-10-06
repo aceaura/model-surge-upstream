@@ -384,6 +384,13 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	resp, err := h.client.Do(up)
 	if err != nil {
 		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s: %v", target.ModelID, err))
+		// kiro 传输层的请求校验错误(unsupported path/超长度/max_tokens 缺失等)
+		// 归为 400,与 FastAPI 422 一致;其余仍按上游不可用 502。
+		if apperr.Is(err, apperr.InvalidRequest) {
+			writeFamilyError(w, fam, err)
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadRequest, 0, time.Since(start))
+			return
+		}
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
 		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 		return

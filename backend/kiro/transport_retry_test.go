@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
 // stubTimeout 把首 token 等待缩到毫秒级。
@@ -89,6 +91,46 @@ func (b *hangBody) Read([]byte) (int, error) {
 func (b *hangBody) Close() error {
 	b.once.Do(func() { close(b.closed) })
 	return nil
+}
+
+// dripBody 第一次 Read 交出数据,之后挂起直到 Close,模拟流中段停滞。
+type dripBody struct {
+	data   []byte
+	sent   bool
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *dripBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, b.data), nil
+	}
+	<-b.closed
+	return 0, io.EOF
+}
+func (b *dripBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestMidStreamStallTimeout(t *testing.T) {
+	orig := streamStallTimeout
+	streamStallTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { streamStallTimeout = orig })
+	drip := &dripBody{data: joinedFrames(frame("assistantResponseEvent", object{"content": "hi"})), closed: make(chan struct{})}
+	stalled := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: drip, Request: r}, nil
+	})
+	r := clientRequest(tbOf(t), "http://unused", "openai", true)
+	resp, err := NewTransport(stalled).RoundTrip(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if _, err = io.ReadAll(resp.Body); err == nil || !strings.Contains(err.Error(), "stalled") {
+		t.Fatalf("err=%v", err)
+	}
 }
 
 func TestNetworkErrorRetry(t *testing.T) {
@@ -219,6 +261,23 @@ func TestAnthropicMaxTokensRequired(t *testing.T) {
 	_, err := NewTransport(nil).RoundTrip(r)
 	if err == nil || !strings.Contains(err.Error(), "max_tokens is required") {
 		t.Fatalf("err=%v", err)
+	}
+	// 与 FastAPI 422 同类:校验错误归为 invalid_request,proxyplane 映射 400。
+	if !apperr.Is(err, apperr.InvalidRequest) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestValidationErrorsClassified(t *testing.T) {
+	r := clientRequest(tbOf(t), "http://unused", "openai", true)
+	r.Method = http.MethodGet
+	if _, err := NewTransport(nil).RoundTrip(r); !apperr.Is(err, apperr.InvalidRequest) {
+		t.Fatalf("method err=%v", err)
+	}
+	r = clientRequest(tbOf(t), "http://unused", "openai", true)
+	r.URL.Path = "/v1/unknown"
+	if _, err := NewTransport(nil).RoundTrip(r); !apperr.Is(err, apperr.InvalidRequest) {
+		t.Fatalf("path err=%v", err)
 	}
 }
 
