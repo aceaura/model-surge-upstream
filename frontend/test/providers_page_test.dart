@@ -135,7 +135,7 @@ void main() {
     expect(find.text('订阅 · 中国 · Token Plan'), findsOneWidget);
     expect(find.text('服务类型'), findsOneWidget);
     expect(find.widgetWithText(SelectableText, 'Token Plan'), findsOneWidget);
-    expect(find.text('bailian.cn.subscribe.token-plan'), findsOneWidget);
+    expect(find.text('bailian'), findsOneWidget);
     expect(
       find.text(
         'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
@@ -174,12 +174,12 @@ void main() {
     expect(find.text('计费模式'), findsNothing, reason: '独立属性行已被类型签取代');
     expect(find.text('服务区域'), findsNothing);
 
-    // 缩写标签就是 provider id:厂商.区域.计费.服务四段点式,区域
-    // cn/global 不省略,计费 api=按量/subscribe=订阅
-    expect(find.text('kimi.global.subscribe.coding'), findsOneWidget);
-    expect(find.text('ark.cn.api.standard'), findsOneWidget, reason: 'CN 区域在 id 里是 .cn 段');
-    expect(find.text('openai.global.api.standard'), findsOneWidget);
-    expect(find.textContaining('-CN'), findsNothing, reason: '区域段一律小写');
+    // 缩写标签只显示厂商短名(点式 id 首段),不显示完整 id
+    expect(find.text('kimi'), findsOneWidget);
+    expect(find.text('ark'), findsOneWidget);
+    expect(find.text('openai'), findsOneWidget);
+    expect(find.textContaining('global.subscribe'), findsNothing,
+        reason: '标签不再是完整点式 id');
 
     // 属性行按节下发(官网/请求地址每节各一份);服务类型行对无真实
     // 服务类型(Standard 占位/空)的规格隐藏
@@ -249,7 +249,7 @@ void main() {
     final subTop = tester.getTopLeft(find.text('订阅 · 全球')).dy;
     final paygoTop = tester.getTopLeft(find.text('按量计费 · 中国')).dy;
     expect(subTop, lessThan(paygoTop), reason: '组内订阅类型排在按量前面');
-    expect(find.text('kimi.cn.api.standard'), findsOneWidget);
+    expect(find.text('kimi'), findsNWidgets(2), reason: '两节标签都只显示厂商短名');
     expect(find.text('服务类型'), findsNothing,
         reason: '两条记录都无真实服务类型,该行隐藏');
     expect(find.widgetWithText(SelectableText, '—'), findsNothing);
