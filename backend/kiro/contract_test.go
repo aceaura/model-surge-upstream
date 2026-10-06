@@ -89,6 +89,7 @@ func TestStopReasonCaseNormalization(t *testing.T) {
 		{"maxTokens", "max_tokens", "length", false},
 		{"LENGTH", "max_tokens", "length", false},
 		{"CONTENT_FILTER", "refusal", "content_filter", false},
+		{"content_filtered", "refusal", "content_filter", false},
 		{"REFUSAL", "refusal", "content_filter", false},
 		{"TOOL_USE", "tool_use", "tool_calls", true},
 		{"toolUse", "tool_use", "tool_calls", true},

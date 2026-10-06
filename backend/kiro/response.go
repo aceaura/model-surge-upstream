@@ -457,7 +457,7 @@ func (s *responseState) finalize() error {
 		}
 	}
 	switch s.stopReason {
-	case "", "end_turn", "stop", "stop_sequence", "tool_use", "toolUse", "tool_calls", "max_tokens", "maxTokens", "length", "MAX_TOKENS", "content_filter", "refusal":
+	case "", "end_turn", "stop", "stop_sequence", "tool_use", "toolUse", "tool_calls", "max_tokens", "maxTokens", "length", "MAX_TOKENS", "content_filter", "content_filtered", "refusal":
 	default:
 		return fmt.Errorf("kiro: unsupported upstream stop reason %q", s.stopReason)
 	}
@@ -607,7 +607,9 @@ func (s *responseState) reason() (string, string) {
 	switch s.stopReason {
 	case "max_tokens", "maxTokens", "length", "MAX_TOKENS":
 		return "max_tokens", "length"
-	case "content_filter", "refusal":
+	case "content_filter", "content_filtered", "refusal":
+		// 上游观测值 content_filtered(Kiro 内容过滤拒答)与 anthropic 原生
+		// refusal 同类:anthropic 透 refusal,openai 透 content_filter。
 		return "refusal", "content_filter"
 	case "end_turn", "stop", "stop_sequence", "", "tool_use", "toolUse", "tool_calls":
 		if s.toolCount > 0 {
