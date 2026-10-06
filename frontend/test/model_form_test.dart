@@ -12,7 +12,7 @@ import 'package:msu_admin/ui/styled_dropdown.dart';
 
 final providers = [
   ProviderSpec.fromJson(const {
-    'id': 'kimi/coding',
+    'id': 'kimi.global.subscribe.coding',
     'display_name': 'Moonshot Kimi',
     'website': 'https://platform.moonshot.cn',
     'base_url': 'https://api.kimi.com/coding',
@@ -21,7 +21,7 @@ final providers = [
     'credential': 'api_key',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'openai/api',
+    'id': 'openai.global.api.standard',
     'display_name': 'OpenAI',
     'website': 'https://openai.com',
     'base_url': 'https://api.openai.com',
@@ -34,7 +34,7 @@ final providers = [
 final accounts = [
   Account.fromJson(const {
     'name': 'kimi-1',
-    'provider_id': 'kimi/coding',
+    'provider_id': 'kimi.global.subscribe.coding',
     'credential': {'kind': 'api_key', 'api_key': 'sk-l***efgh'},
     'base_url': '',
     'headers': <String, dynamic>{},
@@ -42,7 +42,7 @@ final accounts = [
   }),
   Account.fromJson(const {
     'name': 'oa-1',
-    'provider_id': 'openai/api',
+    'provider_id': 'openai.global.api.standard',
     'credential': {'kind': 'api_key', 'api_key': 'sk-o***wxyz'},
     'base_url': '',
     'headers': <String, dynamic>{},
@@ -117,7 +117,7 @@ void main() {
 
     await tester.tap(dropdownIn('model-account-field'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('oa-1 (openai/api)').last);
+    await tester.tap(find.text('oa-1 (openai.global.api.standard)').last);
     await tester.pumpAndSettle();
 
     await tester.tap(dropdownIn('model-protocol-field'));
@@ -185,7 +185,7 @@ void main() {
     });
     await pumpForm(tester, copyFrom: source);
 
-    expect(find.text('拷贝模型 kimi-1/k2'), findsOneWidget);
+    expect(find.text('拷贝 k2'), findsOneWidget);
     // 标识加 -copy 后缀,且标识字段可编辑(新建语义)
     final idField = tester.widget<TextFormField>(
       find.byKey(const ValueKey('model-id')),
@@ -349,15 +349,17 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
 
-    // 写入格式下拉框在元数据下方:默认协议内置,改选顶层
-    // reasoning_effort(none 不落字段)随提交上行。
+    // 写入格式下拉框在元数据下方:默认协议内置,改选 OpenAI Chat
+    // 协议格式(顶层 reasoning_effort)随提交上行。
     await tester.ensureVisible(
       find.byKey(const ValueKey('model-effort-format')),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-format')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI Chat 协议格式（none 不落字段）'));
+    await tester.tap(
+      find.text('OpenAI Chat 协议格式（顶层 reasoning_effort，关闭思考=none 原样上发）'),
+    );
     await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
@@ -375,7 +377,7 @@ void main() {
       {'name': '0', 'value': 'none'},
       {'name': '1', 'value': 'ultra'},
     ]);
-    expect(sentBody!['effort_format'], 'chat_completions_skip_none');
+    expect(sentBody!['effort_format'], 'chat_completions');
 
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();

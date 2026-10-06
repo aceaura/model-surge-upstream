@@ -17,7 +17,7 @@ ApiClient fakeClient() => ApiClient(
       jsonEncode({
         'providers': [
           {
-            'id': 'kimi/coding',
+            'id': 'kimi.global.subscribe.coding',
             'display_name': 'Moonshot Kimi',
             'website': 'https://www.kimi.com',
             'base_url': 'https://api.kimi.com/coding',
@@ -28,7 +28,7 @@ ApiClient fakeClient() => ApiClient(
             'region': 'Global',
           },
           {
-            'id': 'ark-cn/api',
+            'id': 'ark.cn.api.standard',
             'display_name': 'Volcengine Ark',
             'website': 'https://console.volcengine.com/ark',
             'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
@@ -39,7 +39,7 @@ ApiClient fakeClient() => ApiClient(
             'region': 'CN',
           },
           {
-            'id': 'openai/api',
+            'id': 'openai.global.api.standard',
             'display_name': 'OpenAI',
             'website': 'https://openai.com',
             'base_url': 'https://api.openai.com',
@@ -102,7 +102,7 @@ void main() {
           jsonEncode({
             'providers': [
               {
-                'id': 'bailian-cn/token-plan',
+                'id': 'bailian.cn.subscribe.token-plan',
                 'display_name': 'Aliyun Bailian',
                 'website':
                     'https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal',
@@ -135,7 +135,7 @@ void main() {
     expect(find.text('订阅 · 中国 · Token Plan'), findsOneWidget);
     expect(find.text('服务类型'), findsOneWidget);
     expect(find.widgetWithText(SelectableText, 'Token Plan'), findsOneWidget);
-    expect(find.text('bailian-cn/token-plan'), findsOneWidget);
+    expect(find.text('bailian.cn.subscribe.token-plan'), findsOneWidget);
     expect(
       find.text(
         'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
@@ -174,11 +174,11 @@ void main() {
     expect(find.text('计费模式'), findsNothing, reason: '独立属性行已被类型签取代');
     expect(find.text('服务区域'), findsNothing);
 
-    // 缩写标签就是 provider id:厂商[-区域]/服务路径式,Global 省略区域,
-    // CN 带 -cn 段,按量计费标 /api
-    expect(find.text('kimi/coding'), findsOneWidget);
-    expect(find.text('ark-cn/api'), findsOneWidget, reason: 'CN 区域在 id 里带 -cn 段');
-    expect(find.text('openai/api'), findsOneWidget);
+    // 缩写标签就是 provider id:厂商.区域.计费.服务四段点式,区域
+    // cn/global 不省略,计费 api=按量/subscribe=订阅
+    expect(find.text('kimi.global.subscribe.coding'), findsOneWidget);
+    expect(find.text('ark.cn.api.standard'), findsOneWidget, reason: 'CN 区域在 id 里是 .cn 段');
+    expect(find.text('openai.global.api.standard'), findsOneWidget);
     expect(find.textContaining('-CN'), findsNothing, reason: '区域段一律小写');
 
     // 属性行按节下发(官网/请求地址每节各一份);服务类型行对无真实
@@ -201,7 +201,7 @@ void main() {
           jsonEncode({
             'providers': [
               {
-                'id': 'kimi-cn/api',
+                'id': 'kimi.cn.api.standard',
                 'display_name': 'Moonshot Kimi',
                 'website': 'https://platform.moonshot.cn',
                 'base_url': 'https://api.moonshot.cn/v1',
@@ -212,7 +212,7 @@ void main() {
                 'region': 'CN',
               },
               {
-                'id': 'kimi/coding',
+                'id': 'kimi.global.subscribe.coding',
                 'display_name': 'Moonshot Kimi',
                 'website': 'https://www.kimi.com',
                 'base_url': 'https://api.kimi.com/coding',
@@ -249,7 +249,7 @@ void main() {
     final subTop = tester.getTopLeft(find.text('订阅 · 全球')).dy;
     final paygoTop = tester.getTopLeft(find.text('按量计费 · 中国')).dy;
     expect(subTop, lessThan(paygoTop), reason: '组内订阅类型排在按量前面');
-    expect(find.text('kimi-cn/api'), findsOneWidget);
+    expect(find.text('kimi.cn.api.standard'), findsOneWidget);
     expect(find.text('服务类型'), findsNothing,
         reason: '两条记录都无真实服务类型,该行隐藏');
     expect(find.widgetWithText(SelectableText, '—'), findsNothing);
@@ -265,7 +265,7 @@ void main() {
           jsonEncode({
             'providers': [
               {
-                'id': 'bailian-cn/token-plan',
+                'id': 'bailian.cn.subscribe.token-plan',
                 'display_name': 'Aliyun Bailian',
                 'website': 'https://example.com/token-plan',
                 'base_url': 'https://token-plan.example.com',
@@ -277,7 +277,7 @@ void main() {
                 'plan': 'Token Plan',
               },
               {
-                'id': 'bailian-cn/coding-plan',
+                'id': 'bailian.cn.subscribe.coding-plan',
                 'display_name': 'Aliyun Bailian',
                 'website': 'https://example.com/coding-plan',
                 'base_url': 'https://coding-plan.example.com',

@@ -38,7 +38,7 @@ func acct(name, providerID, baseURL string) account.Account {
 
 func TestListNotQueryable(t *testing.T) {
 	// ark 未声明列举接口。
-	l := New(fakeAccounts{"ark-1": acct("ark-1", "ark/api", "")}, time.Minute)
+	l := New(fakeAccounts{"ark-1": acct("ark-1", "ark.global.api.standard", "")}, time.Minute)
 	got, err := l.List(context.Background(), "ark-1")
 	if err != nil {
 		t.Fatalf("missing listing api must not be an error: %v", err)
@@ -66,7 +66,7 @@ func TestListSuccessOpenAIShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	got, err := l.List(context.Background(), "ds-1")
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -97,7 +97,7 @@ func TestListAnthropicKeyAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"kimi-1": acct("kimi-1", "kimi/coding", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"kimi-1": acct("kimi-1", "kimi.global.subscribe.coding", srv.URL)}, time.Minute)
 	if _, err := l.List(context.Background(), "kimi-1"); err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestListUpstreamFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	_, err := l.List(context.Background(), "ds-1")
 	if !apperr.Is(err, apperr.UpstreamUnavailable) {
 		t.Errorf("code = %q, want upstream_unavailable", apperr.CodeOf(err))
@@ -123,7 +123,7 @@ func TestListUpstreamFailure(t *testing.T) {
 }
 
 func TestListUnreachableUpstream(t *testing.T) {
-	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", "http://127.0.0.1:1")}, time.Minute)
+	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", "http://127.0.0.1:1")}, time.Minute)
 	if _, err := l.List(context.Background(), "ds-1"); !apperr.Is(err, apperr.UpstreamUnavailable) {
 		t.Errorf("code = %q, want upstream_unavailable", apperr.CodeOf(err))
 	}
@@ -137,7 +137,7 @@ func TestListCachesWithinTTL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	for range 3 {
 		if _, err := l.List(context.Background(), "ds-1"); err != nil {
 			t.Fatal(err)
@@ -156,7 +156,7 @@ func TestForget(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	if _, err := l.List(context.Background(), "ds-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestDeclaredEfforts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"oa-1": acct("oa-1", "openai/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"oa-1": acct("oa-1", "openai.global.api.standard", srv.URL)}, time.Minute)
 	ctx := context.Background()
 	if got := l.DeclaredEfforts(ctx, "oa-1", "gpt-6.1-sol"); !slices.Equal(got, []string{"low", "high"}) {
 		t.Errorf("declared = %v, want [low high]", got)
@@ -287,7 +287,7 @@ func TestDeclaredEffortsCachesWithList(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"oa-1": acct("oa-1", "openai/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"oa-1": acct("oa-1", "openai.global.api.standard", srv.URL)}, time.Minute)
 	ctx := context.Background()
 	if _, err := l.List(ctx, "oa-1"); err != nil {
 		t.Fatal(err)
@@ -310,7 +310,7 @@ func TestHeaderSourceOverridesStaticAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"cx-1": acct("cx-1", "openai/codex", srv.URL)}, time.Minute).
+	l := New(fakeAccounts{"cx-1": acct("cx-1", "openai.global.subscribe.codex", srv.URL)}, time.Minute).
 		WithHeaderSource(headerSourceFunc(func(context.Context, provider.Spec, account.Account) (map[string]string, error) {
 			return map[string]string{"Authorization": "Bearer live-token"}, nil
 		}))
@@ -340,7 +340,7 @@ func TestCodexModelsURLCarriesClientVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"cx-1": acct("cx-1", "openai/codex", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"cx-1": acct("cx-1", "openai.global.subscribe.codex", srv.URL)}, time.Minute)
 	got, err := l.List(context.Background(), "cx-1")
 	if err != nil {
 		t.Fatal(err)
@@ -365,7 +365,7 @@ func TestConcurrentLists(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	l := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	done := make(chan struct{})
 	for range 8 {
 		go func() {

@@ -34,7 +34,7 @@ func TestBuiltinSpecsWellFormed(t *testing.T) {
 }
 
 func TestKiroRegistered(t *testing.T) {
-	s, ok := Get("kiro")
+	s, ok := Get("kiro.global.subscribe.standard")
 	if !ok {
 		t.Fatal("kiro should be registered")
 	}
@@ -51,16 +51,16 @@ func TestKiroRegistered(t *testing.T) {
 
 func TestBuiltinBilling(t *testing.T) {
 	want := map[string]Billing{
-		"anthropic/api": BillingPayGo,
-		"openai/api":    BillingPayGo,
-		"gemini/api":    BillingPayGo,
+		"anthropic.global.api.standard": BillingPayGo,
+		"openai.global.api.standard":    BillingPayGo,
+		"gemini.global.api.standard":    BillingPayGo,
 		// kimi 预设端点是 api.kimi.com/coding,即 Kimi For Coding 订阅产品。
-		"kimi/coding":           BillingSubscription,
-		"ark/api":               BillingPayGo,
-		"deepseek/api":          BillingPayGo,
-		"openai/codex":          BillingSubscription,
-		"bailian-cn/token-plan": BillingSubscription,
-		"bailian-cn/coding-plan": BillingSubscription,
+		"kimi.global.subscribe.coding":           BillingSubscription,
+		"ark.global.api.standard":               BillingPayGo,
+		"deepseek.global.api.standard":          BillingPayGo,
+		"openai.global.subscribe.codex":          BillingSubscription,
+		"bailian.cn.subscribe.token-plan": BillingSubscription,
+		"bailian.cn.subscribe.coding-plan": BillingSubscription,
 	}
 	for id, billing := range want {
 		s, ok := Get(id)
@@ -76,15 +76,15 @@ func TestBuiltinBilling(t *testing.T) {
 
 func TestBuiltinRegion(t *testing.T) {
 	want := map[string]string{
-		"anthropic/api":         RegionGlobal,
-		"openai/api":            RegionGlobal,
-		"gemini/api":            RegionGlobal,
-		"kimi/coding":           RegionGlobal,
-		"ark/api":               RegionGlobal,
-		"deepseek/api":          RegionGlobal,
-		"openai/codex":          RegionGlobal,
-		"bailian-cn/token-plan": RegionCN,
-		"bailian-cn/coding-plan": RegionCN,
+		"anthropic.global.api.standard":         RegionGlobal,
+		"openai.global.api.standard":            RegionGlobal,
+		"gemini.global.api.standard":            RegionGlobal,
+		"kimi.global.subscribe.coding":           RegionGlobal,
+		"ark.global.api.standard":               RegionGlobal,
+		"deepseek.global.api.standard":          RegionGlobal,
+		"openai.global.subscribe.codex":          RegionGlobal,
+		"bailian.cn.subscribe.token-plan": RegionCN,
+		"bailian.cn.subscribe.coding-plan": RegionCN,
 	}
 	for id, region := range want {
 		s, ok := Get(id)
@@ -100,16 +100,16 @@ func TestBuiltinRegion(t *testing.T) {
 
 func TestBuiltinPlan(t *testing.T) {
 	want := map[string]string{
-		"anthropic/api":         PlanStandard,
-		"openai/api":            PlanStandard,
-		"gemini/api":            PlanStandard,
-		"kimi/coding":           PlanStandard,
-		"ark/api":               PlanStandard,
-		"deepseek/api":          PlanStandard,
-		"openai/codex":          PlanStandard,
-		"kiro":                  PlanStandard,
-		"bailian-cn/token-plan": "Token Plan",
-		"bailian-cn/coding-plan": "Coding Plan",
+		"anthropic.global.api.standard":         PlanStandard,
+		"openai.global.api.standard":            PlanStandard,
+		"gemini.global.api.standard":            PlanStandard,
+		"kimi.global.subscribe.coding":           PlanStandard,
+		"ark.global.api.standard":               PlanStandard,
+		"deepseek.global.api.standard":          PlanStandard,
+		"openai.global.subscribe.codex":          PlanStandard,
+		"kiro.global.subscribe.standard":                  PlanStandard,
+		"bailian.cn.subscribe.token-plan": "Token Plan",
+		"bailian.cn.subscribe.coding-plan": "Coding Plan",
 	}
 	for id, plan := range want {
 		s, ok := Get(id)
@@ -127,19 +127,19 @@ func TestBuiltinPlan(t *testing.T) {
 // 别把 marketing 主页或另一产品线地址挂上来。
 func TestBuiltinWebsite(t *testing.T) {
 	want := map[string]string{
-		"anthropic/api": "https://console.anthropic.com",
-		"openai/api":    "https://platform.openai.com",
-		"gemini/api":    "https://aistudio.google.com",
+		"anthropic.global.api.standard": "https://console.anthropic.com",
+		"openai.global.api.standard":    "https://platform.openai.com",
+		"gemini.global.api.standard":    "https://aistudio.google.com",
 		// kimi 是订阅(Kimi For Coding),订阅站在 kimi.com;
 		// platform.moonshot.cn 是按量平台,不挂。
-		"kimi/coding":  "https://www.kimi.com",
-		"ark/api":      "https://console.volcengine.com/ark",
-		"deepseek/api": "https://platform.deepseek.com",
-		// openai/codex 是订阅(ChatGPT 登录态),订阅站在 chatgpt.com;
-		// platform.openai.com 是按量平台,已挂给 openai/api。
-		"openai/codex":          "https://chatgpt.com",
-		"bailian-cn/token-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
-		"bailian-cn/coding-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/coding-plan/personal",
+		"kimi.global.subscribe.coding":  "https://www.kimi.com",
+		"ark.global.api.standard":      "https://console.volcengine.com/ark",
+		"deepseek.global.api.standard": "https://platform.deepseek.com",
+		// openai.global.subscribe.codex 是订阅(ChatGPT 登录态),订阅站在 chatgpt.com;
+		// platform.openai.com 是按量平台,已挂给 openai.global.api.standard。
+		"openai.global.subscribe.codex":          "https://chatgpt.com",
+		"bailian.cn.subscribe.token-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
+		"bailian.cn.subscribe.coding-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/coding-plan/personal",
 	}
 	for id, website := range want {
 		s, ok := Get(id)
@@ -174,9 +174,9 @@ func TestAllReturnsCopy(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	s, ok := Get("kimi/coding")
+	s, ok := Get("kimi.global.subscribe.coding")
 	if !ok {
-		t.Fatal("kimi/coding should be registered")
+		t.Fatal("kimi.global.subscribe.coding should be registered")
 	}
 	if s.BaseURL != "https://api.kimi.com/coding" {
 		t.Errorf("kimi base_url = %q", s.BaseURL)
@@ -187,7 +187,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestSupports(t *testing.T) {
-	ark, _ := Get("ark/api")
+	ark, _ := Get("ark.global.api.standard")
 	if !ark.Supports(ProtocolAnthropic) {
 		t.Error("ark should support anthropic")
 	}
@@ -200,11 +200,11 @@ func TestSupports(t *testing.T) {
 }
 
 func TestQuotaDeclaration(t *testing.T) {
-	ds, _ := Get("deepseek/api")
+	ds, _ := Get("deepseek.global.api.standard")
 	if !ds.QuotaQueryable {
 		t.Fatal("deepseek should declare a builtin quota query")
 	}
-	anth, _ := Get("anthropic/api")
+	anth, _ := Get("anthropic.global.api.standard")
 	if anth.QuotaQueryable {
 		t.Error("anthropic declares no quota query in this iteration")
 	}
@@ -218,9 +218,9 @@ func TestIDs(t *testing.T) {
 }
 
 func TestOpenAICodexSpec(t *testing.T) {
-	s, ok := Get("openai/codex")
+	s, ok := Get("openai.global.subscribe.codex")
 	if !ok {
-		t.Fatal("openai/codex should be registered")
+		t.Fatal("openai.global.subscribe.codex should be registered")
 	}
 	if s.Credential != CredOAuthRefresh {
 		t.Errorf("credential = %q, want oauth_refresh", s.Credential)
@@ -235,14 +235,14 @@ func TestOpenAICodexSpec(t *testing.T) {
 		t.Errorf("codex /models 清单端点是推理档声明的数据源,应声明 Models, got %+v", s.Models)
 	}
 	if s.DisplayName != "OpenAI" {
-		t.Errorf("display_name = %q, 与按量 openai/api 同名才能在级联里同厂商分组", s.DisplayName)
+		t.Errorf("display_name = %q, 与按量 openai.global.api.standard 同名才能在级联里同厂商分组", s.DisplayName)
 	}
 }
 
 func TestBailianSpec(t *testing.T) {
-	s, ok := Get("bailian-cn/token-plan")
+	s, ok := Get("bailian.cn.subscribe.token-plan")
 	if !ok {
-		t.Fatal("bailian-cn/token-plan should be registered")
+		t.Fatal("bailian.cn.subscribe.token-plan should be registered")
 	}
 	if s.BaseURL != "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode" {
 		t.Errorf("base_url = %q", s.BaseURL)
@@ -262,9 +262,9 @@ func TestBailianSpec(t *testing.T) {
 }
 
 func TestBailianCodingSpec(t *testing.T) {
-	s, ok := Get("bailian-cn/coding-plan")
+	s, ok := Get("bailian.cn.subscribe.coding-plan")
 	if !ok {
-		t.Fatal("bailian-cn/coding-plan should be registered")
+		t.Fatal("bailian.cn.subscribe.coding-plan should be registered")
 	}
 	if s.BaseURL != "https://coding.dashscope.aliyuncs.com" {
 		t.Errorf("base_url = %q", s.BaseURL)
@@ -287,7 +287,7 @@ func TestBailianCodingSpec(t *testing.T) {
 
 func TestRegisterRejects(t *testing.T) {
 	cases := map[string]Spec{
-		"duplicate id": {ID: "kimi/coding", BaseURL: "https://x", Protocols: []string{ProtocolAnthropic}},
+		"duplicate id": {ID: "kimi.global.subscribe.coding", BaseURL: "https://x", Protocols: []string{ProtocolAnthropic}},
 		"empty id":     {BaseURL: "https://x", Protocols: []string{ProtocolAnthropic}},
 		"empty base":   {ID: "fresh-a", Protocols: []string{ProtocolAnthropic}},
 		"no protocol":  {ID: "fresh-b", BaseURL: "https://x"},

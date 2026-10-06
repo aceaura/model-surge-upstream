@@ -23,7 +23,7 @@ ApiClient fakeClient(Map<String, dynamic> testResult) => ApiClient(
             'accounts': [
               {
                 'name': 'ds-1',
-                'provider_id': 'deepseek/api',
+                'provider_id': 'deepseek.global.api.standard',
                 'credential': {'api_key': 'sk-***'},
                 'base_url': 'https://api.deepseek.com',
                 'headers': <String, dynamic>{},
@@ -81,7 +81,7 @@ void main() {
               for (final n in serverOrder)
                 {
                   'name': n,
-                  'provider_id': 'deepseek/api',
+                  'provider_id': 'deepseek.global.api.standard',
                   'credential': {'api_key': 'sk-***'},
                   'base_url': 'https://api.deepseek.com',
                   'headers': <String, dynamic>{},
@@ -190,7 +190,7 @@ void main() {
               for (final n in serverOrder)
                 {
                   'name': n,
-                  'provider_id': 'deepseek/api',
+                  'provider_id': 'deepseek.global.api.standard',
                   'credential': {'api_key': 'sk-***'},
                   'base_url': 'https://api.deepseek.com',
                   'headers': <String, dynamic>{},

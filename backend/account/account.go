@@ -87,7 +87,7 @@ func (a Account) EffectiveBaseURL(spec provider.Spec) string {
 	if a.BaseURL != "" {
 		base = a.BaseURL
 	}
-	if spec.ID == "kiro" {
+	if spec.ID == "kiro.global.subscribe.standard" {
 		if a.BaseURL == "" || a.BaseURL == spec.BaseURL {
 			base = "https://runtime." + a.Credential.KiroAPIRegion() + ".kiro.dev"
 		}

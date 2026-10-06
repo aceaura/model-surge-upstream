@@ -34,7 +34,7 @@ func (tr kiroRefreshTransport) RoundTrip(r *http.Request) (*http.Response, error
 }
 
 func kiroAccount() account.Account {
-	return account.Account{Name: "kiro-1", ProviderID: "kiro", Credential: credential.Credential{
+	return account.Account{Name: "kiro-1", ProviderID: "kiro.global.subscribe.standard", Credential: credential.Credential{
 		Kind: provider.CredKiroRefresh, RefreshToken: "rt-secret", Region: "us-east-1",
 	}}
 }

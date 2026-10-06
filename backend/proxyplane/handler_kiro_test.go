@@ -139,7 +139,7 @@ func TestKiroRetryUsesRefreshedEndpoint(t *testing.T) {
 		_, _ = w.Write(kiroTestFrame("messageStopEvent", `{"stopReason":"end_turn"}`))
 	}))
 	defer fresh.Close()
-	target := resolve.ResolvedTarget{ModelID: "kiro-retry", Account: "kiro-test", ProviderID: "kiro",
+	target := resolve.ResolvedTarget{ModelID: "kiro-retry", Account: "kiro-test", ProviderID: "kiro.global.subscribe.standard",
 		Protocol: provider.ProtocolChatCompletions, BaseURL: old.URL, NativeModel: "claude-sonnet-4.5",
 		Headers: kiro.Headers("old-access", "")}
 	updated := target
@@ -174,7 +174,7 @@ func TestKiroRetryOn403Refreshes(t *testing.T) {
 		_, _ = w.Write(kiroTestFrame("messageStopEvent", `{"stopReason":"end_turn"}`))
 	}))
 	defer fresh.Close()
-	target := resolve.ResolvedTarget{ModelID: "kiro-403", Account: "kiro-test", ProviderID: "kiro",
+	target := resolve.ResolvedTarget{ModelID: "kiro-403", Account: "kiro-test", ProviderID: "kiro.global.subscribe.standard",
 		Protocol: provider.ProtocolChatCompletions, BaseURL: old.URL, NativeModel: "claude-sonnet-4.5",
 		Headers: kiro.Headers("old-access", "")}
 	updated := target
@@ -221,7 +221,7 @@ func TestClientCannotSelectKiroAdapter(t *testing.T) {
 	h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{"gpt": target}}, nil)
 	r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt","messages":[{"role":"user","content":"hello"}]}`))
 	r.Header.Set("Authorization", "Bearer "+testKey)
-	r.Header.Set(kiro.HeaderProvider, "kiro")
+	r.Header.Set(kiro.HeaderProvider, "kiro.global.subscribe.standard")
 	r.Header.Set(kiro.HeaderProfileARN, "forged-profile")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

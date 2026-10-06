@@ -18,7 +18,7 @@ import (
 func (f *fixture) addTestableModel(t *testing.T, upstreamURL string) string {
 	t.Helper()
 	f.accounts.data["probe-1"] = account.Account{
-		Name: "probe-1", ProviderID: "kimi/coding", BaseURL: upstreamURL,
+		Name: "probe-1", ProviderID: "kimi.global.subscribe.coding", BaseURL: upstreamURL,
 		Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: secret},
 		Headers:    map[string]string{}, Enabled: true,
 	}

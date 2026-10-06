@@ -24,7 +24,7 @@ func fakeJWT(exp time.Time) string {
 }
 
 func kimiAcct(name, baseURL, webToken string) account.Account {
-	a := acct(name, "kimi/coding", baseURL)
+	a := acct(name, "kimi.global.subscribe.coding", baseURL)
 	a.Credential = credential.Credential{
 		Kind:            provider.CredAPIKey,
 		APIKey:          "sk-abcdefghijkl",
@@ -125,7 +125,7 @@ func TestKimiMonthlySkippedForOtherProviders(t *testing.T) {
 	}))
 	defer balanceSrv.Close()
 
-	a := acct("ds-1", "deepseek/api", balanceSrv.URL)
+	a := acct("ds-1", "deepseek.global.api.standard", balanceSrv.URL)
 	a.Credential.WebRefreshToken = "web-refresh-token"
 	q := New(fakeAccounts{"ds-1": a}, time.Minute)
 	if _, err := q.Query(context.Background(), "ds-1"); err != nil {

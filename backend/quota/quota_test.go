@@ -37,7 +37,7 @@ func acct(name, providerID, baseURL string) account.Account {
 
 func TestQueryNotQueryable(t *testing.T) {
 	// anthropic 未声明额度接口。
-	q := New(fakeAccounts{"a-1": acct("a-1", "anthropic/api", "")}, time.Minute)
+	q := New(fakeAccounts{"a-1": acct("a-1", "anthropic.global.api.standard", "")}, time.Minute)
 	got, err := q.Query(context.Background(), "a-1")
 	if err != nil {
 		t.Fatalf("missing quota api must not be an error: %v", err)
@@ -57,7 +57,7 @@ func TestQueryDisabledByAccountSettings(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := acct("ds-1", "deepseek/api", srv.URL)
+	a := acct("ds-1", "deepseek.global.api.standard", srv.URL)
 	off := false
 	a.QuotaSettings = &account.QuotaSettings{Enabled: &off}
 	q := New(fakeAccounts{"ds-1": a}, time.Minute)
@@ -77,7 +77,7 @@ func TestQueryEnabledUnsetDefaultsOn(t *testing.T) {
 	defer srv.Close()
 
 	// 老账号只存了间隔、没有 enabled 字段:必须照旧查询。
-	a := acct("ds-1", "deepseek/api", srv.URL)
+	a := acct("ds-1", "deepseek.global.api.standard", srv.URL)
 	a.QuotaSettings = &account.QuotaSettings{AutoIntervalMinutes: 5}
 	q := New(fakeAccounts{"ds-1": a}, time.Minute)
 	got, err := q.Query(context.Background(), "ds-1")
@@ -104,7 +104,7 @@ func TestCachedReturnsStaleReport(t *testing.T) {
 	defer srv.Close()
 
 	// TTL 调到极短,查完即过期:验证 Cached 无视存活期回过缓存。
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Nanosecond)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Nanosecond)
 	if _, err := q.Query(context.Background(), "ds-1"); err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestQuerySuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	got, err := q.Query(context.Background(), "ds-1")
 	if err != nil {
 		t.Fatalf("query: %v", err)
@@ -171,7 +171,7 @@ func TestQueryUpstreamFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	_, err := q.Query(context.Background(), "ds-1")
 	if !apperr.Is(err, apperr.QuotaUnavailable) {
 		t.Errorf("code = %q, want quota_unavailable", apperr.CodeOf(err))
@@ -179,7 +179,7 @@ func TestQueryUpstreamFailure(t *testing.T) {
 }
 
 func TestQueryUnreachableUpstream(t *testing.T) {
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", "http://127.0.0.1:1")}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", "http://127.0.0.1:1")}, time.Minute)
 	if _, err := q.Query(context.Background(), "ds-1"); !apperr.Is(err, apperr.QuotaUnavailable) {
 		t.Errorf("code = %q, want quota_unavailable", apperr.CodeOf(err))
 	}
@@ -193,7 +193,7 @@ func TestQueryCachesWithinTTL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	for range 3 {
 		if _, err := q.Query(context.Background(), "ds-1"); err != nil {
 			t.Fatal(err)
@@ -212,7 +212,7 @@ func TestQueryRefetchesAfterTTL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Nanosecond)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Nanosecond)
 	for range 2 {
 		if _, err := q.Query(context.Background(), "ds-1"); err != nil {
 			t.Fatal(err)
@@ -232,7 +232,7 @@ func TestForget(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	if _, err := q.Query(context.Background(), "ds-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestConcurrentQueries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	done := make(chan struct{})
 	for range 8 {
 		go func() {

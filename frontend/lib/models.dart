@@ -33,9 +33,9 @@ class EffortEntry {
   Map<String, dynamic> toJson() => {'name': name, 'value': value};
 }
 
-/// provider id 的厂商段:路径式 id(厂商[-区域]/服务)取首个 - 或 / 之前,
+/// provider id 的厂商段:点式 id(厂商.区域.计费.服务)取首个 . 之前,
 /// 供 Logo 映射与厂商级表单特判用。
-String providerVendor(String id) => id.split(RegExp('[-/]')).first;
+String providerVendor(String id) => id.split('.').first;
 
 class ProviderSpec {
   const ProviderSpec({

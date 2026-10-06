@@ -133,7 +133,7 @@ func (s *stubModels) Create(_ context.Context, in model.Input) (model.Model, err
 	}
 	if in.Protocol == provider.ProtocolResponses {
 		return model.Model{}, apperr.New(apperr.InvalidProtocol,
-			`provider "kimi/coding" does not support protocol "responses", supported: anthropic, chat_completions`)
+			`provider "kimi.global.subscribe.coding" does not support protocol "responses", supported: anthropic, chat_completions`)
 	}
 	m := model.Model{
 		ID: in.ID, Account: in.Account, NativeModel: in.NativeModel, Protocol: in.Protocol,
@@ -284,7 +284,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	accounts := &stubAccounts{data: map[string]account.Account{
 		"kimi-1": {
-			Name: "kimi-1", ProviderID: "kimi/coding",
+			Name: "kimi-1", ProviderID: "kimi.global.subscribe.coding",
 			Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: secret},
 			Headers:    map[string]string{}, Enabled: true,
 		},
@@ -453,7 +453,7 @@ func TestGetAccountReportsModelCount(t *testing.T) {
 func TestCreateAccount(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"ds-1","provider_id":"deepseek/api","api_key":"sk-deepseek-secret"}`)
+		`{"name":"ds-1","provider_id":"deepseek.global.api.standard","api_key":"sk-deepseek-secret"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
@@ -472,11 +472,11 @@ func TestCreateAccountValidationErrors(t *testing.T) {
 		code apperr.Code
 	}{
 		"unknown provider": {`{"name":"x","provider_id":"nope","api_key":"sk-x"}`, apperr.InvalidProvider},
-		"duplicate":        {`{"name":"kimi-1","provider_id":"kimi/coding","api_key":"sk-x"}`, apperr.AlreadyExists},
-		"missing key":      {`{"name":"x","provider_id":"kimi/coding"}`, apperr.InvalidCredential},
-		"bad credential":   {`{"name":"x","provider_id":"kimi/coding","credential":{"kind":"oauth_refresh"}}`, apperr.InvalidCredential},
+		"duplicate":        {`{"name":"kimi-1","provider_id":"kimi.global.subscribe.coding","api_key":"sk-x"}`, apperr.AlreadyExists},
+		"missing key":      {`{"name":"x","provider_id":"kimi.global.subscribe.coding"}`, apperr.InvalidCredential},
+		"bad credential":   {`{"name":"x","provider_id":"kimi.global.subscribe.coding","credential":{"kind":"oauth_refresh"}}`, apperr.InvalidCredential},
 		"malformed json":   {`{`, apperr.InvalidJSON},
-		"unknown field":    {`{"name":"x","provider_id":"kimi/coding","api_key":"sk-x","nope":1}`, apperr.InvalidJSON},
+		"unknown field":    {`{"name":"x","provider_id":"kimi.global.subscribe.coding","api_key":"sk-x","nope":1}`, apperr.InvalidJSON},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -491,7 +491,7 @@ func TestCreateAccountValidationErrors(t *testing.T) {
 func TestUnsupportedCredentialKindListsSupported(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"x","provider_id":"kimi/coding","credential":{"kind":"session_token","token":"x"}}`)
+		`{"name":"x","provider_id":"kimi.global.subscribe.coding","credential":{"kind":"session_token","token":"x"}}`)
 	if !strings.Contains(rec.Body.String(), "api_key") {
 		t.Errorf("error should list the supported kinds: %s", rec.Body)
 	}
@@ -502,7 +502,7 @@ func TestUnsupportedCredentialKindListsSupported(t *testing.T) {
 func TestCreateOAuthAccountRoundTrip(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"gpt-1","provider_id":"openai/codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-secret","account_id":"acc-x"}}`)
+		`{"name":"gpt-1","provider_id":"openai.global.subscribe.codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-secret","account_id":"acc-x"}}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
@@ -556,7 +556,7 @@ func TestAccountWritesResetOAuthState(t *testing.T) {
 	}
 
 	if rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"gpt-2","provider_id":"openai/codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-y","account_id":"acc-y"}}`); rec.Code != http.StatusCreated {
+		`{"name":"gpt-2","provider_id":"openai.global.subscribe.codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-y","account_id":"acc-y"}}`); rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	if len(f.oauth.resets) != 2 || f.oauth.resets[1] != "gpt-2" {
@@ -601,7 +601,7 @@ func TestDeleteAccountReportsCascade(t *testing.T) {
 func TestReorderAccounts(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"ds-1","provider_id":"deepseek/api","api_key":"`+secret+`"}`)
+		`{"name":"ds-1","provider_id":"deepseek.global.api.standard","api_key":"`+secret+`"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create ds-1 = %d: %s", rec.Code, rec.Body)
 	}

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	ProviderID       = "kiro"
+	ProviderID       = "kiro.global.subscribe.standard"
 	HeaderProfileARN = "X-Msu-Kiro-Profile-Arn"
 	HeaderProvider   = "X-Msu-Upstream-Provider"
 	DefaultBaseURL   = "https://runtime.us-east-1.kiro.dev"

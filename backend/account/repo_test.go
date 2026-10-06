@@ -32,15 +32,15 @@ func TestValidateRejects(t *testing.T) {
 		in   Input
 		code apperr.Code
 	}{
-		"empty name":       {Input{ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret")}, apperr.InvalidRequest},
+		"empty name":       {Input{ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("sk-x-secret")}, apperr.InvalidRequest},
 		"unknown provider": {Input{Name: "a", ProviderID: "nope", Credential: apiKey("sk-x-secret")}, apperr.InvalidProvider},
-		"empty credential": {Input{Name: "a", ProviderID: "kimi/coding"}, apperr.InvalidCredential},
-		"blank api key":    {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("  ")}, apperr.InvalidCredential},
-		"bad base url":     {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"), BaseURL: "moonshot.cn"}, apperr.InvalidRequest},
-		"mismatched kind":  {Input{Name: "a", ProviderID: "kimi/coding", Credential: credential.Credential{Kind: "oauth_refresh"}}, apperr.InvalidCredential},
-		"auto interval out of range": {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"),
+		"empty credential": {Input{Name: "a", ProviderID: "kimi.global.subscribe.coding"}, apperr.InvalidCredential},
+		"blank api key":    {Input{Name: "a", ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("  ")}, apperr.InvalidCredential},
+		"bad base url":     {Input{Name: "a", ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("sk-x-secret"), BaseURL: "moonshot.cn"}, apperr.InvalidRequest},
+		"mismatched kind":  {Input{Name: "a", ProviderID: "kimi.global.subscribe.coding", Credential: credential.Credential{Kind: "oauth_refresh"}}, apperr.InvalidCredential},
+		"auto interval out of range": {Input{Name: "a", ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("sk-x-secret"),
 			QuotaSettings: &QuotaSettings{AutoIntervalMinutes: 1441}}, apperr.InvalidRequest},
-		"stop interval negative": {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"),
+		"stop interval negative": {Input{Name: "a", ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("sk-x-secret"),
 			QuotaSettings: &QuotaSettings{StopIntervalMinutes: -1}}, apperr.InvalidRequest},
 	}
 	for name, tc := range cases {
@@ -57,7 +57,7 @@ func TestValidateRejects(t *testing.T) {
 }
 
 func TestValidateNormalizes(t *testing.T) {
-	acc, err := validate(Input{Name: "  kimi-1 ", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"), BaseURL: "https://gw.example.com/"})
+	acc, err := validate(Input{Name: "  kimi-1 ", ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("sk-x-secret"), BaseURL: "https://gw.example.com/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestValidateNormalizes(t *testing.T) {
 }
 
 func TestValidateQuotaSettingsAccepted(t *testing.T) {
-	acc, err := validate(Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"),
+	acc, err := validate(Input{Name: "a", ProviderID: "kimi.global.subscribe.coding", Credential: apiKey("sk-x-secret"),
 		QuotaSettings: &QuotaSettings{AutoIntervalMinutes: 5, StopIntervalMinutes: 8}})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestValidateQuotaSettingsAccepted(t *testing.T) {
 }
 
 func TestEffectiveBaseURL(t *testing.T) {
-	spec, _ := provider.Get("kimi/coding")
+	spec, _ := provider.Get("kimi.global.subscribe.coding")
 	if got := (Account{}).EffectiveBaseURL(spec); got != spec.BaseURL {
 		t.Errorf("empty override should fall back to provider default, got %q", got)
 	}
@@ -94,7 +94,7 @@ func TestEffectiveBaseURL(t *testing.T) {
 }
 
 func TestKiroEffectiveBaseURL(t *testing.T) {
-	spec, _ := provider.Get("kiro")
+	spec, _ := provider.Get("kiro.global.subscribe.standard")
 	acc := Account{Credential: credential.Credential{Region: "us-east-1", ProfileARN: "arn:aws:codewhisperer:eu-central-1:123:profile/test"}}
 	if got := acc.EffectiveBaseURL(spec); got != "https://runtime.eu-central-1.kiro.dev" {
 		t.Fatalf("effective base = %q", got)
@@ -145,7 +145,7 @@ func TestKiroCredentialUpdateRoundTrip(t *testing.T) {
 	r := newRepo(t)
 	ctx := context.Background()
 	cred := credential.Credential{Kind: provider.CredKiroRefresh, RefreshToken: "rt-original", ClientID: "id", ClientSecret: "secret", Region: "us-east-1", ProfileARN: "arn:aws:codewhisperer:us-east-1:123:profile/test"}
-	acc, err := r.Create(ctx, Input{Name: "kiro-1", ProviderID: "kiro", Credential: cred, Enabled: true})
+	acc, err := r.Create(ctx, Input{Name: "kiro-1", ProviderID: "kiro.global.subscribe.standard", Credential: cred, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestKiroCredentialUpdateRoundTrip(t *testing.T) {
 	if err := r.UpdateCredential(ctx, acc.Name, cred); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := r.Update(ctx, Input{Name: acc.Name, ProviderID: "kiro", Credential: credential.Credential{
+	updated, err := r.Update(ctx, Input{Name: acc.Name, ProviderID: "kiro.global.subscribe.standard", Credential: credential.Credential{
 		Kind: provider.CredKiroRefresh, ClientID: "id", Region: "us-east-1", ProfileARN: cred.ProfileARN, APIRegion: "eu-central-1",
 	}, Enabled: true})
 	if err != nil {
@@ -182,7 +182,7 @@ func TestCreateAndGet(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, input("kimi-1", "kimi/coding"))
+	created, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestCreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.ProviderID != "kimi/coding" || got.Credential.APIKey != created.Credential.APIKey {
+	if got.ProviderID != "kimi.global.subscribe.coding" || got.Credential.APIKey != created.Credential.APIKey {
 		t.Errorf("round trip mismatch: %+v", got)
 	}
 	if !got.Enabled {
@@ -213,10 +213,10 @@ func TestGetNotFound(t *testing.T) {
 func TestCreateDuplicate(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
 		t.Fatal(err)
 	}
-	_, err := repo.Create(ctx, input("kimi-1", "deepseek/api"))
+	_, err := repo.Create(ctx, input("kimi-1", "deepseek.global.api.standard"))
 	if !apperr.Is(err, apperr.AlreadyExists) {
 		t.Errorf("err = %v, want already_exists", err)
 	}
@@ -225,12 +225,12 @@ func TestCreateDuplicate(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	created, err := repo.Create(ctx, input("kimi-1", "kimi/coding"))
+	created, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	in := input("kimi-1", "kimi/coding")
+	in := input("kimi-1", "kimi.global.subscribe.coding")
 	in.Enabled = false
 	in.BaseURL = "https://gw.example.com"
 	in.Headers = map[string]string{"x-trace": "on"}
@@ -260,7 +260,7 @@ func TestUpdate(t *testing.T) {
 func TestUpdateKeepsCredentialWhenOmitted(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	created, err := repo.Create(ctx, input("kimi-1", "kimi/coding"))
+	created, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestMergeAPIKeyCredentialConsoleAccessToken(t *testing.T) {
 func TestUpdateConsoleAccessToken(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	in := input("bailian-1", "bailian-cn/token-plan")
+	in := input("bailian-1", "bailian.cn.subscribe.token-plan")
 	in.Credential.ConsoleAccessToken = "console-initial"
 	if _, err := repo.Create(ctx, in); err != nil {
 		t.Fatal(err)
@@ -320,7 +320,7 @@ func TestUpdateConsoleAccessToken(t *testing.T) {
 func TestUpdateMergesAPIKeyCredentialFields(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -362,7 +362,7 @@ func TestUpdateMergesAPIKeyCredentialFields(t *testing.T) {
 
 func TestUpdateNotFound(t *testing.T) {
 	repo := newRepo(t)
-	_, err := repo.Update(context.Background(), input("ghost", "kimi/coding"))
+	_, err := repo.Update(context.Background(), input("ghost", "kimi.global.subscribe.coding"))
 	if !apperr.Is(err, apperr.NotFound) {
 		t.Errorf("err = %v, want not_found", err)
 	}
@@ -373,7 +373,7 @@ func TestList(t *testing.T) {
 	repo := NewRepo(s.Pool(), testenv.Cache(t))
 	ctx := context.Background()
 	for _, name := range []string{"kimi-2", "kimi-1"} {
-		if _, err := repo.Create(ctx, input(name, "kimi/coding")); err != nil {
+		if _, err := repo.Create(ctx, input(name, "kimi.global.subscribe.coding")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -402,7 +402,7 @@ func TestReorder(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
 	for _, name := range []string{"a-1", "a-2", "a-3"} {
-		if _, err := repo.Create(ctx, input(name, "kimi/coding")); err != nil {
+		if _, err := repo.Create(ctx, input(name, "kimi.global.subscribe.coding")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -438,7 +438,7 @@ func TestReorder(t *testing.T) {
 func TestDeleteCascades(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"kimi-1/k2", "kimi-1/k3"} {
@@ -488,7 +488,7 @@ func TestGetBackfillsCache(t *testing.T) {
 	_ = backend.Del(ctx, key)
 
 	repo := NewRepo(s.Pool(), cache.New(backend, time.Minute))
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err := backend.Get(ctx, key); err != nil || len(raw) == 0 {
@@ -510,7 +510,7 @@ func TestDeleteInvalidatesCache(t *testing.T) {
 	ctx := context.Background()
 
 	repo := NewRepo(s.Pool(), cache.New(backend, time.Minute))
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.Delete(ctx, "kimi-1"); err != nil {

@@ -53,7 +53,7 @@ func (h handler) probeModel(ctx context.Context, m model.Model, acc account.Acco
 		return modelcheck.Result{Error: err.Error()}, nil
 	}
 
-	if spec.ID == "kiro" {
+	if spec.ID == "kiro.global.subscribe.standard" {
 		acc, err = h.Accounts.Get(ctx, acc.Name)
 		if err != nil {
 			return modelcheck.Result{}, err

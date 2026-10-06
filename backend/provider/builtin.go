@@ -1,12 +1,12 @@
 package provider
 
 // 内置规格在单个 init 中按固定顺序注册，保证 All() 顺序稳定。
-// ID 命名:厂商[-区域]/服务——Global 区域省略,按量计费开放 API 一律标
-// /api,订阅服务标套餐 slug(codex/token-plan/coding-plan);kiro 无可命名
-// 套餐,保留裸 id。
+// ID 命名:厂商.区域.计费.服务 四段点式——区域 cn/global 不省略,计费
+// api=按量、subscribe=订阅,服务段 standard=默认服务、订阅套餐用 slug
+// (codex/token-plan/coding-plan/coding)。
 func init() {
 	register(Spec{
-		ID:          "anthropic/api",
+		ID:          "anthropic.global.api.standard",
 		DisplayName: "Anthropic",
 		Website:     "https://console.anthropic.com",
 		BaseURL:     "https://api.anthropic.com",
@@ -19,7 +19,7 @@ func init() {
 		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	register(Spec{
-		ID:          "openai/api",
+		ID:          "openai.global.api.standard",
 		DisplayName: "OpenAI",
 		Website:     "https://platform.openai.com",
 		BaseURL:     "https://api.openai.com",
@@ -32,7 +32,7 @@ func init() {
 		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
 	})
 	register(Spec{
-		ID:          "gemini/api",
+		ID:          "gemini.global.api.standard",
 		DisplayName: "Google Gemini",
 		Website:     "https://aistudio.google.com",
 		BaseURL:     "https://generativelanguage.googleapis.com",
@@ -51,7 +51,7 @@ func init() {
 	// supported_reasoning_levels 声明——推理档动态适配的数据源。
 	// Plus/Pro 只是订阅档位、服务类型相同,不拆变体。
 	register(Spec{
-		ID:          "openai/codex",
+		ID:          "openai.global.subscribe.codex",
 		DisplayName: "OpenAI",
 		Website:     "https://chatgpt.com",
 		BaseURL:     "https://chatgpt.com/backend-api/codex",
@@ -67,7 +67,7 @@ func init() {
 		QuotaQueryable: true,
 	})
 	register(Spec{
-		ID:          "kimi/coding",
+		ID:          "kimi.global.subscribe.coding",
 		DisplayName: "Moonshot Kimi",
 		Website:     "https://www.kimi.com",
 		// Kimi For Coding 订阅端点在 api.kimi.com;api.moonshot.cn 没有
@@ -86,7 +86,7 @@ func init() {
 	// ark 的 responses 端点实测不可用，故只声明两个协议；其模型列举端点
 	// 实测各路径恒回 401，故不声明 Models——查不到比查错了好。
 	register(Spec{
-		ID:          "ark/api",
+		ID:          "ark.global.api.standard",
 		DisplayName: "Volcengine Ark",
 		Website:     "https://console.volcengine.com/ark",
 		BaseURL:     "https://ark.cn-beijing.volces.com/api/v3",
@@ -98,7 +98,7 @@ func init() {
 		Plan:        PlanStandard,
 	})
 	register(Spec{
-		ID:             "deepseek/api",
+		ID:             "deepseek.global.api.standard",
 		DisplayName:    "DeepSeek",
 		Website:        "https://platform.deepseek.com",
 		BaseURL:        "https://api.deepseek.com",
@@ -112,7 +112,7 @@ func init() {
 		Models:         &ModelsAPI{Path: "/models", Method: "GET"},
 	})
 	register(Spec{
-		ID:             "kiro",
+		ID:             "kiro.global.subscribe.standard",
 		DisplayName:    "Kiro",
 		Website:        "https://kiro.dev",
 		BaseURL:        "https://runtime.us-east-1.kiro.dev",
@@ -126,7 +126,7 @@ func init() {
 		QuotaQueryable: true,
 	})
 	register(Spec{
-		ID:             "bailian-cn/token-plan",
+		ID:             "bailian.cn.subscribe.token-plan",
 		DisplayName:    "Aliyun Bailian",
 		Website:        "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
 		BaseURL:        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode",
@@ -145,7 +145,7 @@ func init() {
 	// 规格表达不了,不接入。套餐额度按请求数计(月 9 万次),控制台无开放
 	// 查询 API,不声明 QuotaQueryable。
 	register(Spec{
-		ID:          "bailian-cn/coding-plan",
+		ID:          "bailian.cn.subscribe.coding-plan",
 		DisplayName: "Aliyun Bailian",
 		Website:     "https://bailian.console.aliyun.com/cn-beijing/subscription/coding-plan/personal",
 		BaseURL:     "https://coding.dashscope.aliyuncs.com",

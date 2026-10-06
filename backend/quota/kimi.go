@@ -76,7 +76,7 @@ func (c *kimiAccessCache) drop(accountName string) {
 // 计量(会员月总额度)。查询失败只记日志不拖垮主报告——5 小时/7 天窗来自
 // API key 链路,月度是增强项;令牌失效时主链路不应跟着黑屏。
 func (q *Quota) appendKimiMonthly(ctx context.Context, spec provider.Spec, acc account.Account, report *Report) {
-	if spec.ID != "kimi/coding" || acc.Credential.WebRefreshToken == "" {
+	if spec.ID != "kimi.global.subscribe.coding" || acc.Credential.WebRefreshToken == "" {
 		return
 	}
 	m, err := q.kimiMonthlyMeter(ctx, acc)

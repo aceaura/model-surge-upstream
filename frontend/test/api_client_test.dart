@@ -93,7 +93,7 @@ void main() {
       'accounts': [
         {
           'name': 'kimi-1',
-          'provider_id': 'kimi/coding',
+          'provider_id': 'kimi.global.subscribe.coding',
           'credential': {'kind': 'api_key', 'api_key': 'sk-l***efgh'},
           'base_url': '',
           'headers': {'x-trace': 'on'},
@@ -111,7 +111,7 @@ void main() {
     final client = clientReturning(200, jsonEncode({
       'providers': [
         {
-          'id': 'anthropic/api',
+          'id': 'anthropic.global.api.standard',
           'display_name': 'Anthropic',
           'website': 'https://www.anthropic.com',
           'base_url': 'https://api.anthropic.com',
@@ -122,7 +122,7 @@ void main() {
           'region': 'Global',
         },
         {
-          'id': 'deepseek/api',
+          'id': 'deepseek.global.api.standard',
           'display_name': 'DeepSeek',
           'website': 'https://platform.deepseek.com',
           'base_url': 'https://api.deepseek.com',

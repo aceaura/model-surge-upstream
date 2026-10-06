@@ -56,7 +56,7 @@ func TestBuiltinDeepSeekMultiCurrency(t *testing.T) {
 	defer srv.Close()
 
 	// 不带账号脚本的 deepseek 账号走内置查询;缺 total_balance 的条目跳过。
-	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek/api", srv.URL)}, time.Minute)
+	q := New(fakeAccounts{"ds-1": acct("ds-1", "deepseek.global.api.standard", srv.URL)}, time.Minute)
 	got, err := q.Query(context.Background(), "ds-1")
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestBuiltinKimiJoinsWebMonthly(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := acct("kimi-1", "kimi/coding", "https://api.kimi.com/coding")
+	a := acct("kimi-1", "kimi.global.subscribe.coding", "https://api.kimi.com/coding")
 	a.Credential.WebRefreshToken = "rt-web-token"
 	q := builtinQuota(srv.URL, a)
 	got, err := q.Query(context.Background(), "kimi-1")
@@ -142,7 +142,7 @@ func TestBuiltinKimiMonthlyOptional(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := acct("kimi-1", "kimi/coding", "https://api.kimi.com/coding")
+	a := acct("kimi-1", "kimi.global.subscribe.coding", "https://api.kimi.com/coding")
 	a.Credential.WebRefreshToken = "rt-web-token"
 	q := builtinQuota(srv.URL, a)
 	got, err := q.Query(context.Background(), "kimi-1")
@@ -193,7 +193,7 @@ func TestBuiltinKiroPaginatesAndGrants(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := acct("kiro-1", "kiro", "https://q.us-east-1.amazonaws.com")
+	a := acct("kiro-1", "kiro.global.subscribe.standard", "https://q.us-east-1.amazonaws.com")
 	a.Credential = credential.Credential{
 		Kind:         provider.CredKiroRefresh,
 		RefreshToken: "rt-kiro",
@@ -263,7 +263,7 @@ func TestBuiltinCodexRateLimitWindows(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := acct("codex-1", "openai/codex", "https://chatgpt.com/backend-api/codex")
+	a := acct("codex-1", "openai.global.subscribe.codex", "https://chatgpt.com/backend-api/codex")
 	a.Credential = credential.Credential{
 		Kind:         provider.CredOAuthRefresh,
 		RefreshToken: "rt-codex",
@@ -303,7 +303,7 @@ func TestBuiltinCodexNoWindows(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := acct("codex-1", "openai/codex", "https://chatgpt.com/backend-api/codex")
+	a := acct("codex-1", "openai.global.subscribe.codex", "https://chatgpt.com/backend-api/codex")
 	a.Credential = credential.Credential{
 		Kind: provider.CredOAuthRefresh, RefreshToken: "rt-codex", AccountID: "acc-id-1"}
 	q := builtinQuota(srv.URL, a)
@@ -347,7 +347,7 @@ func TestBuiltinBailian(t *testing.T) {
 		`"per1MonthPercentage":0.02}`)
 	defer srv.Close()
 
-	a := acct("bl-1", "bailian-cn/token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
+	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
 	a.Credential.ConsoleAccessToken = "ct-console"
 	q := builtinQuota(srv.URL, a)
 	got, err := q.Query(context.Background(), "bl-1")
@@ -380,7 +380,7 @@ func TestBuiltinBailianNotLogined(t *testing.T) {
 	srv := bailianStub(t, `{"code":"NotLogined","message":"x"}`)
 	defer srv.Close()
 
-	a := acct("bl-1", "bailian-cn/token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
+	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
 	a.Credential.ConsoleAccessToken = "ct-console"
 	q := builtinQuota(srv.URL, a)
 	_, err := q.Query(context.Background(), "bl-1")
@@ -390,7 +390,7 @@ func TestBuiltinBailianNotLogined(t *testing.T) {
 }
 
 func TestBuiltinBailianMissingConsoleToken(t *testing.T) {
-	a := acct("bl-1", "bailian-cn/token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
+	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
 	q := New(fakeAccounts{"bl-1": a}, time.Minute)
 	_, err := q.Query(context.Background(), "bl-1")
 	if err == nil || !strings.Contains(err.Error(), "console_access_token") {

@@ -13,7 +13,7 @@ import 'package:sqlite3/sqlite3.dart' hide Row;
 
 final providers = [
   ProviderSpec.fromJson(const {
-    'id': 'deepseek/api',
+    'id': 'deepseek.global.api.standard',
     'display_name': 'DeepSeek',
     'website': 'https://platform.deepseek.com',
     'base_url': 'https://api.deepseek.com',
@@ -25,7 +25,7 @@ final providers = [
     'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'openai/api',
+    'id': 'openai.global.api.standard',
     'display_name': 'OpenAI',
     'website': 'https://openai.com',
     'base_url': 'https://api.openai.com',
@@ -37,7 +37,7 @@ final providers = [
     'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'openai/codex',
+    'id': 'openai.global.subscribe.codex',
     'display_name': 'OpenAI',
     'website': 'https://chatgpt.com',
     'base_url': 'https://chatgpt.com/backend-api/codex',
@@ -49,7 +49,7 @@ final providers = [
     'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'kimi/coding',
+    'id': 'kimi.global.subscribe.coding',
     'display_name': 'Kimi',
     'website': 'https://www.kimi.com',
     'base_url': 'https://api.kimi.com',
@@ -61,7 +61,7 @@ final providers = [
     'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'bailian-cn/token-plan',
+    'id': 'bailian.cn.subscribe.token-plan',
     'display_name': '百炼',
     'base_url': 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
     'protocols': ['chat_completions'],
@@ -73,7 +73,7 @@ final providers = [
     'quota_queryable': true,
   }),
   ProviderSpec.fromJson(const {
-    'id': 'bailian-cn/coding-plan',
+    'id': 'bailian.cn.subscribe.coding-plan',
     'display_name': '百炼',
     'base_url': 'https://coding-plan.example.com/v1',
     'protocols': ['anthropic'],
@@ -99,7 +99,7 @@ final providers = [
 /// oauth_refresh(订阅登录态)账号样本。
 final accountOAuth = Account.fromJson(const {
   'name': 'gpt-1',
-  'provider_id': 'openai/codex',
+  'provider_id': 'openai.global.subscribe.codex',
   'credential': {
     'kind': 'oauth_refresh',
     'refresh_token': 'rt-a***z',
@@ -111,7 +111,7 @@ final accountOAuth = Account.fromJson(const {
 
 final account = Account.fromJson(const {
   'name': 'ds-1',
-  'provider_id': 'deepseek/api',
+  'provider_id': 'deepseek.global.api.standard',
   'credential': {'kind': 'api_key', 'api_key': 'sk-d***efgh'},
   'base_url': 'https://ds.example.com',
   'headers': <String, dynamic>{'x-tenant': 'a'},
@@ -121,7 +121,7 @@ final account = Account.fromJson(const {
 /// 无 base_url 的账号:拷贝/编辑时请求地址应回落到提供商默认值。
 final accountNoOverride = Account.fromJson(const {
   'name': 'ds-2',
-  'provider_id': 'deepseek/api',
+  'provider_id': 'deepseek.global.api.standard',
   'credential': {'kind': 'api_key', 'api_key': 'sk-x***y'},
   'base_url': '',
   'enabled': true,
@@ -130,7 +130,7 @@ final accountNoOverride = Account.fromJson(const {
 /// 带额度查询节奏配置的账号:分栏预填与清除语义的样本。
 final accountWithQuota = Account.fromJson(const {
   'name': 'ds-3',
-  'provider_id': 'deepseek/api',
+  'provider_id': 'deepseek.global.api.standard',
   'credential': {'kind': 'api_key', 'api_key': 'sk-s***t'},
   'base_url': '',
   'enabled': true,
@@ -143,7 +143,7 @@ final accountWithQuota = Account.fromJson(const {
 /// 关掉实时额度查询的账号:总开关回显与间隔置灰的样本。
 final accountQuotaDisabled = Account.fromJson(const {
   'name': 'ds-4',
-  'provider_id': 'deepseek/api',
+  'provider_id': 'deepseek.global.api.standard',
   'credential': {'kind': 'api_key', 'api_key': 'sk-s***t'},
   'base_url': '',
   'enabled': true,
@@ -153,7 +153,7 @@ final accountQuotaDisabled = Account.fromJson(const {
 /// kimi 账号样本:api_key 形态附带网页会话 token(月度额度凭据)。
 final accountKimi = Account.fromJson(const {
   'name': 'kimi-1',
-  'provider_id': 'kimi/coding',
+  'provider_id': 'kimi.global.subscribe.coding',
   'credential': {
     'kind': 'api_key',
     'api_key': 'sk-k***i',
@@ -165,7 +165,7 @@ final accountKimi = Account.fromJson(const {
 
 final accountBailian = Account.fromJson(const {
   'name': 'bailian-1',
-  'provider_id': 'bailian-cn/token-plan',
+  'provider_id': 'bailian.cn.subscribe.token-plan',
   'credential': {
     'kind': 'api_key',
     'api_key': 'sk-b***n',
@@ -190,7 +190,7 @@ ApiClient recordingClient(List<String> captured) => ApiClient(
             jsonEncode({
               'account': {
                 'name': 'a',
-                'provider_id': 'deepseek/api',
+                'provider_id': 'deepseek.global.api.standard',
                 'credential': {'kind': 'api_key', 'api_key': 'k'},
                 'base_url': '',
                 'enabled': true,
@@ -869,7 +869,7 @@ void main() {
     expect(account.maskedConsoleAccessToken, isEmpty);
     expect(Account.fromJson({'name': 'minimal'}).maskedConsoleAccessToken,
         isEmpty);
-    expect(providers.firstWhere((p) => p.id == 'bailian-cn/token-plan').quotaQueryable,
+    expect(providers.firstWhere((p) => p.id == 'bailian.cn.subscribe.token-plan').quotaQueryable,
         isTrue);
   });
 
@@ -953,7 +953,7 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, '创建'));
       await tester.pumpAndSettle();
       final body = jsonDecode(captured.single) as Map<String, dynamic>;
-      expect(body['provider_id'], 'bailian-cn/token-plan');
+      expect(body['provider_id'], 'bailian.cn.subscribe.token-plan');
       expect(body.containsKey('api_key'), isFalse);
       expect(body['credential'], {
         'kind': 'api_key',
@@ -1054,7 +1054,7 @@ void main() {
   testWidgets('copy prefills config but keeps create semantics', (tester) async {
     await pumpForm(tester, copyFrom: account);
 
-    expect(find.text('拷贝账号 ds-1'), findsOneWidget);
+    expect(find.text('拷贝 ds-1'), findsOneWidget);
     expect(find.text('DeepSeek'), findsNWidgets(2),
         reason: '厂商级跟随来源账号反推预填(下拉选中值+分栏副标题各一处)');
     expect(find.text('按量计费'), findsOneWidget, reason: '计费模式级预填');
@@ -1197,7 +1197,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
     await tester.pumpAndSettle();
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['provider_id'], 'bailian-cn/coding-plan');
+    expect(body['provider_id'], 'bailian.cn.subscribe.coding-plan');
   });
 
   testWidgets('lower cascade levels stay disabled until upper chosen',
@@ -1274,7 +1274,7 @@ void main() {
 
     expect(captured, hasLength(1));
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['provider_id'], 'deepseek/api', reason: '三级级联最终解析回 provider id');
+    expect(body['provider_id'], 'deepseek.global.api.standard', reason: '三级级联最终解析回 provider id');
     expect(body['base_url'], '',
         reason: '与提供商默认值相同→空覆盖,继续跟随提供商');
   });
@@ -1519,7 +1519,7 @@ void main() {
 
     expect(captured, hasLength(1));
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['provider_id'], 'openai/codex');
+    expect(body['provider_id'], 'openai.global.subscribe.codex');
     expect(body.containsKey('api_key'), isFalse,
         reason: 'oauth 形态不走 api_key 简写');
     final cred = body['credential'] as Map<String, dynamic>;
@@ -1587,7 +1587,7 @@ void main() {
   testWidgets('oauth edit shows reauth banner when flagged', (tester) async {
     final flagged = Account.fromJson(const {
       'name': 'gpt-1',
-      'provider_id': 'openai/codex',
+      'provider_id': 'openai.global.subscribe.codex',
       'credential': {
         'kind': 'oauth_refresh',
         'refresh_token': 'rt-a***z',

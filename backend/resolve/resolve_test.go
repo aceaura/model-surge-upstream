@@ -72,13 +72,13 @@ func mdl(id, accountName, protocol string) model.Model {
 }
 
 func fixture() (fakeAccounts, fakeModels, *Resolver) {
-	accounts := fakeAccounts{"kimi-1": acct("kimi-1", "kimi/coding")}
+	accounts := fakeAccounts{"kimi-1": acct("kimi-1", "kimi.global.subscribe.coding")}
 	models := fakeModels{"kimi-1/k2": mdl("kimi-1/k2", "kimi-1", provider.ProtocolAnthropic)}
 	return accounts, models, NewResolver(accounts, models)
 }
 
 func TestResolveKiroHeaders(t *testing.T) {
-	acc := account.Account{Name: "kiro-1", ProviderID: "kiro", Enabled: true,
+	acc := account.Account{Name: "kiro-1", ProviderID: "kiro.global.subscribe.standard", Enabled: true,
 		Credential: credential.Credential{Kind: provider.CredKiroRefresh, RefreshToken: "rt", ProfileARN: "arn:aws:codewhisperer:eu-central-1:123:profile/test"}}
 	accounts := fakeAccounts{acc.Name: acc}
 	m := mdl("kiro-1/sonnet", acc.Name, provider.ProtocolAnthropic)
@@ -92,7 +92,7 @@ func TestResolveKiroHeaders(t *testing.T) {
 	if target.BaseURL != "https://runtime.eu-central-1.kiro.dev" || target.Headers["Authorization"] != "Bearer kiro-access" {
 		t.Fatalf("kiro target = %s", target)
 	}
-	if target.Headers["X-Msu-Upstream-Provider"] != "kiro" || target.Headers["X-Msu-Kiro-Profile-Arn"] != acc.Credential.ProfileARN {
+	if target.Headers["X-Msu-Upstream-Provider"] != "kiro.global.subscribe.standard" || target.Headers["X-Msu-Kiro-Profile-Arn"] != acc.Credential.ProfileARN {
 		t.Fatal("native Kiro adapter metadata missing")
 	}
 	if target.Headers["ChatGPT-Account-Id"] != "" || target.Headers["originator"] != "" {
@@ -107,7 +107,7 @@ func TestResolveKiroHeaders(t *testing.T) {
 }
 
 func TestResolveKiroWithoutTokens(t *testing.T) {
-	acc := account.Account{Name: "kiro-1", ProviderID: "kiro", Enabled: true, Credential: credential.Credential{Kind: provider.CredKiroRefresh, RefreshToken: "rt"}}
+	acc := account.Account{Name: "kiro-1", ProviderID: "kiro.global.subscribe.standard", Enabled: true, Credential: credential.Credential{Kind: provider.CredKiroRefresh, RefreshToken: "rt"}}
 	m := mdl("kiro-1/sonnet", acc.Name, provider.ProtocolAnthropic)
 	r := NewResolver(fakeAccounts{acc.Name: acc}, fakeModels{m.ID: m})
 	if _, err := r.Resolve(context.Background(), m.ID); apperr.CodeOf(err) != apperr.InvalidCredential {
@@ -189,7 +189,7 @@ func TestResolve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	spec, _ := provider.Get("kimi/coding")
+	spec, _ := provider.Get("kimi.global.subscribe.coding")
 	if got.BaseURL != spec.BaseURL {
 		t.Errorf("base_url = %q, want provider default %q", got.BaseURL, spec.BaseURL)
 	}
@@ -292,8 +292,8 @@ func TestResolveUnknownProvider(t *testing.T) {
 }
 
 func TestAuthHeaders(t *testing.T) {
-	anth, _ := provider.Get("anthropic/api")
-	h := AuthHeaders(anth, acct("a", "anthropic/api"))
+	anth, _ := provider.Get("anthropic.global.api.standard")
+	h := AuthHeaders(anth, acct("a", "anthropic.global.api.standard"))
 	if h[headerAnthropicAPIKey] != secret || h[headerAnthropicVersion] == "" {
 		t.Errorf("anthropic headers = %v", h)
 	}
@@ -301,8 +301,8 @@ func TestAuthHeaders(t *testing.T) {
 		t.Error("anthropic scheme should not set Authorization")
 	}
 
-	ds, _ := provider.Get("deepseek/api")
-	h = AuthHeaders(ds, acct("b", "deepseek/api"))
+	ds, _ := provider.Get("deepseek.global.api.standard")
+	h = AuthHeaders(ds, acct("b", "deepseek.global.api.standard"))
 	if h[headerAuthorization] != "Bearer "+secret {
 		t.Errorf("bearer header = %q", h[headerAuthorization])
 	}
@@ -312,8 +312,8 @@ func TestAuthHeaders(t *testing.T) {
 }
 
 func TestAuthHeadersAccountOverlay(t *testing.T) {
-	spec, _ := provider.Get("kimi/coding")
-	acc := acct("kimi-1", "kimi/coding")
+	spec, _ := provider.Get("kimi.global.subscribe.coding")
+	acc := acct("kimi-1", "kimi.global.subscribe.coding")
 	acc.Headers = map[string]string{"x-trace": "on", headerAnthropicVersion: "2024-01-01"}
 	h := AuthHeaders(spec, acc)
 	if h["x-trace"] != "on" {
@@ -344,7 +344,7 @@ func TestStringRedactsWhileJSONDoesNot(t *testing.T) {
 
 func TestStringRedactsBearer(t *testing.T) {
 	accounts, models, _ := fixture()
-	accounts["ds-1"] = acct("ds-1", "deepseek/api")
+	accounts["ds-1"] = acct("ds-1", "deepseek.global.api.standard")
 	models["ds-1/v4"] = mdl("ds-1/v4", "ds-1", provider.ProtocolChatCompletions)
 	got, err := NewResolver(accounts, models).Resolve(context.Background(), "ds-1/v4")
 	if err != nil {
@@ -370,7 +370,7 @@ func TestList(t *testing.T) {
 	}
 	want := []effort.Entry{{Name: "高", Value: "high"}, {Name: "ultra", Value: "ultra"}}
 	for _, l := range got {
-		if l.ProviderID != "kimi/coding" {
+		if l.ProviderID != "kimi.global.subscribe.coding" {
 			t.Errorf("provider_id = %q", l.ProviderID)
 		}
 		if !l.Enabled {
@@ -425,7 +425,7 @@ func (f *fakeTokens) AccessToken(_ context.Context, _ account.Account) (string, 
 func codexFixture(tokens Tokens) (*Resolver, *fakeAccounts) {
 	accounts := fakeAccounts{"gpt-1": {
 		Name:       "gpt-1",
-		ProviderID: "openai/codex",
+		ProviderID: "openai.global.subscribe.codex",
 		Credential: credential.Credential{
 			Kind:         provider.CredOAuthRefresh,
 			RefreshToken: "rt-1",

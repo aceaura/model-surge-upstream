@@ -46,7 +46,7 @@ func TestDecodeRejects(t *testing.T) {
 }
 
 func TestValidateAgainstProvider(t *testing.T) {
-	spec, _ := provider.Get("kimi/coding")
+	spec, _ := provider.Get("kimi.global.subscribe.coding")
 	ok := Credential{Kind: provider.CredAPIKey, APIKey: "sk-abcdefghijkl"}
 	if err := ok.ValidateAgainstProvider(spec); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -71,7 +71,7 @@ func TestDecodeKiro(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, _ := provider.Get("kiro")
+	spec, _ := provider.Get("kiro.global.subscribe.standard")
 	if err := c.ValidateAgainstProvider(spec); err != nil {
 		t.Fatal(err)
 	}

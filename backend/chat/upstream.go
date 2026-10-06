@@ -32,7 +32,7 @@ const respSnippet = 300
 // history 含本轮用户消息（调用方已追加）。不做流式：对话页整轮等待，
 // 换取四协议一套简单可靠的解析路径。返回上游 HTTP 状态码供用量统计记失败率。
 //
-// codex(openai/codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
+// codex(openai.global.subscribe.codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
 // 这里把整段事件流读完后聚合回整轮（见 extractReplySSE），对外仍是非流式语义。
 // sessionKey 用于派生 codex 的 session_id/conversation_id 头（转发面同款，
 // 按账号+会话稳定），其余协议忽略。effort 是对话页选定的推理档（空=默认），

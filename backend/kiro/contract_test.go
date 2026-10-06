@@ -168,7 +168,7 @@ func TestRegionAndEndpoints(t *testing.T) {
 			t.Errorf("endpoints=%s %s", chat, control)
 		}
 	}
-	if ProviderID != "kiro" || HeaderProvider != "X-Msu-Upstream-Provider" || HeaderProfileARN != "X-Msu-Kiro-Profile-Arn" {
+	if ProviderID != "kiro.global.subscribe.standard" || HeaderProvider != "X-Msu-Upstream-Provider" || HeaderProfileARN != "X-Msu-Kiro-Profile-Arn" {
 		t.Fatal("public constants changed")
 	}
 	h := Headers("token", "profile")

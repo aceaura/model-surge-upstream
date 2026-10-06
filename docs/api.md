@@ -196,35 +196,35 @@ Authorization: Bearer <密钥>
 | `base_url` | string | 恒有 | 默认根地址；账号未覆盖 `base_url` 时使用 |
 | `protocols` | array of string | 恒有 | 支持的协议，取值见 2.8 `protocol`；创建模型时 `protocol` 只能取账号 provider 的此集合 |
 | `auth` | 枚举 | 恒有 | 认证头形态，见 2.8 `auth` |
-| `credential` | 枚举 | 恒有 | 凭据形态，见 2.8 `credential.kind`；`openai/codex` 为 `oauth_refresh`，其余为 `api_key` |
+| `credential` | 枚举 | 恒有 | 凭据形态，见 2.8 `credential.kind`；`openai.global.subscribe.codex` 为 `oauth_refresh`，其余为 `api_key` |
 | `plan` | string | 非空时 | 服务类型名（原样下发不翻译），如 `Token Plan` / `Coding Plan`；厂商只有一种服务类型时统一为 `Standard`，订阅档位（如 ChatGPT Plus/Pro）不区分 |
 | `quota_queryable` | bool | 为 `true` 时 | 该 provider 有内置额度查询实现（Go 代码按供应商整合在 quota 包，覆盖范围见 3.6）；这是唯一的查询路径，账号级 JS 脚本通道已废除 |
 | `models` | object | 该 provider 声明了列举端点时 | 模型列举端点声明，子字段见下 |
 | `models.path` | string | 同上 | 列举端点路径 |
 | `models.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
 
-当前注册序（固定顺序，共 10 家）。id 命名：厂商[-区域]/服务——Global 区域省略，CN 带 `-cn` 段，按量计费开放 API 一律标 `/api`，订阅服务标套餐 slug；`kiro` 无可命名套餐，保留裸 id：
+当前注册序（固定顺序，共 10 家）。id 命名：`厂商.区域.计费.服务` 四段点式恒在——区域 `cn`/`global` 不省略，计费 `api`=按量、`subscribe`=订阅，服务段 `standard`=默认服务、订阅有套餐名则用套餐 slug（`codex`/`token-plan`/`coding-plan`/`coding`）：
 
 | id | base_url | protocols | auth | quota_queryable | models |
 |---|---|---|---|---|---|
-| `anthropic/api` | `https://api.anthropic.com` | `anthropic` | `anthropic_key` | — | `/v1/models` |
-| `openai/api` | `https://api.openai.com` | `chat_completions`, `responses` | `bearer` | — | `/v1/models` |
-| `gemini/api` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
-| `openai/codex` | `https://chatgpt.com/backend-api/codex` | `responses` | `bearer` | ✓ | `/models` |
-| `kimi/coding` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | ✓ | `/v1/models` |
-| `ark/api` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
-| `deepseek/api` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/models` |
-| `kiro` | `https://runtime.us-east-1.kiro.dev` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/ListAvailableModels` |
-| `bailian-cn/token-plan` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions`, `responses` | `bearer` | ✓ | `GET /v1/models` |
-| `bailian-cn/coding-plan` | `https://coding.dashscope.aliyuncs.com` | `chat_completions` | `bearer` | — | `GET /v1/models` |
+| `anthropic.global.api.standard` | `https://api.anthropic.com` | `anthropic` | `anthropic_key` | — | `/v1/models` |
+| `openai.global.api.standard` | `https://api.openai.com` | `chat_completions`, `responses` | `bearer` | — | `/v1/models` |
+| `gemini.global.api.standard` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
+| `openai.global.subscribe.codex` | `https://chatgpt.com/backend-api/codex` | `responses` | `bearer` | ✓ | `/models` |
+| `kimi.global.subscribe.coding` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | ✓ | `/v1/models` |
+| `ark.global.api.standard` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
+| `deepseek.global.api.standard` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/models` |
+| `kiro.global.subscribe.standard` | `https://runtime.us-east-1.kiro.dev` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/ListAvailableModels` |
+| `bailian.cn.subscribe.token-plan` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions`, `responses` | `bearer` | ✓ | `GET /v1/models` |
+| `bailian.cn.subscribe.coding-plan` | `https://coding.dashscope.aliyuncs.com` | `chat_completions` | `bearer` | — | `GET /v1/models` |
 
-> `bailian-cn/token-plan` / `bailian-cn/coding-plan` 是阿里云百炼订阅的两种套餐（均 `subscription` / `CN` / `api_key`，密钥不通用：Token Plan 用套餐密钥，Coding Plan 用 `sk-sp-` 专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。Token Plan 真实探针已验证模型列举和 Responses 可用；Coding Plan 探针实测 chat completions 与 `GET /v1/models` 存在、`responses` 恒 404 故未列入，其 Anthropic 兼容在 `/apps/anthropic` 独立路径、单 BaseURL 规格表达不了，不接入。Coding Plan 额度按请求数计（月 9 万次）且控制台无开放查询 API，不声明额度查询。Token Plan 额度查询独立使用百炼 CLI 控制台 `console_access_token`（不是推理 Key，也不需要新建 AccessKey），通过固定控制台主机的 `/cli/api.json` 聚合 usage、subscription、quota-config；按实际套餐返回 Credits，未知总额时返回百分比，缺失的用量窗口不补零。登录过期需重新执行 `bl auth login --console` 后导入。
+> `bailian.cn.subscribe.token-plan` / `bailian.cn.subscribe.coding-plan` 是阿里云百炼订阅的两种套餐（均 `subscription` / `CN` / `api_key`，密钥不通用：Token Plan 用套餐密钥，Coding Plan 用 `sk-sp-` 专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。Token Plan 真实探针已验证模型列举和 Responses 可用；Coding Plan 探针实测 chat completions 与 `GET /v1/models` 存在、`responses` 恒 404 故未列入，其 Anthropic 兼容在 `/apps/anthropic` 独立路径、单 BaseURL 规格表达不了，不接入。Coding Plan 额度按请求数计（月 9 万次）且控制台无开放查询 API，不声明额度查询。Token Plan 额度查询独立使用百炼 CLI 控制台 `console_access_token`（不是推理 Key，也不需要新建 AccessKey），通过固定控制台主机的 `/cli/api.json` 聚合 usage、subscription、quota-config；按实际套餐返回 Credits，未知总额时返回百分比，缺失的用量窗口不补零。登录过期需重新执行 `bl auth login --console` 后导入。
 
-> `kimi/coding` / `deepseek/api` / `kiro` / `bailian-cn/token-plan` / `openai/codex` 五家 `quota_queryable: true`。速率窗口维度不依赖内置实现的主链路，只要额度端点通了就会从响应头一并读出（见 3.6）。
+> `kimi.global.subscribe.coding` / `deepseek.global.api.standard` / `kiro.global.subscribe.standard` / `bailian.cn.subscribe.token-plan` / `openai.global.subscribe.codex` 五家 `quota_queryable: true`。速率窗口维度不依赖内置实现的主链路，只要额度端点通了就会从响应头一并读出（见 3.6）。
 
-> `ark/api` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
+> `ark.global.api.standard` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
-> `openai/codex` 是 ChatGPT 订阅（Plus/Pro 登录态，`credential` 为 `oauth_refresh`）：只走 `responses` 协议，转发面对该 provider 强制请求整形——`store=false`/`stream=true`、剥离 `max_output_tokens`/`temperature`/`top_p` 等上游不接受的采样参数、`instructions` 空缺时注入 codex 官方 prompt、路径 `/v1/responses`→`/responses`、`session_id` 由服务端按账号+`prompt_cache_key` 派生（客户端自带会话头作废）。上游 401 时作废旧 access_token、续期后原样重放一次。Plus/Pro 只是订阅档位、服务类型相同，不拆规格变体。
+> `openai.global.subscribe.codex` 是 ChatGPT 订阅（Plus/Pro 登录态，`credential` 为 `oauth_refresh`）：只走 `responses` 协议，转发面对该 provider 强制请求整形——`store=false`/`stream=true`、剥离 `max_output_tokens`/`temperature`/`top_p` 等上游不接受的采样参数、`instructions` 空缺时注入 codex 官方 prompt、路径 `/v1/responses`→`/responses`、`session_id` 由服务端按账号+`prompt_cache_key` 派生（客户端自带会话头作废）。上游 401 时作废旧 access_token、续期后原样重放一次。Plus/Pro 只是订阅档位、服务类型相同，不拆规格变体。
 
 ### 3.2 Account View（账号读取形态）
 
@@ -261,7 +261,7 @@ Authorization: Bearer <密钥>
 | `context_window` | int | 恒有（管理面形态） | 上下文窗口 token 数声明；`0` 表示未声明 |
 | `defaults` | object | 恒有 | 缺省填充参数：调用方缺什么补什么；空对象表示无 |
 | `overrides` | object | 恒有 | 强制覆盖参数：无论调用方给什么都压盖；空对象表示无 |
-| `effort_format` | string | 恒有（管理面形态） | effort 写入格式：空串=协议内置映射（按出站协议选字段：responses=`reasoning.effort`、chat_completions=顶层 `reasoning_effort`、anthropic=`output_config.effort`（none 改写 `thinking.type=disabled`）、gemini=`thinkingConfig.thinkingLevel` 大写）；非空=显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异。选档后网关先按档号在 `efforts` 元数据里查值（查不到不落字段，上游吃自家默认），再按此格式写入。合法取值：`chat_completions`（OpenAI Chat 协议格式，顶层 `reasoning_effort`，none 原样上发——OpenAI chat 值域含 none；百炼 qwen3.8 官方文档 none 映射 `enable_thinking=False` 即关闭思考）、`chat_completions_skip_none`（OpenAI Chat 协议格式的 none 变体，none 不落字段——kimi 官方端点思考恒开不可关，none 发了也静默忽略）、`responses`（OpenAI Responses 协议格式，嵌套 `reasoning.effort`）、`anthropic`（Anthropic 协议格式，`output_config.effort`）、`gemini`（Gemini 协议格式，`thinkingConfig.thinkingLevel` 大写） |
+| `effort_format` | string | 恒有（管理面形态） | effort 写入格式：空串=协议内置映射（按出站协议选字段：responses=`reasoning.effort`、chat_completions=顶层 `reasoning_effort`、anthropic=`output_config.effort`（none 改写 `thinking.type=disabled`）、gemini=`thinkingConfig.thinkingLevel` 大写）；非空=显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异。选档后网关先按档号在 `efforts` 元数据里查值（查不到不落字段，上游吃自家默认），再按此格式写入。合法取值：`chat_completions`（OpenAI Chat 协议格式，顶层 `reasoning_effort`）、`responses`（OpenAI Responses 协议格式，嵌套 `reasoning.effort`）、`anthropic`（Anthropic 协议格式，`output_config.effort`）、`gemini`（Gemini 协议格式，`thinkingConfig.thinkingLevel` 大写）。none（关闭思考）是否上行不由格式特判：模型在 `efforts` 里声明 0=none 就会原样上发（百炼 qwen3.8 官方 none 映射 `enable_thinking=False`；OpenAI chat 值域含 none），上游思考恒开不可关的（kimi、codex）不声明 0 档即可 |
 | `enabled` | bool | 恒有 | 模型开关；`false` 时 resolve 返回 `409 model_disabled` |
 | `created_at` | time | 恒有 | |
 | `updated_at` | time | 恒有 | |
@@ -334,11 +334,11 @@ Authorization: Bearer <密钥>
 
 **数值来源**：计量项只有一条路径——provider 声明 `quota_queryable: true` 时由 quota 包内按供应商整合的 Go 内置实现产出（账号级 JS 脚本通道已废除）：
 
-- `deepseek/api`：`GET {base}/user/balance` 余额（按币种一条，`prepaid`）+ 响应头速率窗口；
-- `kimi/coding`：`GET {base}/v1/usages` 的 5 小时/7 天窗口（`rolling`）；账号另配了网页刷新令牌时追加会员本月用量（`monthly`，增强维度失败不拖垮主报告）；
-- `kiro`：`POST https://q.{region}.amazonaws.com/` GetUsageLimits（`nextToken` 翻页），订阅配额 `monthly`，未过期赠额另出一条；
-- `bailian-cn/token-plan`：百炼控制台固定主机 `/cli/api.json` 聚合 usage/subscription/quota-config 三接口，5 小时/7 天（`rolling`）与本月（`monthly`）窗口，按套餐返回 Credits、未知总额时返回百分比；使用 `console_access_token`（非推理 Key）。
-- `openai/codex`：`GET https://chatgpt.com/backend-api/wham/usage` 的 `rate_limit.primary_window`/`secondary_window`（`rolling`，`used_percent` 即百分比、总量恒 100）。该端点不在 provider BaseURL 的 `/backend-api/codex` 子路径下，内置实现写绝对地址；订阅档位不同可能只回一个窗口，缺席的窗口不补零，两个都没有才算查不到。
+- `deepseek.global.api.standard`：`GET {base}/user/balance` 余额（按币种一条，`prepaid`）+ 响应头速率窗口；
+- `kimi.global.subscribe.coding`：`GET {base}/v1/usages` 的 5 小时/7 天窗口（`rolling`）；账号另配了网页刷新令牌时追加会员本月用量（`monthly`，增强维度失败不拖垮主报告）；
+- `kiro.global.subscribe.standard`：`POST https://q.{region}.amazonaws.com/` GetUsageLimits（`nextToken` 翻页），订阅配额 `monthly`，未过期赠额另出一条；
+- `bailian.cn.subscribe.token-plan`：百炼控制台固定主机 `/cli/api.json` 聚合 usage/subscription/quota-config 三接口，5 小时/7 天（`rolling`）与本月（`monthly`）窗口，按套餐返回 Credits、未知总额时返回百分比；使用 `console_access_token`（非推理 Key）。
+- `openai.global.subscribe.codex`：`GET https://chatgpt.com/backend-api/wham/usage` 的 `rate_limit.primary_window`/`secondary_window`（`rolling`，`used_percent` 即百分比、总量恒 100）。该端点不在 provider BaseURL 的 `/backend-api/codex` 子路径下，内置实现写绝对地址；订阅档位不同可能只回一个窗口，缺席的窗口不补零，两个都没有才算查不到。
 
 速率窗口维度亦可来自响应头 `x-ratelimit-{remaining,limit,reset}-{requests,tokens}`，重置时刻同时接受 RFC3339 与 Unix 秒两种写法。认不出的字段一律不猜——只报 `queryable: true` 而不产出计量项。
 
@@ -446,7 +446,7 @@ curl http://localhost:8080/admin/providers \
 {
   "providers": [
     {
-      "id": "anthropic/api",
+      "id": "anthropic.global.api.standard",
       "display_name": "Anthropic",
       "website": "https://www.anthropic.com",
       "base_url": "https://api.anthropic.com",
@@ -511,7 +511,7 @@ POST /admin/accounts
 ```json
 {
   "name": "ds-1",
-  "provider_id": "deepseek/api",
+  "provider_id": "deepseek.global.api.standard",
   "credential": {
     "kind": "api_key",
     "api_key": "sk-…"
@@ -548,7 +548,7 @@ POST /admin/accounts
 curl -X POST http://localhost:8080/admin/accounts \
   -H "Authorization: Bearer $MSU_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"ds-1","provider_id":"deepseek/api","api_key":"sk-…"}'
+  -d '{"name":"ds-1","provider_id":"deepseek.global.api.standard","api_key":"sk-…"}'
 ```
 
 ### 5.4 查看账号
@@ -591,7 +591,7 @@ curl http://localhost:8080/admin/accounts/ds-1 \
 {
   "account": {
     "name": "ds-1",
-    "provider_id": "deepseek/api",
+    "provider_id": "deepseek.global.api.standard",
     "credential": {"kind": "api_key", "api_key": "sk-1***last"},
     "base_url": "",
     "headers": {},
@@ -627,7 +627,7 @@ PUT /admin/accounts/{name}
 
 ```json
 {
-  "provider_id": "deepseek/api",
+  "provider_id": "deepseek.global.api.standard",
   "credential": {
     "kind": "api_key",
     "api_key": "sk-…"
@@ -663,7 +663,7 @@ PUT /admin/accounts/{name}
 curl -X PUT http://localhost:8080/admin/accounts/ds-1 \
   -H "Authorization: Bearer $MSU_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"provider_id":"deepseek/api","base_url":"https://api.deepseek.com","headers":{},"enabled":false}'
+  -d '{"provider_id":"deepseek.global.api.standard","base_url":"https://api.deepseek.com","headers":{},"enabled":false}'
 ```
 
 **示例**（仅轮换 API key，其余字段按当前值原样带回）：
@@ -672,7 +672,7 @@ curl -X PUT http://localhost:8080/admin/accounts/ds-1 \
 curl -X PUT http://localhost:8080/admin/accounts/ds-1 \
   -H "Authorization: Bearer $MSU_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"provider_id":"deepseek/api","api_key":"sk-new-…","base_url":"https://api.deepseek.com","headers":{},"enabled":true}'
+  -d '{"provider_id":"deepseek.global.api.standard","api_key":"sk-new-…","base_url":"https://api.deepseek.com","headers":{},"enabled":true}'
 ```
 
 ### 5.6 删除账号
@@ -770,7 +770,7 @@ curl http://localhost:8080/admin/accounts/ds-1/quota \
 }
 ```
 
-provider 未声明内置额度查询时（如 `anthropic/api` / `openai/api` / `gemini/api` / `ark/api` / `bailian-cn/coding-plan`）：
+provider 未声明内置额度查询时（如 `anthropic.global.api.standard` / `openai.global.api.standard` / `gemini.global.api.standard` / `ark.global.api.standard` / `bailian.cn.subscribe.coding-plan`）：
 
 ```json
 { "account": "ark-1", "queryable": false, "meters": [], "at": "2026-09-17T02:00:00Z" }
@@ -780,7 +780,7 @@ provider 未声明内置额度查询时（如 `anthropic/api` / `openai/api` / `
 
 ### 5.8 查询上游可用模型
 
-**使用场景**：向该账号所属上游查询其实际可用的模型清单，与本地配置（5.9）比对——发现上游新增了模型、或本地配置引用了已下线的模型。provider 未声明列举端点（如 `ark/api`，实测各路径恒 `401`）时返回 `queryable: false`。
+**使用场景**：向该账号所属上游查询其实际可用的模型清单，与本地配置（5.9）比对——发现上游新增了模型、或本地配置引用了已下线的模型。provider 未声明列举端点（如 `ark.global.api.standard`，实测各路径恒 `401`）时返回 `queryable: false`。
 
 ```
 GET /admin/accounts/{name}/upstream-models
@@ -1217,7 +1217,7 @@ curl http://localhost:8080/v1/models \
     {
       "id": "ds-1/v4",
       "account": "ds-1",
-      "provider_id": "deepseek/api",
+      "provider_id": "deepseek.global.api.standard",
       "protocol": "chat_completions",
       "native_model": "deepseek-v4.1-flash",
       "context_window": 1000000,
@@ -1274,7 +1274,7 @@ curl -X POST http://localhost:8080/v1/resolve \
 {
   "model_id": "ds-1/v4",
   "account": "ds-1",
-  "provider_id": "deepseek/api",
+  "provider_id": "deepseek.global.api.standard",
   "protocol": "chat_completions",
   "base_url": "https://api.deepseek.com",
   "native_model": "deepseek-v4.1-flash",
@@ -1365,7 +1365,7 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 **转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
-2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）由通用映射逻辑消费（该网关字段恒不发上游，未命中同样删除）并给思考参数赋值。映射规则固定三段：先取档号，再按档号在模型声明的 `efforts` 元数据里查上行值（未提供、形态不对或未命中声明则不落字段，上游吃自家默认），命中后按模型的写入格式（`effort_format`，见 3.3）把值格式化进请求体——空串=协议内置（`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`，两协议值域均含 `none`=关闭思考；`anthropic` 写 `output_config.effort`，`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel` 枚举大写，`none` 不动体），显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关，配 `chat_completions_skip_none`：none 删字段不落）。映射在 `defaults` 合并后、`overrides` 合并前施加：映射恒压 defaults 与客户端参数（skip_none 删字段后不会被 defaults 回填），JSON 覆盖参数恒可压盖映射结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
+2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）由通用映射逻辑消费（该网关字段恒不发上游，未命中同样删除）并给思考参数赋值。映射规则固定三段：先取档号，再按档号在模型声明的 `efforts` 元数据里查上行值（未提供、形态不对或未命中声明则不落字段，上游吃自家默认），命中后按模型的写入格式（`effort_format`，见 3.3）把值格式化进请求体——空串=协议内置（`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`，两协议值域均含 `none`=关闭思考；`anthropic` 写 `output_config.effort`，`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel` 枚举大写，`none` 不动体），显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关，配 `chat_completions` 且不声明 0 档）。映射在 `defaults` 合并后、`overrides` 合并前施加：映射恒压 defaults 与客户端参数，JSON 覆盖参数恒可压盖映射结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
 3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
 4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
 5. 逐跳头（Connection 等）按 HTTP 规范不转发。
@@ -1395,7 +1395,7 @@ curl http://localhost:8080/admin/providers \
 # 2. 建账号
 curl -X POST http://localhost:8080/admin/accounts \
   -H "Authorization: Bearer admin-key" -H "Content-Type: application/json" \
-  -d '{"name":"ds-1","provider_id":"deepseek/api","api_key":"sk-…"}'
+  -d '{"name":"ds-1","provider_id":"deepseek.global.api.standard","api_key":"sk-…"}'
 
 # 3. 建模型
 curl -X POST http://localhost:8080/admin/models \

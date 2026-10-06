@@ -22,11 +22,11 @@ const bodyLimit = 64 * 1024
 type builtinQuery func(ctx context.Context, q *Quota, spec provider.Spec, acc account.Account) ([]Meter, error)
 
 var builtinQuotas = map[string]builtinQuery{
-	"bailian-cn/token-plan": bailianMeters,
-	"deepseek/api":          deepseekMeters,
-	"kimi/coding":           kimiUsagesMeters,
-	"kiro":                  kiroMeters,
-	"openai/codex":          codexMeters,
+	"bailian.cn.subscribe.token-plan":  bailianMeters,
+	"deepseek.global.api.standard":     deepseekMeters,
+	"kimi.global.subscribe.coding":     kimiUsagesMeters,
+	"kiro.global.subscribe.standard":   kiroMeters,
+	"openai.global.subscribe.codex":    codexMeters,
 }
 
 // do 执行一次上游请求并读出响应体:传输错误与非 2xx 归一为 QuotaUnavailable。

@@ -49,6 +49,20 @@ UPDATE accounts SET provider_id = 'deepseek/api' WHERE provider_id = 'deepseek';
 UPDATE accounts SET provider_id = 'bailian-cn/token-plan' WHERE provider_id = 'bailian';
 UPDATE accounts SET provider_id = 'bailian-cn/coding-plan' WHERE provider_id = 'bailian-coding';
 
+-- provider id 点式改名(2026-10-06):厂商.区域.计费.服务 四段恒在——区域
+-- cn/global 不省略,计费 api=按量、subscribe=订阅,服务段 standard=默认服务、
+-- 订阅套餐用 slug。承接上面的路径式块(任意年代库链式迁移),幂等可重复执行。
+UPDATE accounts SET provider_id = 'anthropic.global.api.standard' WHERE provider_id = 'anthropic/api';
+UPDATE accounts SET provider_id = 'openai.global.api.standard' WHERE provider_id = 'openai/api';
+UPDATE accounts SET provider_id = 'openai.global.subscribe.codex' WHERE provider_id = 'openai/codex';
+UPDATE accounts SET provider_id = 'gemini.global.api.standard' WHERE provider_id = 'gemini/api';
+UPDATE accounts SET provider_id = 'kimi.global.subscribe.coding' WHERE provider_id = 'kimi/coding';
+UPDATE accounts SET provider_id = 'ark.global.api.standard' WHERE provider_id = 'ark/api';
+UPDATE accounts SET provider_id = 'deepseek.global.api.standard' WHERE provider_id = 'deepseek/api';
+UPDATE accounts SET provider_id = 'kiro.global.subscribe.standard' WHERE provider_id = 'kiro';
+UPDATE accounts SET provider_id = 'bailian.cn.subscribe.token-plan' WHERE provider_id = 'bailian-cn/token-plan';
+UPDATE accounts SET provider_id = 'bailian.cn.subscribe.coding-plan' WHERE provider_id = 'bailian-cn/coding-plan';
+
 CREATE TABLE IF NOT EXISTS models (
     id             TEXT PRIMARY KEY,
     account        TEXT        NOT NULL REFERENCES accounts(name) ON DELETE CASCADE,
@@ -73,29 +87,27 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS efforts JSONB NOT NULL DEFAULT 'null
 
 -- effort_format 为 effort 写入格式(effort.FormatXxx 枚举):空串=协议内置
 -- 映射(按出站协议选字段);非空=显式格式压过协议外形,按目标协议命名
--- (chat_completions/responses/anthropic/gemini,+chat_completions_skip_none
--- 变体),承接「协议外壳+自家字段」的厂商差异(如 kimi 顶层 reasoning_effort)。
+-- (chat_completions/responses/anthropic/gemini),承接「协议外壳+自家字段」
+-- 的厂商差异(如 kimi 顶层 reasoning_effort)。none 是否上行由 efforts 是否
+-- 声明 0 档决定,格式不做 none 特判(2026-10-06 起不再设 skip_none 变体)。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_format TEXT NOT NULL DEFAULT '';
 
--- 存量 effort_script 迁移(2026-10-05 脚本配置收进通用底层):按官方文档
--- 口径分流——百炼式脚本(none 时 delete 字段)归入 chat_completions
--- (qwen3.8 官方:none 原样上发映射 enable_thinking=False;删字段反而吃
--- 默认 xhigh=思考开到最大);kimi 式脚本(思考不可关,none 不落字段)
--- 归入 chat_completions_skip_none。迁移后删列。
+-- 存量 effort_script 迁移(2026-10-05 脚本配置收进通用底层):含顶层
+-- reasoning_effort 写法的脚本统一归入 chat_completions;旧脚本对 none 的
+-- delete/不落字段特判随之消失——上游思考不可关的模型靠不声明 0 档表达。
+-- 迁移后删列。
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns
                WHERE table_name = 'models' AND column_name = 'effort_script') THEN
         UPDATE models SET effort_format = 'chat_completions'
-        WHERE effort_script LIKE '%delete%reasoning_effort%' AND effort_format = '';
-        UPDATE models SET effort_format = 'chat_completions_skip_none'
         WHERE effort_script LIKE '%reasoning_effort%' AND effort_format = '';
         ALTER TABLE models DROP COLUMN effort_script;
     END IF;
 END $$;
 
--- 格式枚举协议化改名(2026-10-06):旧字段式命名→协议式命名,值一一对应。
-UPDATE models SET effort_format = 'chat_completions' WHERE effort_format = 'reasoning_effort';
-UPDATE models SET effort_format = 'chat_completions_skip_none' WHERE effort_format = 'reasoning_effort_skip_none';
+-- 格式枚举协议化改名(2026-10-06):旧字段式命名→协议式命名;skip_none
+-- 变体同日废除(降级为 chat_completions,none 特判改由 0 档声明承担)。
+UPDATE models SET effort_format = 'chat_completions' WHERE effort_format IN ('reasoning_effort', 'reasoning_effort_skip_none', 'chat_completions_skip_none');
 UPDATE models SET effort_format = 'responses' WHERE effort_format = 'reasoning_object';
 UPDATE models SET effort_format = 'anthropic' WHERE effort_format = 'output_config';
 UPDATE models SET effort_format = 'gemini' WHERE effort_format = 'thinking_level';
