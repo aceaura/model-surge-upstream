@@ -3,7 +3,6 @@ package kiro
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +33,141 @@ type pendingTool struct {
 	id, name string
 	args     strings.Builder
 }
+
+// finishedTool 是收尾后的工具调用:args 为保序归一化的 JSON 文本(去重键
+// 与上行参数都用它,parsers.py 的 json.dumps(json.loads(raw)) 保序语义),
+// invalid 对应 parsers.py 的 _arguments_invalid。
+type finishedTool struct {
+	id, name string
+	args     string
+	input    any
+	invalid  bool
+}
+
+// normalizeOrderedJSON 把合法 JSON 重编码为保序紧凑文本(对象键序按到达
+// 顺序保留,数字原文保留);非法输入 ok=false。
+func normalizeOrderedJSON(raw string) (string, bool) {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+	var buf strings.Builder
+	if !encodeOrderedValue(dec, &buf) {
+		return "", false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", false // 顶层多值
+	}
+	return buf.String(), true
+}
+
+func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder) bool {
+	tok, err := dec.Token()
+	if err != nil {
+		return false
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		b, err := json.Marshal(tok)
+		if err != nil {
+			return false
+		}
+		buf.Write(b)
+		return true
+	}
+	switch delim {
+	case '{':
+		buf.WriteByte('{')
+		first := true
+		for dec.More() {
+			if !first {
+				buf.WriteByte(',')
+			}
+			first = false
+			kt, err := dec.Token()
+			if err != nil {
+				return false
+			}
+			ks, ok := kt.(string)
+			if !ok {
+				return false
+			}
+			kb, _ := json.Marshal(ks)
+			buf.Write(kb)
+			buf.WriteByte(':')
+			if !encodeOrderedValue(dec, buf) {
+				return false
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return false
+		}
+		buf.WriteByte('}')
+	case '[':
+		buf.WriteByte('[')
+		first := true
+		for dec.More() {
+			if !first {
+				buf.WriteByte(',')
+			}
+			first = false
+			if !encodeOrderedValue(dec, buf) {
+				return false
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return false
+		}
+		buf.WriteByte(']')
+	default:
+		return false
+	}
+	return true
+}
+
+// dedupTools 对齐 parsers.py deduplicate_tool_calls:先按 id 原位替换为参数
+// 更全者(合法非空参数压过无效/空/更短者),再按 name+args 保序去重;无 id
+// 的调用只参与 name+args 阶段。
+func dedupTools(in []*finishedTool) []*finishedTool {
+	byID := map[string]*finishedTool{}
+	var withID, noID []*finishedTool
+	for _, tc := range in {
+		if tc.id == "" {
+			noID = append(noID, tc)
+			continue
+		}
+		ex := byID[tc.id]
+		if ex == nil {
+			byID[tc.id] = tc
+			withID = append(withID, tc)
+			continue
+		}
+		if !tc.invalid && tc.args != "{}" && (ex.invalid || ex.args == "{}" || len(tc.args) > len(ex.args)) {
+			for i, v := range withID {
+				if v == ex {
+					withID[i] = tc
+					break
+				}
+			}
+			byID[tc.id] = tc
+		} else if tc.invalid && (ex.invalid || ex.args == "{}") {
+			ex.invalid = true
+		}
+	}
+	seen := map[string]*finishedTool{}
+	var out []*finishedTool
+	for _, tc := range append(withID, noID...) {
+		key := tc.name + "-" + tc.args
+		if ex := seen[key]; ex != nil {
+			if tc.invalid && tc.args == "{}" {
+				ex.invalid = true
+			}
+			continue
+		}
+		seen[key] = tc
+		out = append(out, tc)
+	}
+	return out
+}
+
 type responseState struct {
 	options                       requestOptions
 	id                            string
@@ -45,8 +179,8 @@ type responseState struct {
 	blockIndex                    int
 	tool                          *pendingTool
 	toolCount                     int
-	seenTools                     map[string][sha256.Size]byte
-	seenNameArgs                  map[[sha256.Size]byte]bool
+	tools                         []*finishedTool
+	finalTools                    []*finishedTool
 	credits                       float64
 	hasCredits                    bool
 	contextPct                    float64
@@ -62,7 +196,7 @@ type responseState struct {
 	cacheReadAbs, cacheCreateAbs  bool
 	terminal, meaningful          bool
 	sentRole                      bool
-	streamTools                   []any
+	bracketFound                  bool
 	stopReason                    string
 	stopSequence                  string
 	emit                          func(string, object)
@@ -73,7 +207,7 @@ func newResponseState(o requestOptions) *responseState {
 	if o.protocol == "anthropic" {
 		prefix = "msg_"
 	}
-	s := &responseState{options: o, id: prefix + strings.ReplaceAll(newID(), "-", ""), created: time.Now().Unix(), blockIndex: -1, inputTokens: o.inputEstimate, seenTools: map[string][sha256.Size]byte{}, seenNameArgs: map[[sha256.Size]byte]bool{}}
+	s := &responseState{options: o, id: prefix + strings.ReplaceAll(newID(), "-", ""), created: time.Now().Unix(), blockIndex: -1, inputTokens: o.inputEstimate}
 	// streaming_core.py:296-299: 思考解析只受全局 FAKE_REASONING_ENABLED
 	// 门控,与本请求是否注入标签无关——模型自发输出 <thinking> 块同样
 	// 被剥离进 reasoning 通道。
@@ -145,11 +279,15 @@ func (s *responseState) emitBlock(kind, text string, fake bool) error {
 	if text == "" {
 		return nil
 	}
-	s.meaningful = true
+	// streaming_openai.py:287-291 / streaming_anthropic.py:630-634: 截断判定
+	// 只认正文 full_content;纯 thinking 被掐断在 Python 判正常收尾。
+	if kind == "text" {
+		s.meaningful = true
+	}
 	s.outputRunes += utf8.RuneCountInString(text)
-	// streaming_core.py:483-486: bracket 工具扫描覆盖正文+思考;截断恢复
-	// 哈希只取正文(streaming_anthropic.py:701 传 full_content 不含思考),
-	// 因此思考单独累积,不能与正文混入同一缓冲。
+	// 截断恢复哈希只取正文(streaming_anthropic.py:701 传 full_content 不
+	// 含思考),因此思考单独累积,不能与正文混入同一缓冲;括号扫描输入
+	// 在 finalize 按协议与流式与否选择(streaming_core.py:478-484)。
 	if (kind == "text" || kind == "thinking") && !s.fullTextOverflow {
 		if s.fullText.Len()+s.fullThinking.Len()+len(text) > maxBracketScanBytes {
 			s.fullTextOverflow = true
@@ -209,77 +347,58 @@ func (s *responseState) finishTool() error {
 		return nil
 	}
 	t := s.tool
+	s.tool = nil
 	args := t.args.String()
 	if strings.TrimSpace(args) == "" {
 		args = "{}"
 	}
-	input, err := decodeObject(args)
-	if err != nil {
+	norm, ok := normalizeOrderedJSON(args)
+	invalid := false
+	if !ok {
 		// parsers.py: truncated arguments are diagnosed and replaced with {};
 		// the truncation notice is injected into the next request.
 		if looksTruncatedJSON(args) {
 			saveToolTruncation(t.id, t.name)
 		}
 		if s.options.policyMode != "" {
-			s.tool = nil
 			return &toolViolation{msg: "tool '" + t.name + "' returned malformed JSON arguments"}
 		}
-		input = object{}
-	}
-	canonical := jsonText(input)
-	digest := sha256.Sum256([]byte(t.name + "\x00" + canonical))
-	if _, ok := s.seenTools[t.id]; ok {
-		// parsers.py:168-189 同 id 冲突保留参数更完整者;流式已发出先前者
-		// 无法回收,重复帧静默丢弃(不报错)。
-		s.tool = nil
-		return nil
-	}
-	// parsers.py deduplicate_tool_calls: name+args 完全相同的调用只发一次,
-	// 原生事件与括号文本恢复之间也靠它交叉去重。
-	if s.seenNameArgs[digest] {
-		s.tool = nil
-		return nil
+		norm, invalid = "{}", true
 	}
 	if s.options.forbidTools || !s.options.allowedTools[t.name] {
-		s.tool = nil
 		if s.options.policyMode != "" {
 			return &toolViolation{msg: "response returned disallowed tool '" + t.name + "'"}
 		}
 		// parsers.py 无工具白名单校验:未声明的工具调用照常透传。
 	}
 	if s.options.policyMode == "named" && t.name != s.options.policyTool {
-		s.tool = nil
 		return &toolViolation{msg: "response called a tool other than required tool '" + s.options.policyTool + "'"}
 	}
 	if s.toolCount >= 1024 {
 		return fmt.Errorf("kiro: response exceeds 1024 tool calls")
 	}
-	// Retain only a digest for deduplication, not all prior tool arguments.
-	s.seenTools[t.id] = digest
-	s.seenNameArgs[digest] = true
-	s.meaningful = true
-	s.outputRunes += utf8.RuneCountInString(t.name + canonical)
+	input := any(object{})
+	if decoded, err := decodeObject(norm); err == nil {
+		input = decoded
+	}
+	// streaming_anthropic.py:505-540: anthropic 流式逐工具实时发块,全程不去重;
+	// openai 流收尾去重后聚合单 chunk(streaming_openai.py:284);非流式仅在
+	// 括号恢复命中时去重(streaming_core.py:499-501)。三者统一先入 tools,
+	// 去重在 finalize 按矩阵进行。
+	s.tools = append(s.tools, &finishedTool{id: t.id, name: t.name, args: norm, input: input, invalid: invalid})
+	s.toolCount++
 	if !s.options.stream {
-		s.collectedBytes += len(canonical)
+		s.collectedBytes += len(norm)
 		if s.collectedBytes > maxResponseBytes {
 			return fmt.Errorf("kiro: response exceeds collection limit")
 		}
 	}
-	block := object{"type": "tool_use", "id": t.id, "name": t.name, "input": object{}}
-	s.openBlock("tool_use", block)
-	if s.options.protocol == "anthropic" {
-		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": canonical}})
-	} else {
-		// streaming_openai.py:267-368: openai 流不逐工具发帧,全部收集后
-		// 在收尾前聚合成单个 tool_calls chunk 发出。
-		s.streamTools = append(s.streamTools, object{"index": s.toolCount, "id": t.id, "type": "function", "function": object{"name": t.name, "arguments": canonical}})
+	if s.options.stream && s.options.protocol == "anthropic" {
+		block := object{"type": "tool_use", "id": t.id, "name": t.name, "input": object{}}
+		s.openBlock("tool_use", block)
+		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": norm}})
+		s.closeBlock()
 	}
-	if !s.options.stream {
-		block["input"] = input
-	}
-	s.closeBlock()
-	s.toolCount++
-	s.tool = nil
 	return nil
 }
 func (s *responseState) toolEvent(d object) error {
@@ -467,7 +586,17 @@ func (s *responseState) finalize() error {
 	// Some models answer with [Called name with args: {...}] text instead of
 	// native tool events; those become real tool blocks after the text.
 	if !s.fullTextOverflow {
-		for _, call := range parseBracketToolCalls(s.fullText.String() + s.fullThinking.String()) {
+		// 括号扫描输入:流式两协议与 openai 非流式(复用流式生成器)只扫
+		// 正文(streaming_openai.py:283、streaming_anthropic.py:550);
+		// anthropic 非流式走 collect_stream_to_result,正文+思考一起扫
+		// (streaming_core.py:478-484)。
+		scan := s.fullText.String()
+		if s.options.protocol == "anthropic" && !s.options.stream {
+			scan += s.fullThinking.String()
+		}
+		calls := parseBracketToolCalls(scan)
+		s.bracketFound = len(calls) > 0
+		for _, call := range calls {
 			if err := s.emitBracketTool(call); err != nil {
 				return err
 			}
@@ -475,6 +604,24 @@ func (s *responseState) finalize() error {
 	}
 	if err := s.finishTool(); err != nil {
 		return err
+	}
+	// 去重矩阵(parsers.py:151-210 及各调用点):openai 恒去重——流式收尾
+	// (streaming_openai.py:284),非流式复用流式生成器同一收口
+	// (collect_stream_response);anthropic 流实时发块不去重;anthropic
+	// 非流式仅在括号恢复命中时去重(streaming_core.py:499-501)。
+	switch {
+	case s.options.protocol == "anthropic" && (s.options.stream || !s.bracketFound):
+		s.finalTools = s.tools
+	default:
+		s.finalTools = dedupTools(s.tools)
+	}
+	s.toolCount = len(s.finalTools)
+	if !s.options.stream {
+		// streaming_anthropic.py:761-786: 非流式内容块顺序恒为
+		// thinking → text → tool_use。
+		for _, ft := range s.finalTools {
+			s.blocks = append(s.blocks, object{"type": "tool_use", "id": ft.id, "name": ft.name, "input": ft.input})
+		}
 	}
 	if !s.terminal {
 		// Clean EOF without completion/usage markers: the reference recovers a
@@ -513,15 +660,6 @@ func (s *responseState) emitBracketTool(call object) error {
 	id, name := str(call["toolUseId"]), str(call["name"])
 	input := obj(call["input"])
 	canonical := jsonText(input)
-	digest := sha256.Sum256([]byte(name + "\x00" + canonical))
-	if s.seenNameArgs[digest] {
-		return nil
-	}
-	if id != "" {
-		if _, ok := s.seenTools[id]; ok {
-			return nil
-		}
-	}
 	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result)。
 	if s.options.policyMode != "" {
 		if s.options.forbidTools || !s.options.allowedTools[name] {
@@ -531,27 +669,21 @@ func (s *responseState) emitBracketTool(call object) error {
 			return &toolViolation{msg: "response called a tool other than required tool '" + s.options.policyTool + "'"}
 		}
 	}
-	s.seenNameArgs[digest] = true
-	s.meaningful = true
-	s.outputRunes += utf8.RuneCountInString(name + canonical)
+	s.tools = append(s.tools, &finishedTool{id: id, name: name, args: canonical, input: input})
+	s.toolCount++
 	if !s.options.stream {
 		s.collectedBytes += len(canonical)
 		if s.collectedBytes > maxResponseBytes {
 			return fmt.Errorf("kiro: response exceeds collection limit")
 		}
 	}
-	block := object{"type": "tool_use", "id": id, "name": name, "input": object{}}
-	s.openBlock("tool_use", block)
-	if s.options.protocol == "anthropic" {
+	// streaming_anthropic.py:571-613: 括号恢复的块在收尾实时追加,不去重。
+	if s.options.stream && s.options.protocol == "anthropic" {
+		block := object{"type": "tool_use", "id": id, "name": name, "input": object{}}
+		s.openBlock("tool_use", block)
 		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": canonical}})
-	} else {
-		s.streamTools = append(s.streamTools, object{"index": s.toolCount, "id": id, "type": "function", "function": object{"name": name, "arguments": canonical}})
+		s.closeBlock()
 	}
-	if !s.options.stream {
-		block["input"] = input
-	}
-	s.closeBlock()
-	s.toolCount++
 	return nil
 }
 
@@ -692,8 +824,14 @@ func (s *responseState) finishStream() {
 		s.send("message_delta", object{"type": "message_delta", "delta": object{"stop_reason": anthropic, "stop_sequence": s.sequenceValue()}, "usage": s.anthropicUsage()})
 		s.send("message_stop", object{"type": "message_stop"})
 	} else {
-		if len(s.streamTools) > 0 {
-			s.send("", s.chunk(object{"tool_calls": s.streamTools}, nil))
+		if len(s.finalTools) > 0 {
+			// streaming_openai.py:340-368: 工具调用收尾前聚合为单个
+			// tool_calls chunk(去重后的 finalTools),index 按序编号。
+			toolCalls := make([]any, 0, len(s.finalTools))
+			for i, ft := range s.finalTools {
+				toolCalls = append(toolCalls, object{"index": i, "id": ft.id, "type": "function", "function": object{"name": ft.name, "arguments": ft.args}})
+			}
+			s.send("", s.chunk(object{"tool_calls": toolCalls}, nil))
 		}
 		// streaming_openai.py:396-411: finish_reason 与 usage 同一收尾帧,
 		// 恒发,不看 stream_options。
@@ -708,7 +846,6 @@ func (s *responseState) response() object {
 		return object{"id": s.id, "type": "message", "role": "assistant", "model": s.options.model, "content": s.blocks, "stop_reason": anthropic, "stop_sequence": s.sequenceValue(), "usage": s.anthropicUsage()}
 	}
 	var content, reasoning strings.Builder
-	calls := []any{}
 	for _, v := range s.blocks {
 		b := obj(v)
 		switch str(b["type"]) {
@@ -716,9 +853,13 @@ func (s *responseState) response() object {
 			content.WriteString(str(b["text"]))
 		case "thinking":
 			reasoning.WriteString(str(b["thinking"]))
-		case "tool_use":
-			calls = append(calls, object{"id": b["id"], "type": "function", "function": object{"name": b["name"], "arguments": jsonText(b["input"])}})
 		}
+	}
+	// streaming_openai.py:521-533: 非流式 tool_calls 取去重后的 finalTools,
+	// arguments 用保序归一化文本。
+	calls := []any{}
+	for _, ft := range s.finalTools {
+		calls = append(calls, object{"id": ft.id, "type": "function", "function": object{"name": ft.name, "arguments": ft.args}})
 	}
 	// streaming_openai.py:763: content 恒为字符串,工具调用场景不回 null。
 	message := object{"role": "assistant", "content": content.String()}

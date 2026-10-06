@@ -1,10 +1,31 @@
 package kiro
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"unicode"
 )
+
+// truthy 复刻 Python 真值判定:nil/false/0/空串/空容器为假。
+func truthy(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return x
+	case string:
+		return x != ""
+	case json.Number:
+		f, err := x.Float64()
+		return err == nil && f != 0
+	case []any:
+		return len(x) > 0
+	case map[string]any:
+		return len(x) > 0
+	}
+	return true
+}
 
 // Fake reasoning (KiroaaS converters_core.py + thinking_parser.py): for models
 // without a native effort channel the reference gateway injects thinking
@@ -84,7 +105,14 @@ func extractThinking(root object, protocol string) thinkingConfig {
 	// 只属 openai(config.py:526 OPENAI_EFFORT_ALIASES)。
 	effort := ""
 	if protocol == "openai" {
-		effort = str(root["reasoning_effort"])
+		raw := root["reasoning_effort"]
+		if s, ok := raw.(string); ok {
+			effort = s
+		} else if truthy(raw) {
+			// converters_openai.py:330-334: 非字符串真值 reasoning_effort
+			// 警告后回退 EFFORT_FALLBACK;假值等同未提供。
+			effort = "medium"
+		}
 	} else {
 		effort = str(obj(root["output_config"])["effort"])
 		if effort == "" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -129,6 +130,22 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			return fail(fmt.Errorf("stream must be boolean"))
 		}
 	}
+	// models_anthropic.py:393-395: temperature/top_p ∈ [0,1]、top_k ≥ 0,
+	// 越界、非数值与小数 top_k 在参考实现里 422(pydantic Field 校验)。
+	if protocol == "anthropic" {
+		for _, key := range []string{"temperature", "top_p"} {
+			if v := root[key]; v != nil {
+				if f, ok := pydanticFloat(v); !ok || f < 0 || f > 1 {
+					return fail(fmt.Errorf("%s must be a number in [0, 1]", key))
+				}
+			}
+		}
+		if v := root["top_k"]; v != nil {
+			if f, ok := pydanticFloat(v); !ok || f < 0 || f != float64(int64(f)) {
+				return fail(fmt.Errorf("top_k must be a non-negative integer"))
+			}
+		}
+	}
 	// streaming_openai.py: 收尾 usage 块恒发,stream_options.include_usage 忽略。
 	// models_openai.py:160: n 字段被接受但从不读取(n≠1 静默返回单条),
 	// 不在边界拒绝。
@@ -148,8 +165,10 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		t := obj(v)
 		flat := false
 		if protocol == "openai" {
+			// converters_openai.py:278-300: 非法工具条目 warning 跳过而非
+			// 整请求拒绝:type!="function" 跳过;无 function 且无 name 跳过。
 			if typ := str(t["type"]); typ != "" && typ != "function" {
-				return fail(fmt.Errorf("only function tools are supported"))
+				continue
 			}
 			if fn := obj(t["function"]); fn != nil {
 				t = fn
@@ -158,7 +177,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				// {name,description,input_schema},无 function 包裹。
 				flat = true
 			} else {
-				return fail(fmt.Errorf("only function tools are supported"))
+				continue
 			}
 		}
 		name := str(t["name"])
@@ -174,13 +193,20 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			schema = t["parameters"]
 		}
 		if schema == nil {
+			// models_anthropic.py:275-287: anthropic 自定义工具(无 type 字段)
+			// 缺 input_schema 拒绝;openai 侧 parameters 可缺省(converters_openai
+			// 原样透传 None,上游兜底)。
+			if protocol == "anthropic" && t["type"] == nil {
+				return fail(fmt.Errorf("input_schema is required for user-defined tool %q", name))
+			}
 			schema = object{"type": "object", "properties": object{}}
 		}
 		if obj(schema) == nil {
 			return fail(fmt.Errorf("tool %q schema must be an object", name))
 		}
 		description := str(t["description"])
-		if description == "" {
+		if strings.TrimSpace(description) == "" {
+			// converters_core.py:701-704: 纯空白描述同样换占位。
 			description = "Tool: " + name
 		}
 		if utf8.RuneCountInString(description) > 10000 {
@@ -268,6 +294,12 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	for _, v := range list(root["messages"]) {
 		m := obj(v)
 		role := str(m["role"])
+		// models_openai.py: role 必填且须为字符串,缺省/null/非字符串 422。
+		if protocol == "openai" {
+			if _, ok := m["role"].(string); !ok {
+				return fail(fmt.Errorf("role is required"))
+			}
+		}
 		// models_anthropic.py:229: role 是 Literal["user","assistant"],其他
 		// 角色(含 system)在参考实现里直接被 422 拒绝。
 		if protocol == "anthropic" && role != "user" && role != "assistant" {
@@ -643,6 +675,11 @@ func systemPromptText(v any) (string, error) {
 }
 func parseMessage(m object, protocol string) (message, error) {
 	result := message{role: str(m["role"])}
+	// models_anthropic.py:86: content 必填,null 与缺省同样 422;
+	// openai 侧 content 可缺省。
+	if protocol == "anthropic" && m["content"] == nil {
+		return result, fmt.Errorf("content is required")
+	}
 	if result.role == "tool" {
 		result.role = "user"
 		text, images, err := resultContent(m["content"])
@@ -650,11 +687,8 @@ func parseMessage(m object, protocol string) (message, error) {
 			return result, err
 		}
 		result.images = images
-		id := str(m["tool_call_id"])
-		if id == "" {
-			return result, fmt.Errorf("tool_call_id is required")
-		}
-		result.results = append(result.results, toolResult(id, text))
+		// converters_openai.py:190: tool_call_id 缺省按空串上行,不拒绝。
+		result.results = append(result.results, toolResult(str(m["tool_call_id"]), text))
 		return result, nil
 	}
 	if s, ok := m["content"].(string); ok {
@@ -662,10 +696,32 @@ func parseMessage(m object, protocol string) (message, error) {
 	} else if m["content"] != nil {
 		blocks, ok := m["content"].([]any)
 		if !ok {
-			return result, fmt.Errorf("content must be text or blocks")
+			// converters_core.py:267: openai 标量内容按 Python str() 收为
+			// 文本;anthropic 由 pydantic 联合类型在边界拒绝。
+			if protocol != "openai" {
+				return result, fmt.Errorf("content must be text or blocks")
+			}
+			result.text = pythonicString(m["content"])
+			blocks = nil
 		}
 		for _, v := range blocks {
+			if s, ok := v.(string); ok {
+				// extract_text_content: openai 列表里的裸字符串直接拼接;
+				// anthropic 的 ContentBlock 联合类型不含字符串项,422。
+				if protocol != "openai" {
+					return result, fmt.Errorf("content blocks must be objects")
+				}
+				result.text += s
+				continue
+			}
 			b := obj(v)
+			if b == nil {
+				// openai 非标量非字典项跳过;anthropic 422。
+				if protocol != "openai" {
+					return result, fmt.Errorf("content blocks must be objects")
+				}
+				continue
+			}
 			switch str(b["type"]) {
 			case "text":
 				result.text += str(b["text"])
@@ -692,6 +748,11 @@ func parseMessage(m object, protocol string) (message, error) {
 				if protocol != "anthropic" || result.role != "assistant" {
 					continue
 				}
+				// models_anthropic.py: input 必填;出现的字符串由 toolUse
+				// 强迫为 dict,缺省/null 在参考实现里 422。
+				if b["input"] == nil {
+					return result, fmt.Errorf("tool_use input is required")
+				}
 				u, err := toolUse(str(b["id"]), str(b["name"]), b["input"])
 				if err != nil {
 					return result, err
@@ -703,17 +764,25 @@ func parseMessage(m object, protocol string) (message, error) {
 				if result.role != "user" {
 					continue
 				}
+				id := str(b["tool_use_id"])
+				if id == "" {
+					// converters_anthropic.py:151: tool_use_id 为空的
+					// tool_result 块整个丢弃,内容不提取。
+					continue
+				}
 				text, images, err := resultContent(b["content"])
 				if err != nil {
 					return result, err
 				}
 				result.images = append(result.images, images...)
-				id := str(b["tool_use_id"])
-				if id == "" {
-					return result, fmt.Errorf("tool_use_id is required")
-				}
 				result.results = append(result.results, toolResult(id, text))
 			default:
+				// extract_text_content: openai 未知块带 text 键则收割,
+				// 否则跳过;anthropic 未知块 422。
+				if protocol == "openai" {
+					result.text += str(b["text"])
+					continue
+				}
 				return result, fmt.Errorf("unsupported content block %q", str(b["type"]))
 			}
 		}
@@ -724,9 +793,11 @@ func parseMessage(m object, protocol string) (message, error) {
 			continue
 		}
 		tc := obj(v)
-		if str(tc["type"]) != "function" {
-			return result, fmt.Errorf("only function tool calls are supported")
+		if tc == nil {
+			continue
 		}
+		// converters_openai.py:137-145: 只读 id 与 function,不校验
+		// type 字段;function 缺省时 name 为空,由 toolUse 拒绝。
 		f := obj(tc["function"])
 		u, err := toolUse(str(tc["id"]), str(f["name"]), f["arguments"])
 		if err != nil {
@@ -745,12 +816,21 @@ func resultContent(v any) (string, []any, error) {
 	}
 	blocks, ok := v.([]any)
 	if !ok {
-		return "", nil, fmt.Errorf("tool result content must be text or blocks")
+		// extract_text_content: 标量内容按 Python str() 收为文本。
+		return pythonicString(v), nil, nil
 	}
 	var text strings.Builder
 	var images []any
 	for _, v := range blocks {
+		if s, ok := v.(string); ok {
+			// extract_text_content: 列表里的裸字符串直接拼接。
+			text.WriteString(s)
+			continue
+		}
 		b := obj(v)
+		if b == nil {
+			continue
+		}
 		switch str(b["type"]) {
 		case "text":
 			text.WriteString(str(b["text"]))
@@ -765,10 +845,47 @@ func resultContent(v any) (string, []any, error) {
 		case "tool_reference": // converters_core.py:269-270: 跳过。
 			continue
 		default:
-			return "", nil, fmt.Errorf("unsupported tool result block %q", str(b["type"]))
+			// extract_text_content: 未知块带 text 键收割,否则跳过。
+			text.WriteString(str(b["text"]))
 		}
 	}
 	return text.String(), images, nil
+}
+
+// pythonicString 复刻 Python str():布尔 True/False,数字保留 JSON 原文
+// (json.loads 的 int/float 区分与 UseNumber 的原文保留一致)。
+func pythonicString(v any) string {
+	switch x := v.(type) {
+	case bool:
+		if x {
+			return "True"
+		}
+		return "False"
+	case json.Number:
+		return x.String()
+	case string:
+		return x
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// pydanticFloat 复刻 pydantic v2 lax 模式的 float 强迫:数字、数值字符串、
+// 布尔接受,其余拒绝。
+func pydanticFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case json.Number:
+		f, err := x.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return f, err == nil
+	case bool:
+		if x {
+			return 1, true
+		}
+		return 0, true
+	}
+	return 0, false
 }
 
 func toolUse(id, name string, input any) (object, error) {

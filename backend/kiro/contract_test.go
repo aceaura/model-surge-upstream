@@ -421,12 +421,15 @@ func TestToolFragmentAssemblyAndDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := list(parseResult(t, data)["content"])
-	if len(blocks) != 1 || jsonText(obj(blocks[0])["input"]) != jsonText(input) {
+	// streaming_core.py:499-501: anthropic 非流式无括号恢复命中不去重,
+	// 同 id 重复帧原样保留为两个 tool_use 块。
+	if len(blocks) != 2 || jsonText(obj(blocks[0])["input"]) != jsonText(input) || jsonText(obj(blocks[1])["input"]) != jsonText(input) {
 		t.Fatal(blocks)
 	}
 	conflicting := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": "id", "input": object{"x": 1}, "stop": true}), frame("toolUseEvent", object{"name": "lookup", "toolUseId": "id", "input": object{"x": 2}, "stop": true}), endFrame())
 	other := stub(t, conflicting, nil)
-	// parsers.py:174-189: 同 id 冲突保留先发出者(等长不替换),重复帧静默丢弃。
+	// openai 非流式复用流式生成器,恒去重(streaming_openai.py:284);
+	// parsers.py:174-189: 同 id 冲突保留先发出者(等长不替换)。
 	_, data, err = do(t, other.URL, "openai", false)
 	if err != nil {
 		t.Fatal(err)

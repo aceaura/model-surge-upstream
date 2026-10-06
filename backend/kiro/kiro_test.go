@@ -204,13 +204,15 @@ func TestBothProtocolsStreamAndNonstream(t *testing.T) {
 							t.Fatal(m)
 						}
 						blocks := list(m["content"])
-						if len(blocks) != 4 {
+						// streaming_anthropic.py:761-786: 非流式块顺序恒为
+						// thinking → text → tool_use,正文聚成单个 text 块。
+						if len(blocks) != 3 {
 							t.Fatalf("blocks: %v", blocks)
 						}
-						if obj(blocks[0])["text"] != "haha" || obj(blocks[2])["text"] != "then" {
+						if obj(blocks[0])["text"] != "hahathen" {
 							t.Fatal(blocks)
 						}
-						for i, index := range []int{1, 3} {
+						for i, index := range []int{1, 2} {
 							b := obj(blocks[index])
 							if str(b["id"]) != []string{"call_1", "call_2"}[i] || number(obj(b["input"])["x"]) != i+1 {
 								t.Fatal(blocks)
