@@ -541,30 +541,39 @@ class _ModelFormState extends State<ModelForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                SizedBox(
-                  width: 28,
-                  child: Text(
-                    '0',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: Theme.of(context).hintColor,
+            // 与档位行同高(输入框实测 40),序号行距才一致;Switch 收缩包裹并
+            // 左移抵掉内置 4px 水平内边距,轨道左缘才能对齐输入框列
+            SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 28,
+                    child: Text(
+                      '0',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: Theme.of(context).hintColor,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Switch(
-                  key: const ValueKey('model-effort-off'),
-                  value: _disableThinking,
-                  onChanged: (v) => setState(() => _disableThinking = v),
-                ),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  Transform.translate(
+                    offset: const Offset(-4, 0),
+                    child: Switch(
+                      key: const ValueKey('model-effort-off'),
+                      value: _disableThinking,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: (v) => setState(() => _disableThinking = v),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 8),
             for (var i = 0; i < rows.length; i++)
