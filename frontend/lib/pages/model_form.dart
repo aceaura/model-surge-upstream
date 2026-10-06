@@ -542,7 +542,7 @@ class _ModelFormState extends State<ModelForm> {
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
-                  child: Text('包含 0 档（关闭思考）', style: TextStyle(fontSize: 12.5)),
+                  child: Text('启用 0 档（关闭思考）', style: TextStyle(fontSize: 12.5)),
                 ),
               ],
             ),
