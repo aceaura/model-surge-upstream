@@ -185,7 +185,7 @@ void main() {
     });
     await pumpForm(tester, copyFrom: source);
 
-    expect(find.text('拷贝 k2'), findsOneWidget);
+    expect(find.text('拷贝 kimi-1/k2'), findsOneWidget);
     // 标识加 -copy 后缀,且标识字段可编辑(新建语义)
     final idField = tester.widget<TextFormField>(
       find.byKey(const ValueKey('model-id')),

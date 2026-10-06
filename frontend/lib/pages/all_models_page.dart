@@ -193,16 +193,6 @@ class _AllModelsPageState extends State<AllModelsPage> {
     if (saved) _reload();
   }
 
-  /// 面包屑账号级点击:关掉表单,搜索框落到该账号名,列表即按其过滤
-  /// (等同账号页「模型」按钮下发的搜索种子效果)。
-  void _showAccountModels(String account) {
-    setState(() {
-      _form = null;
-      _searchController.text = account;
-      _query = account;
-    });
-  }
-
   void _create(List<Account> accounts, List<ProviderSpec> providers,
       String initialAccount) {
     _openForm(ModelForm(
@@ -222,7 +212,6 @@ class _AllModelsPageState extends State<AllModelsPage> {
       providers: providers,
       initialAccount: model.account,
       onDone: _closeForm,
-      onShowAccount: _showAccountModels,
       editing: model,
     ));
   }
@@ -236,7 +225,6 @@ class _AllModelsPageState extends State<AllModelsPage> {
       providers: providers,
       initialAccount: model.account,
       onDone: _closeForm,
-      onShowAccount: _showAccountModels,
       copyFrom: model,
     ));
   }

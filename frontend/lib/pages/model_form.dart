@@ -25,7 +25,6 @@ class ModelForm extends StatefulWidget {
     required this.onDone,
     this.editing,
     this.copyFrom,
-    this.onShowAccount,
   });
 
   final ApiClient client;
@@ -39,10 +38,6 @@ class ModelForm extends StatefulWidget {
 
   /// 拷贝来源:以其配置预填新建表单。
   final UpstreamModel? copyFrom;
-
-  /// 面包屑账号级点击:关掉表单回列表并按该账号过滤(等同账号行
-  /// 「模型」按钮的过滤效果)。为 null 时账号级不可点。
-  final ValueChanged<String>? onShowAccount;
 
   @override
   State<ModelForm> createState() => _ModelFormState();
@@ -241,33 +236,17 @@ class _ModelFormState extends State<ModelForm> {
 
   bool get _canSubmit => _defaultsValid && _overridesValid;
 
-  /// id 中「账号/」之后的模型名(面包屑末级用短名,账号已独占一级)。
-  static String _shortName(String id) {
-    final i = id.indexOf('/');
-    return i >= 0 && i + 1 < id.length ? id.substring(i + 1) : id;
-  }
-
   @override
   Widget build(BuildContext context) {
-    // 面包屑:模型(回列表) / 账号名(回列表并按账号过滤) / 当前动作。
-    // 新建没有来源账号,只有两级;末级取 id 中「账号/」之后的模型名。
-    final source = _source;
-    final showAccount = widget.onShowAccount;
+    // 面包屑两级:模型(回列表) / 当前动作(末级带完整标识区分账号)。
     return FormPage(
       breadcrumbs: [
         CrumbLevel('模型', onTap: () => widget.onDone(false)),
-        if (source != null)
-          CrumbLevel(
-            source.account,
-            onTap: showAccount == null
-                ? null
-                : () => showAccount(source.account),
-          ),
         CrumbLevel(
           _isEdit
-              ? '编辑 ${_shortName(widget.editing!.id)}'
+              ? '编辑 ${widget.editing!.id}'
               : widget.copyFrom != null
-              ? '拷贝 ${_shortName(widget.copyFrom!.id)}'
+              ? '拷贝 ${widget.copyFrom!.id}'
               : '新建模型',
         ),
       ],
