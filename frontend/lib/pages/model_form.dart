@@ -558,7 +558,7 @@ class _ModelFormState extends State<ModelForm> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             for (var i = 0; i < rows.length; i++)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
