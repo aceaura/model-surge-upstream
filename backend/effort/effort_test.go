@@ -166,9 +166,10 @@ func TestApply(t *testing.T) {
 	}
 }
 
-// TestApplyFormat 锁定显式格式压过协议外形:OpenAI Chat 两个变体(none
-// 原样上发 / none 删字段不落),Responses 嵌套 reasoning.effort、Anthropic
-// output_config.effort、Gemini thinkingLevel 复用对应协议分支;空格式=内置。
+// TestApplyFormat 锁定显式格式压过协议外形:OpenAI Chat 顶层
+// reasoning_effort(none 原样上发,是否上行由 0 档声明决定),Responses
+// 嵌套 reasoning.effort、Anthropic output_config.effort、Gemini
+// thinkingLevel 复用对应协议分支;空格式=内置。
 func TestApplyFormat(t *testing.T) {
 	body := map[string]any{}
 	ApplyFormat(FormatChatCompletions, "anthropic", body, "high")
@@ -178,16 +179,6 @@ func TestApplyFormat(t *testing.T) {
 	ApplyFormat(FormatChatCompletions, "anthropic", body, "none")
 	if body["reasoning_effort"] != "none" {
 		t.Errorf("chat_completions 格式 none 应原样上发: %v", body)
-	}
-
-	skip := map[string]any{"reasoning_effort": "low"}
-	ApplyFormat(FormatChatCompletionsSkipNone, "anthropic", skip, "high")
-	if skip["reasoning_effort"] != "high" {
-		t.Errorf("skip_none 格式档位 body = %v, want high", skip)
-	}
-	ApplyFormat(FormatChatCompletionsSkipNone, "anthropic", skip, "none")
-	if _, ok := skip["reasoning_effort"]; ok {
-		t.Errorf("skip_none 格式 none 应删字段不落: %v", skip)
 	}
 
 	nested := map[string]any{}

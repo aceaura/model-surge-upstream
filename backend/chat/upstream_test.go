@@ -34,8 +34,8 @@ func target(protocol string) resolve.ResolvedTarget {
 }
 
 // 显式写入格式接管对话页选档:选定值按格式写顶层 reasoning_effort
-// (skip_none 下 none 删字段不落);未选档不动体(defaults 原样保留),
-// overrides 恒压选定档;通用底层不再顺手删厂商字段。
+// (0 档 none 原样上发);未选档不动体(defaults 原样保留),overrides
+// 恒压选定档;通用底层不再顺手删厂商字段。
 func TestCompleteEffortFormat(t *testing.T) {
 	for _, tc := range []struct {
 		name, selected, defaults, overrides, want string
@@ -43,7 +43,7 @@ func TestCompleteEffortFormat(t *testing.T) {
 	}{
 		{name: "missing", wantAbsent: true},
 		{name: "defaults kept", defaults: `{"reasoning_effort":"medium"}`, want: "medium"},
-		{name: "disabled drops field", selected: "none", defaults: `{"reasoning_effort":"medium"}`, wantAbsent: true},
+		{name: "disabled sends none", selected: "none", defaults: `{"reasoning_effort":"medium"}`, want: "none"},
 		{name: "low", selected: "low", want: "low"},
 		{name: "medium", selected: "medium", want: "medium"},
 		{name: "xhigh", selected: "xhigh", want: "xhigh"},
@@ -71,7 +71,7 @@ func TestCompleteEffortFormat(t *testing.T) {
 			defer up.Close()
 			tgt := target(provider.ProtocolChatCompletions)
 			tgt.BaseURL = up.URL
-			tgt.EffortFormat = effort.FormatChatCompletionsSkipNone
+			tgt.EffortFormat = effort.FormatChatCompletions
 			tgt.Efforts = []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}}
 			tgt.Defaults = json.RawMessage(tc.defaults)
 			tgt.Overrides = json.RawMessage(tc.overrides)

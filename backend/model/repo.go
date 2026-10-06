@@ -266,7 +266,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	}
 	if !effort.ValidFormat(format) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
-			"effort_format must be one of: chat_completions, chat_completions_skip_none, responses, anthropic, gemini")
+			"effort_format must be one of: chat_completions, responses, anthropic, gemini")
 	}
 
 	return Model{

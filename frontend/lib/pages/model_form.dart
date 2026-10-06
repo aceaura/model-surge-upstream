@@ -540,11 +540,13 @@ class _ModelFormState extends State<ModelForm> {
   ];
 
   static String _effortFormatLabel(String f) => switch (f) {
-    'chat_completions' => 'OpenAI Chat 协议格式（顶层 reasoning_effort）',
-    'responses' => 'OpenAI Responses 协议格式（嵌套 reasoning.effort）',
-    'anthropic' => 'Anthropic 协议格式（output_config.effort）',
-    'gemini' => 'Gemini 协议格式（thinkingConfig.thinkingLevel 大写）',
-    _ => '协议内置（跟随出站协议）',
+    'chat_completions' =>
+      'OpenAI Chat 协议格式（顶层 reasoning_effort，关闭思考=none 原样上发）',
+    'responses' => 'OpenAI Responses 协议格式（嵌套 reasoning.effort，关闭思考=none 原样上发）',
+    'anthropic' =>
+      'Anthropic 协议格式（output_config.effort，关闭思考=改写 thinking 为 disabled）',
+    'gemini' => 'Gemini 协议格式（thinkingConfig.thinkingLevel 大写，关闭思考=不动体吃默认）',
+    _ => '协议内置（跟随出站协议，关闭思考处理随协议）',
   };
 
   Widget _effortSection() {

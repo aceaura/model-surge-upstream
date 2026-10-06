@@ -213,31 +213,30 @@ func Values(list []Entry) []string {
 // (查不到/值为空不落字段),再按此处选定的格式把值写进请求体。空串=
 // 协议内置(Apply 按出站协议选字段);显式格式按目标协议命名(与
 // provider.ProtocolXxx 标识一致),承接「协议外壳+自家字段」的厂商差异。
-// none 的两种处理都按官方文档口径(2026-10-06 复核):
-//   - chat_completions:OpenAI Chat 协议格式,顶层 reasoning_effort,none
-//     原样上发——OpenAI chat 值域含 none;百炼 qwen3.8 官方文档:none 映射
-//     enable_thinking=False(关闭思考),删字段反而吃默认 xhigh;
-//   - chat_completions_skip_none:OpenAI Chat 协议格式的 none 变体,none
-//     不落字段(上游吃自家默认)——kimi 官方端点口径:思考恒开不可关,
-//     非法值静默忽略,none 发了也白发;
+// none(关闭思考)是否上行不由格式特判:2026-10-06 用户定性「这不是标准
+// 问题,而是是否开启 0 档的问题」——模型在 efforts 里声明 0=none,映射
+// 命中就按格式原样写 none(百炼 qwen3.8 官方:none 映射 enable_thinking=
+// False;OpenAI chat 值域含 none);上游思考恒开不可关的(kimi、codex),
+// 不声明 0 档即可,none 永远不会出现。
+//   - chat_completions:OpenAI Chat 协议格式,顶层 reasoning_effort;
 //   - responses:OpenAI Responses 协议格式,嵌套 reasoning.effort;
-//   - anthropic:Anthropic 协议格式,output_config.effort(none=关闭思考);
-//   - gemini:Gemini 协议格式,generationConfig.thinkingConfig.thinkingLevel
-//     (大写枚举,none 不动体)。
+//   - anthropic:Anthropic 协议格式,output_config.effort(none=关闭思考,
+//     改写 thinking:{type:disabled});
+//   - gemini:Gemini 协议格式,generationConfig.thinkingConfig.
+//     thinkingLevel(大写枚举,none 不动体)。
 const (
-	FormatAuto                    = ""
-	FormatChatCompletions         = "chat_completions"
-	FormatChatCompletionsSkipNone = "chat_completions_skip_none"
-	FormatResponses               = "responses"
-	FormatAnthropic               = "anthropic"
-	FormatGemini                  = "gemini"
+	FormatAuto            = ""
+	FormatChatCompletions = "chat_completions"
+	FormatResponses       = "responses"
+	FormatAnthropic       = "anthropic"
+	FormatGemini          = "gemini"
 )
 
 // ValidFormat 判定 effort_format 是否为合法取值(空串=协议内置)。
 func ValidFormat(format string) bool {
 	switch format {
-	case FormatAuto, FormatChatCompletions, FormatChatCompletionsSkipNone,
-		FormatResponses, FormatAnthropic, FormatGemini:
+	case FormatAuto, FormatChatCompletions, FormatResponses,
+		FormatAnthropic, FormatGemini:
 		return true
 	}
 	return false
@@ -248,12 +247,6 @@ func ValidFormat(format string) bool {
 func ApplyFormat(format, protocol string, body map[string]any, value string) {
 	switch format {
 	case FormatChatCompletions:
-		Apply(provider.ProtocolChatCompletions, body, value)
-	case FormatChatCompletionsSkipNone:
-		if value == "none" {
-			delete(body, "reasoning_effort")
-			return
-		}
 		Apply(provider.ProtocolChatCompletions, body, value)
 	case FormatResponses:
 		Apply(provider.ProtocolResponses, body, value)

@@ -232,8 +232,7 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 	obj["model"] = target.NativeModel
 	// reasoning_level 是网关自有的顶层数字档:命中模型声明的档位即消费
 	// (不进上游)并给思考开关/档位参数赋值。映射在 defaults 合并后施加——
-	// 映射恒压 defaults 与客户端参数,且 none 不落字段的格式(skip_none)
-	// 删字段后不会被 defaults 回填;overrides 最后合并仍可压盖(强制值
+	// 映射恒压 defaults 与客户端参数;overrides 最后合并仍可压盖(强制值
 	// 优先级最高)。
 	merged := mergeParams(rawObject(target.Defaults), obj)
 	applyReasoningLevel(target, merged)
