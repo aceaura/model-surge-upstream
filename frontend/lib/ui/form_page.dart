@@ -4,14 +4,24 @@ import '../theme.dart';
 import 'feedback.dart';
 import 'page_entrance.dart';
 
-/// CC Switch 式整页表单骨架:顶部返回钮+粗标题,中部一整幅白卡
-/// (居中身份头像 + 全宽字段分区),底部右对齐动作条(取消/提交)。
+/// 面包屑一级:onTap 为空即当前级(粗体墨字,不可点);非空时可点,
+/// 跳到对应层级(语义同返回钮——放弃修改离开,不二次确认)。
+class CrumbLevel {
+  const CrumbLevel(this.label, {this.onTap});
+
+  final String label;
+  final VoidCallback? onTap;
+}
+
+/// CC Switch 式整页表单骨架:顶部返回钮+面包屑层级(父级可点跳层),
+/// 中部一整幅白卡(居中身份头像 + 全宽字段分区),底部右对齐动作条
+/// (取消/提交)。
 /// 新建与编辑都内联在宿主页内容区(不推根路由,侧边栏保持可见),
 /// 不再用居中弹窗——字段全宽铺开后长地址、JSON 参数不再挤在窄对话框里。
 class FormPage extends StatelessWidget {
   const FormPage({
     super.key,
-    required this.title,
+    required this.breadcrumbs,
     required this.child,
     required this.onCancel,
     required this.onSubmit,
@@ -21,7 +31,8 @@ class FormPage extends StatelessWidget {
     this.avatar,
   });
 
-  final String title;
+  /// 面包屑层级,末级为当前页标题;前面各级带 onTap 跳层。
+  final List<CrumbLevel> breadcrumbs;
 
   /// 白卡内的表单主体。
   final Widget child;
@@ -56,14 +67,7 @@ class FormPage extends StatelessWidget {
                 children: [
                   _BackButton(onTap: onCancel),
                   const SizedBox(width: 12),
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: t.ink,
-                    ),
-                  ),
+                  Expanded(child: _Breadcrumbs(levels: breadcrumbs)),
                 ],
               ),
             ),
@@ -139,6 +143,84 @@ class _BackButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
         ),
         child: Icon(Icons.arrow_back, size: 17, color: t.dim),
+      ),
+    );
+  }
+}
+
+/// 面包屑行:斜杠分隔,父级灰字可点(hover 主题色+下划线),
+/// 末级当前页粗体墨字不可点;过长时末级省略收缩。
+class _Breadcrumbs extends StatelessWidget {
+  const _Breadcrumbs({required this.levels});
+
+  final List<CrumbLevel> levels;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final children = <Widget>[];
+    for (var i = 0; i < levels.length; i++) {
+      final lv = levels[i];
+      if (i > 0) {
+        children.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('/', style: TextStyle(fontSize: 15, color: t.faint)),
+        ));
+      }
+      final tap = lv.onTap;
+      if (i == levels.length - 1 || tap == null) {
+        children.add(Flexible(
+          child: Text(
+            lv.label,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: t.ink,
+            ),
+          ),
+        ));
+      } else {
+        children.add(_CrumbLink(label: lv.label, onTap: tap));
+      }
+    }
+    return Row(children: children);
+  }
+}
+
+/// 可点的父级标签:默认灰字,hover 变主题色并带下划线。
+class _CrumbLink extends StatefulWidget {
+  const _CrumbLink({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  State<_CrumbLink> createState() => _CrumbLinkState();
+}
+
+class _CrumbLinkState extends State<_CrumbLink> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Text(
+          widget.label,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 15,
+            color: _hover ? t.primaryInk : t.faint,
+            decoration: _hover ? TextDecoration.underline : null,
+            decorationColor: t.primaryInk,
+          ),
+        ),
       ),
     );
   }

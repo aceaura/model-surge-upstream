@@ -736,11 +736,16 @@ class _AccountFormState extends State<AccountForm> {
   @override
   Widget build(BuildContext context) {
     return FormPage(
-      title: _isEdit
-          ? '编辑账号 ${widget.editing!.name}'
-          : widget.copyFrom != null
-              ? '拷贝账号 ${widget.copyFrom!.name}'
-              : '新建账号',
+      breadcrumbs: [
+        CrumbLevel('账号', onTap: () => widget.onDone(false)),
+        CrumbLevel(
+          _isEdit
+              ? '编辑 ${widget.editing!.name}'
+              : widget.copyFrom != null
+                  ? '拷贝 ${widget.copyFrom!.name}'
+                  : '新建账号',
+        ),
+      ],
       avatar: ProviderAvatar(providerId: _providerId ?? '?', size: 56),
       onCancel: () => widget.onDone(false),
       onSubmit: _submit,
