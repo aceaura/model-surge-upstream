@@ -133,7 +133,7 @@ func (s *stubModels) Create(_ context.Context, in model.Input) (model.Model, err
 	}
 	if in.Protocol == provider.ProtocolResponses {
 		return model.Model{}, apperr.New(apperr.InvalidProtocol,
-			`provider "kimi" does not support protocol "responses", supported: anthropic, chat_completions`)
+			`provider "kimi/coding" does not support protocol "responses", supported: anthropic, chat_completions`)
 	}
 	m := model.Model{
 		ID: in.ID, Account: in.Account, NativeModel: in.NativeModel, Protocol: in.Protocol,
@@ -205,8 +205,6 @@ func (s *stubModels) Delete(_ context.Context, id string) error {
 type stubQuota struct {
 	report   quota.Report
 	err      error
-	testCode string
-	testErr  error
 	forgot   []string
 	queries  int
 	cached   quota.Report
@@ -216,14 +214,6 @@ type stubQuota struct {
 func (s *stubQuota) Query(context.Context, string) (quota.Report, error) {
 	s.queries++
 	return s.report, s.err
-}
-
-func (s *stubQuota) TestScript(_ context.Context, _ string, code string, _ int) (quota.Report, error) {
-	s.testCode = code
-	if s.testErr != nil {
-		return quota.Report{}, s.testErr
-	}
-	return quota.Report{Account: "kimi-1", Queryable: true, Meters: []quota.Meter{}}, nil
 }
 
 func (s *stubQuota) Cached(string) (quota.Report, bool) { return s.cached, s.hasCache }
@@ -294,7 +284,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	accounts := &stubAccounts{data: map[string]account.Account{
 		"kimi-1": {
-			Name: "kimi-1", ProviderID: "kimi",
+			Name: "kimi-1", ProviderID: "kimi/coding",
 			Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: secret},
 			Headers:    map[string]string{}, Enabled: true,
 		},
@@ -463,7 +453,7 @@ func TestGetAccountReportsModelCount(t *testing.T) {
 func TestCreateAccount(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"ds-1","provider_id":"deepseek","api_key":"sk-deepseek-secret"}`)
+		`{"name":"ds-1","provider_id":"deepseek/api","api_key":"sk-deepseek-secret"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
@@ -482,11 +472,11 @@ func TestCreateAccountValidationErrors(t *testing.T) {
 		code apperr.Code
 	}{
 		"unknown provider": {`{"name":"x","provider_id":"nope","api_key":"sk-x"}`, apperr.InvalidProvider},
-		"duplicate":        {`{"name":"kimi-1","provider_id":"kimi","api_key":"sk-x"}`, apperr.AlreadyExists},
-		"missing key":      {`{"name":"x","provider_id":"kimi"}`, apperr.InvalidCredential},
-		"bad credential":   {`{"name":"x","provider_id":"kimi","credential":{"kind":"oauth_refresh"}}`, apperr.InvalidCredential},
+		"duplicate":        {`{"name":"kimi-1","provider_id":"kimi/coding","api_key":"sk-x"}`, apperr.AlreadyExists},
+		"missing key":      {`{"name":"x","provider_id":"kimi/coding"}`, apperr.InvalidCredential},
+		"bad credential":   {`{"name":"x","provider_id":"kimi/coding","credential":{"kind":"oauth_refresh"}}`, apperr.InvalidCredential},
 		"malformed json":   {`{`, apperr.InvalidJSON},
-		"unknown field":    {`{"name":"x","provider_id":"kimi","api_key":"sk-x","nope":1}`, apperr.InvalidJSON},
+		"unknown field":    {`{"name":"x","provider_id":"kimi/coding","api_key":"sk-x","nope":1}`, apperr.InvalidJSON},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -501,7 +491,7 @@ func TestCreateAccountValidationErrors(t *testing.T) {
 func TestUnsupportedCredentialKindListsSupported(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"x","provider_id":"kimi","credential":{"kind":"session_token","token":"x"}}`)
+		`{"name":"x","provider_id":"kimi/coding","credential":{"kind":"session_token","token":"x"}}`)
 	if !strings.Contains(rec.Body.String(), "api_key") {
 		t.Errorf("error should list the supported kinds: %s", rec.Body)
 	}
@@ -512,7 +502,7 @@ func TestUnsupportedCredentialKindListsSupported(t *testing.T) {
 func TestCreateOAuthAccountRoundTrip(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"gpt-1","provider_id":"openai-codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-secret","account_id":"acc-x"}}`)
+		`{"name":"gpt-1","provider_id":"openai/codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-secret","account_id":"acc-x"}}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
@@ -566,7 +556,7 @@ func TestAccountWritesResetOAuthState(t *testing.T) {
 	}
 
 	if rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"gpt-2","provider_id":"openai-codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-y","account_id":"acc-y"}}`); rec.Code != http.StatusCreated {
+		`{"name":"gpt-2","provider_id":"openai/codex","credential":{"kind":"oauth_refresh","refresh_token":"rt-y","account_id":"acc-y"}}`); rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	if len(f.oauth.resets) != 2 || f.oauth.resets[1] != "gpt-2" {
@@ -611,7 +601,7 @@ func TestDeleteAccountReportsCascade(t *testing.T) {
 func TestReorderAccounts(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,
-		`{"name":"ds-1","provider_id":"deepseek","api_key":"`+secret+`"}`)
+		`{"name":"ds-1","provider_id":"deepseek/api","api_key":"`+secret+`"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create ds-1 = %d: %s", rec.Code, rec.Body)
 	}
@@ -998,9 +988,9 @@ func TestQuotaAutoUsesAccountStopWindow(t *testing.T) {
 		t.Errorf("未配置时窗口 = %v, want 默认 %v", f.activity.idle, activity.DefaultIdleWindow)
 	}
 
-	// 账号额度脚本配置了 stop_interval_minutes:按账号窗口判空闲。
+	// 账号配置了 stop_interval_minutes:按账号窗口判空闲。
 	acc := f.accounts.data["kimi-1"]
-	acc.QuotaScript = &account.QuotaScript{Enabled: true, Code: "x", StopIntervalMinutes: 10}
+	acc.QuotaSettings = &account.QuotaSettings{StopIntervalMinutes: 10}
 	f.accounts.data["kimi-1"] = acc
 	f.do(t, "GET", "/admin/accounts/kimi-1/quota?auto=1", adminKey, "")
 	if f.activity.idle != 10*time.Minute {
@@ -1033,59 +1023,6 @@ func TestQuotaPlainQueryUnaffectedByIdle(t *testing.T) {
 	}
 	if f.quota.queries != 2 {
 		t.Errorf("非轮询路径不受空闲短路影响, Query 被调 %d 次", f.quota.queries)
-	}
-}
-
-func TestQuotaTestScript(t *testing.T) {
-	f := newFixture(t)
-	rec := f.do(t, "POST", "/admin/accounts/kimi-1/quota-test", adminKey,
-		`{"code":"({request:{url:\"https://x\"},extractor:function(r){return{remaining:1}}})","timeout_seconds":5}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
-	}
-	var out struct {
-		OK bool `json:"ok"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	if !out.OK {
-		t.Errorf("ok = false: %s", rec.Body)
-	}
-	if f.quota.testCode == "" {
-		t.Error("script code should reach the quota service")
-	}
-	// 试跑是管理面能力,不下发到 delivery 面。
-	if rec := f.do(t, "POST", "/v1/accounts/kimi-1/quota-test", deliveryKey, "{}"); rec.Code != http.StatusNotFound {
-		t.Errorf("delivery plane should not expose quota-test, got %d", rec.Code)
-	}
-}
-
-func TestQuotaTestScriptFailureIsResult(t *testing.T) {
-	f := newFixture(t)
-	f.quota.testErr = apperr.New(apperr.QuotaUnavailable, "quota script eval: SyntaxError")
-	rec := f.do(t, "POST", "/admin/accounts/kimi-1/quota-test", adminKey, `{"code":"bad"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("script failure is a test result, not a request error, got %d", rec.Code)
-	}
-	var out struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.OK || out.Error == "" {
-		t.Errorf("out = %+v, want ok:false with the script error message", out)
-	}
-}
-
-func TestQuotaTestScriptUnknownAccount(t *testing.T) {
-	f := newFixture(t)
-	f.quota.testErr = apperr.New(apperr.NotFound, `account "ghost" not found`)
-	rec := f.do(t, "POST", "/admin/accounts/ghost/quota-test", adminKey, `{"code":"x"}`)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("unknown account is a request error, got %d", rec.Code)
 	}
 }
 

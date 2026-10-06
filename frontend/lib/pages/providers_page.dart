@@ -54,7 +54,9 @@ class _ProvidersPageState extends State<ProvidersPage> {
           ..sort((a, b) {
             final sub = (a.billing == 'subscription' ? 0 : 1)
                 .compareTo(b.billing == 'subscription' ? 0 : 1);
-            return sub != 0 ? sub : a.region.compareTo(b.region);
+            if (sub != 0) return sub;
+            final region = a.region.compareTo(b.region);
+            return region != 0 ? region : a.plan.compareTo(b.plan);
           })),
     ];
     if (q.isEmpty) return groups;
@@ -201,11 +203,18 @@ class _VendorCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
+              // 服务类型行只在有真实类型时渲染:Standard 是单一服务类型的
+              // 占位标签,界面隐藏。
+              if (group.specs[i].hasServiceType)
+                _row(context, '服务类型', group.specs[i].plan),
               _row(context, '官网', group.specs[i].website),
               _row(context, '请求地址', group.specs[i].baseUrl),
               _row(context, '支持协议', group.specs[i].protocols.join(', ')),
               _row(context, '认证形态', group.specs[i].auth),
-              _row(context, '凭据形态', group.specs[i].credential),
+              _row(context, '凭据形态',
+                  group.specs[i].credential == 'kiro_refresh'
+                      ? 'Kiro 登录态 (Desktop / SSO)'
+                      : group.specs[i].credential),
             ],
           ],
         ),

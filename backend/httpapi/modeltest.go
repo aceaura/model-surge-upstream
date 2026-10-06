@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/modelcheck"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -25,22 +28,38 @@ func (h handler) testModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	res, err := h.probeModel(r.Context(), m, acc)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// probeModel 用模型级判据探一次上游:非 2xx 判失败,回答「能不能用」。
+// 返回的 error 只表示请求本身没法成立(提供商未知、账号读取失败),探测
+// 失败本身是 Result 的内容。
+func (h handler) probeModel(ctx context.Context, m model.Model, acc account.Account) (modelcheck.Result, error) {
 	spec, ok := acc.Spec()
 	if !ok {
-		writeError(w, apperr.New(apperr.InvalidProvider,
-			"account "+acc.Name+" references unknown provider "+acc.ProviderID))
-		return
+		return modelcheck.Result{}, apperr.New(apperr.InvalidProvider,
+			"account "+acc.Name+" references unknown provider "+acc.ProviderID)
 	}
 
 	// 头集与转发面同一路径构造:oauth 账号(codex 订阅)才有活体 token
 	// 与 codex 身份头;静态密钥账号等价于 resolve.AuthHeaders。
-	headers, err := h.Resolver.HeadersFor(r.Context(), spec, acc)
+	headers, err := h.Resolver.HeadersFor(ctx, spec, acc)
 	if err != nil {
-		writeJSON(w, http.StatusOK, modelcheck.Result{Error: err.Error()})
-		return
+		return modelcheck.Result{Error: err.Error()}, nil
 	}
 
-	target := resolve.ResolvedTarget{
+	if spec.ID == "kiro" {
+		acc, err = h.Accounts.Get(ctx, acc.Name)
+		if err != nil {
+			return modelcheck.Result{}, err
+		}
+	}
+	return modelcheck.Check(ctx, resolve.ResolvedTarget{
 		ModelID:     m.ID,
 		Account:     acc.Name,
 		ProviderID:  spec.ID,
@@ -48,6 +67,5 @@ func (h handler) testModel(w http.ResponseWriter, r *http.Request) {
 		BaseURL:     acc.EffectiveBaseURL(spec),
 		NativeModel: m.NativeModel,
 		Headers:     headers,
-	}
-	writeJSON(w, http.StatusOK, modelcheck.Check(r.Context(), target))
+	}), nil
 }

@@ -8,14 +8,16 @@ package credential
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-// SupportedKinds 是本期支持的凭据形态，顺序固定用于错误消息。
-var SupportedKinds = []provider.CredentialKind{provider.CredAPIKey, provider.CredOAuthRefresh}
+var SupportedKinds = []provider.CredentialKind{provider.CredAPIKey, provider.CredOAuthRefresh, provider.CredKiroRefresh}
+
+var awsRegion = regexp.MustCompile(`^[a-z]{2}(?:-[a-z]+)+-[0-9]+$`)
 
 type Credential struct {
 	Kind   provider.CredentialKind `json:"kind"`
@@ -31,6 +33,14 @@ type Credential struct {
 	// 网关可查,API key 拿不到),api_key 形态账号的可选附加项;配额
 	// 查询链用它换短效 access_token,令牌本体不落库轮换(上游无硬轮换)。
 	WebRefreshToken string `json:"web_refresh_token,omitempty"`
+	// ConsoleAccessToken 是百炼 CLI 的控制台 access_token,仅用于个人
+	// Token Plan 额度查询;不同于推理 API key,不自动续期。
+	ConsoleAccessToken string `json:"console_access_token,omitempty"`
+	ProfileARN         string `json:"profile_arn,omitempty"`
+	Region             string `json:"region,omitempty"`
+	APIRegion          string `json:"api_region,omitempty"`
+	ClientID           string `json:"client_id,omitempty"`
+	ClientSecret       string `json:"client_secret,omitempty"`
 }
 
 // Decode 两步解码：先取 kind，再按 kind 校验具体字段。
@@ -84,9 +94,45 @@ func (c Credential) Validate() error {
 			return fmt.Errorf("credential account_id is required for kind %q", provider.CredOAuthRefresh)
 		}
 		return nil
+	case provider.CredKiroRefresh:
+		if strings.TrimSpace(c.RefreshToken) == "" {
+			return fmt.Errorf("credential refresh_token is required for kind %q", c.Kind)
+		}
+		if (c.ClientID == "") != (c.ClientSecret == "") {
+			return fmt.Errorf("kiro client_id and client_secret must be provided together")
+		}
+		for _, region := range []string{c.Region, c.APIRegion} {
+			if region != "" && !awsRegion.MatchString(region) {
+				return fmt.Errorf("invalid kiro region %q", region)
+			}
+		}
+		if c.ProfileARN != "" {
+			parts := strings.Split(c.ProfileARN, ":")
+			if len(parts) < 6 || parts[0] != "arn" || !awsRegion.MatchString(parts[3]) || strings.ContainsAny(c.ProfileARN, "\r\n\t ") {
+				return fmt.Errorf("invalid kiro profile_arn")
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported credential kind %q, supported: %s", c.Kind, kindList())
 	}
+}
+
+func (c Credential) KiroAuthRegion() string {
+	if c.Region != "" {
+		return c.Region
+	}
+	return "us-east-1"
+}
+
+func (c Credential) KiroAPIRegion() string {
+	if c.APIRegion != "" {
+		return c.APIRegion
+	}
+	if parts := strings.Split(c.ProfileARN, ":"); len(parts) >= 6 && awsRegion.MatchString(parts[3]) {
+		return parts[3]
+	}
+	return c.KiroAuthRegion()
 }
 
 // ValidateAgainstProvider 校验凭据形态与 provider 声明一致。
@@ -101,29 +147,54 @@ func (c Credential) Encode() ([]byte, error) { return json.Marshal(c) }
 
 // Redact 转成脱敏视图，用于任何会离开进程且非下发面的路径。
 func (c Credential) Redact() Redacted {
+	refresh := Mask(c.RefreshToken)
+	if c.Kind == provider.CredKiroRefresh {
+		refresh = maskConsoleToken(c.RefreshToken)
+	}
 	return Redacted{
-		Kind:            c.Kind,
-		APIKey:          Mask(c.APIKey),
-		RefreshToken:    Mask(c.RefreshToken),
-		AccountID:       c.AccountID,
-		WebRefreshToken: Mask(c.WebRefreshToken),
+		Kind:               c.Kind,
+		APIKey:             Mask(c.APIKey),
+		RefreshToken:       refresh,
+		AccountID:          c.AccountID,
+		WebRefreshToken:    Mask(c.WebRefreshToken),
+		ConsoleAccessToken: maskConsoleToken(c.ConsoleAccessToken),
+		ProfileARN:         c.ProfileARN,
+		Region:             c.Region,
+		APIRegion:          c.APIRegion,
+		ClientID:           c.ClientID,
+		ClientSecret:       maskConsoleToken(c.ClientSecret),
 	}
 }
 
 // String 保证凭据不会因日志格式化而泄露。
 func (c Credential) String() string {
-	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s WebRefreshToken:%s}",
-		c.Kind, Mask(c.APIKey), Mask(c.RefreshToken), Mask(c.AccessToken), Mask(c.WebRefreshToken))
+	v := c.Redact()
+	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s WebRefreshToken:%s ConsoleAccessToken:%s ClientSecret:%s}",
+		c.Kind, v.APIKey, v.RefreshToken, maskConsoleToken(c.AccessToken), v.WebRefreshToken, v.ConsoleAccessToken, v.ClientSecret)
 }
 
 // Redacted 脱敏视图。AccessToken 是短效续期产物,不下发;AccountID 是标识
 // 不是秘密,明文下发(管理面展示授权归属)。
 type Redacted struct {
-	Kind            provider.CredentialKind `json:"kind"`
-	APIKey          string                  `json:"api_key,omitempty"`
-	RefreshToken    string                  `json:"refresh_token,omitempty"`
-	AccountID       string                  `json:"account_id,omitempty"`
-	WebRefreshToken string                  `json:"web_refresh_token,omitempty"`
+	Kind               provider.CredentialKind `json:"kind"`
+	APIKey             string                  `json:"api_key,omitempty"`
+	RefreshToken       string                  `json:"refresh_token,omitempty"`
+	AccountID          string                  `json:"account_id,omitempty"`
+	WebRefreshToken    string                  `json:"web_refresh_token,omitempty"`
+	ConsoleAccessToken string                  `json:"console_access_token,omitempty"`
+	ProfileARN         string                  `json:"profile_arn,omitempty"`
+	Region             string                  `json:"region,omitempty"`
+	APIRegion          string                  `json:"api_region,omitempty"`
+	ClientID           string                  `json:"client_id,omitempty"`
+	ClientSecret       string                  `json:"client_secret,omitempty"`
+}
+
+// 控制台令牌不保留任何前后缀,避免暴露 JWT 片段。
+func maskConsoleToken(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "***"
 }
 
 // Mask 短值全掩，长值保留前 4 后 4。

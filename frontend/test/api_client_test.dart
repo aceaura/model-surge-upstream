@@ -93,7 +93,7 @@ void main() {
       'accounts': [
         {
           'name': 'kimi-1',
-          'provider_id': 'kimi',
+          'provider_id': 'kimi/coding',
           'credential': {'kind': 'api_key', 'api_key': 'sk-l***efgh'},
           'base_url': '',
           'headers': {'x-trace': 'on'},
@@ -111,7 +111,7 @@ void main() {
     final client = clientReturning(200, jsonEncode({
       'providers': [
         {
-          'id': 'anthropic',
+          'id': 'anthropic/api',
           'display_name': 'Anthropic',
           'website': 'https://www.anthropic.com',
           'base_url': 'https://api.anthropic.com',
@@ -122,20 +122,14 @@ void main() {
           'region': 'Global',
         },
         {
-          'id': 'deepseek',
+          'id': 'deepseek/api',
           'display_name': 'DeepSeek',
           'website': 'https://platform.deepseek.com',
           'base_url': 'https://api.deepseek.com',
           'protocols': ['anthropic', 'chat_completions'],
           'auth': 'bearer',
           'credential': 'api_key',
-          'quota': {
-            'path': '/user/balance',
-            'method': 'GET',
-            'kind': 'balance',
-            'unit': 'currency',
-            'reset': 'prepaid',
-          },
+          'quota_queryable': true,
         },
       ]
     }));
@@ -146,9 +140,6 @@ void main() {
     expect(providers.first.region, 'Global');
     expect(providers.first.regionLabel, '全球');
     expect(providers.last.quotaQueryable, isTrue);
-    expect(providers.last.quotaKind, 'balance');
-    expect(providers.last.quotaUnit, 'currency');
-    expect(providers.last.quotaReset, 'prepaid');
   });
 
   test('update omits the api key when it is blank', () async {
@@ -251,7 +242,7 @@ void main() {
     final res = await client.testAccount('team/a');
     expect(gotMethod, 'POST');
     expect(gotPath, '/admin/account-test/team/a'); // name 含 /,不编码
-    // 账号级口径:任意 HTTP 状态即 ok(可达 ≠ 凭据正确)。
+    // ok 与状态码由服务端判定,客户端原样透传(此处是无模型退回可达性的形态)。
     expect(res.ok, isTrue);
     expect(res.statusCode, 403);
     expect(res.latencyMs, 41);

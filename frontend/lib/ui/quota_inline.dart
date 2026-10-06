@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 
@@ -91,8 +90,14 @@ class _QuotaInlineState extends State<QuotaInline> {
     if (!widget.queryable) return const SizedBox.shrink();
     final t = context.tokens;
     if (_error != null) {
+      final error = _error;
       return _tappable(
-          Text('额度不可用 · 点击重试', style: TextStyle(fontSize: 11.5, color: t.faint)));
+        Text('额度不可用 · 点击重试',
+            style: TextStyle(fontSize: 11.5, color: t.faint)),
+        tooltip: error is ApiException
+            ? '${error.message}\n点击重新查询额度'
+            : '额度查询失败\n点击重新查询额度',
+      );
     }
     final report = _report;
     if (report == null) {
@@ -110,10 +115,12 @@ class _QuotaInlineState extends State<QuotaInline> {
       children: [
         _timeRow(t, report.at ?? DateTime.now()),
         const SizedBox(height: 2),
-        _tappable(Text.rich(
-          TextSpan(children: _meterSpans(t, report.meters)),
-          style: TextStyle(fontSize: 12, color: t.dim, height: 1.2),
-        )),
+        _tappable(
+          Text.rich(
+            TextSpan(children: _meterSpans(t, report.meters)),
+            style: TextStyle(fontSize: 12, color: t.dim, height: 1.2),
+          ),
+        ),
       ],
     );
   }
@@ -154,14 +161,18 @@ class _QuotaInlineState extends State<QuotaInline> {
     const gap = WidgetSpan(child: SizedBox(width: 8));
     for (final (i, m) in meters.take(3).indexed) {
       if (i > 0) spans.add(gap);
-      if (m.unit == 'percent' && m.used != null) {
+      final credits = _isCreditsUsage(m);
+      if ((m.unit == 'percent' && m.used != null) || credits) {
+        final pct = credits ? m.used! / m.total! * 100 : m.used!;
         spans.add(TextSpan(
             text: '${m.label?.isNotEmpty == true ? m.label : '额度'}:'));
         spans.add(TextSpan(
-          text: m.amount(m.used),
+          text: credits || (pct != 0 && pct.abs() < 0.01)
+              ? _creditsPercent(pct)
+              : m.amount(m.used),
           style: TextStyle(
             fontWeight: FontWeight.w600,
-            color: _utilColor(t, m.used!),
+            color: _utilColor(t, pct),
             fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ));
@@ -184,6 +195,26 @@ class _QuotaInlineState extends State<QuotaInline> {
     return spans;
   }
 
+  static bool _isCreditsUsage(QuotaMeter m) =>
+      m.unit == 'credits' && m.total != null && m.total! > 0 && m.used != null;
+
+  /// 小水位逐步增加精度(最多六位),非零不误报成 0%。
+  static String _creditsPercent(double pct) {
+    var digits = 2;
+    var threshold = 0.01;
+    while (digits < 6 && pct != 0 && pct.abs() < threshold) {
+      digits++;
+      threshold /= 10;
+    }
+    if (pct != 0 && pct.abs() < 0.000001) {
+      return pct > 0 ? '<0.000001%' : '>-0.000001%';
+    }
+    return '${_trimZeros(pct.toStringAsFixed(digits))}%';
+  }
+
+  static String _trimZeros(String s) =>
+      s.replaceFirst(RegExp(r'\.?0+$'), '');
+
   /// CC Switch utilizationColor 同款水位配色。
   static Color _utilColor(AppTokens t, double pct) {
     if (pct >= 90) return t.danger;
@@ -191,11 +222,12 @@ class _QuotaInlineState extends State<QuotaInline> {
     return t.success;
   }
 
-  Widget _tappable(Widget child) => MouseRegion(
+  /// 摘要点击重查;错误态才用 Tooltip 透出原因。
+  Widget _tappable(Widget child, {String? tooltip}) => MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
           onTap: _busy ? null : () => _query(force: true),
-          child: Tooltip(message: '点击重新查询额度', child: child),
+          child: tooltip != null ? Tooltip(message: tooltip, child: child) : child,
         ),
       );
 

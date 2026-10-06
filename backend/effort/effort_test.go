@@ -165,3 +165,57 @@ func TestApply(t *testing.T) {
 		t.Errorf("gemini none 不应动体: %v", gemini)
 	}
 }
+
+// TestApplyFormat 锁定显式格式压过协议外形:OpenAI Chat 两个变体(none
+// 原样上发 / none 删字段不落),Responses 嵌套 reasoning.effort、Anthropic
+// output_config.effort、Gemini thinkingLevel 复用对应协议分支;空格式=内置。
+func TestApplyFormat(t *testing.T) {
+	body := map[string]any{}
+	ApplyFormat(FormatChatCompletions, "anthropic", body, "high")
+	if body["reasoning_effort"] != "high" {
+		t.Errorf("chat_completions 格式 body = %v, want 顶层 high", body)
+	}
+	ApplyFormat(FormatChatCompletions, "anthropic", body, "none")
+	if body["reasoning_effort"] != "none" {
+		t.Errorf("chat_completions 格式 none 应原样上发: %v", body)
+	}
+
+	skip := map[string]any{"reasoning_effort": "low"}
+	ApplyFormat(FormatChatCompletionsSkipNone, "anthropic", skip, "high")
+	if skip["reasoning_effort"] != "high" {
+		t.Errorf("skip_none 格式档位 body = %v, want high", skip)
+	}
+	ApplyFormat(FormatChatCompletionsSkipNone, "anthropic", skip, "none")
+	if _, ok := skip["reasoning_effort"]; ok {
+		t.Errorf("skip_none 格式 none 应删字段不落: %v", skip)
+	}
+
+	nested := map[string]any{}
+	ApplyFormat(FormatResponses, "anthropic", nested, "low")
+	if nested["reasoning"].(map[string]any)["effort"] != "low" {
+		t.Errorf("responses 格式 body = %v, want reasoning.effort=low", nested)
+	}
+
+	ant := map[string]any{}
+	ApplyFormat(FormatAnthropic, "chat_completions", ant, "max")
+	if ant["output_config"].(map[string]any)["effort"] != "max" {
+		t.Errorf("anthropic 格式 body = %v, want output_config.effort=max", ant)
+	}
+
+	gem := map[string]any{}
+	ApplyFormat(FormatGemini, "chat_completions", gem, "xhigh")
+	got := gem["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)["thinkingLevel"]
+	if got != "XHIGH" {
+		t.Errorf("gemini 格式 body = %v, want XHIGH", gem)
+	}
+
+	auto := map[string]any{}
+	ApplyFormat(FormatAuto, "chat_completions", auto, "low")
+	if auto["reasoning_effort"] != "low" {
+		t.Errorf("空格式应走协议内置: %v", auto)
+	}
+
+	if !ValidFormat("") || !ValidFormat(FormatGemini) || ValidFormat("bogus") {
+		t.Error("ValidFormat 判定错误")
+	}
+}

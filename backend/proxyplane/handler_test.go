@@ -69,7 +69,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 
 	resolver := fakeResolver{targets: map[string]resolve.ResolvedTarget{
 		"my-claude": {
-			ModelID: "my-claude", Account: "kimi-1", ProviderID: "kimi",
+			ModelID: "my-claude", Account: "kimi-1", ProviderID: "kimi/coding",
 			Protocol: "anthropic", BaseURL: upstreamURL, NativeModel: "kimi-k2",
 			Headers:   map[string]string{"x-api-key": "real-account-key", "anthropic-version": "2023-06-01"},
 			Defaults:  json.RawMessage(`{"temperature":0.6,"thinking":{"type":"enabled","budget_tokens":1000}}`),
@@ -99,14 +99,15 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			},
 		},
 		"my-gemini": {
-			ModelID: "my-gemini", Account: "g-1", ProviderID: "gemini",
+			ModelID: "my-gemini", Account: "g-1", ProviderID: "gemini/api",
 			Protocol: "gemini", BaseURL: upstreamURL, NativeModel: "gemini-2.5-pro",
 			Headers: map[string]string{"Authorization": "Bearer real-gemini-key"},
 		},
-		// my-kimi 配了映射脚本:anthropic 外壳但档位走顶层 reasoning_effort
-		// (kimi K3 官方口径),脚本接管写入位置、内置映射不再生效。
+		// my-kimi 配了显式写入格式:anthropic 外壳但档位走顶层
+		// reasoning_effort(kimi K3 官方口径),格式接管写入位置、内置映射
+		// (anthropic 本应写 output_config)不再生效。
 		"my-kimi": {
-			ModelID: "my-kimi", Account: "kimi-1", ProviderID: "kimi",
+			ModelID: "my-kimi", Account: "kimi-1", ProviderID: "kimi/coding",
 			Protocol: "anthropic", BaseURL: upstreamURL, NativeModel: "k3-256k",
 			Headers: map[string]string{"x-api-key": "real-account-key"},
 			Efforts: []effort.Entry{
@@ -114,26 +115,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "2", Value: "high"},
 				{Name: "3", Value: "max"},
 			},
-			EffortScript: `({apply: function(ctx) {
-				for (var i = 0; i < ctx.efforts.length; i++) {
-					if (ctx.efforts[i].name === ctx.level) {
-						ctx.request.reasoning_effort = ctx.efforts[i].value;
-						break;
-					}
-				}
-				ctx.request.seen_level = ctx.level;
-				return ctx.request;
-			}})`,
-		},
-		// my-badscript 的脚本运行期必抛错,验证失败按 502 家族错误外壳回。
-		"my-badscript": {
-			ModelID: "my-badscript", Account: "openai-1", ProviderID: "openai",
-			Protocol: "chat_completions", BaseURL: upstreamURL, NativeModel: "gpt-5",
-			Headers: map[string]string{"Authorization": "Bearer real-openai-key"},
-			Efforts: []effort.Entry{
-				{Name: "1", Value: "low"},
-			},
-			EffortScript: `({apply: function(ctx){ throw new Error("boom"); }})`,
+			EffortFormat: effort.FormatChatCompletions,
 		},
 	}}
 	if upstreamURL == "" {
@@ -155,6 +137,83 @@ func doRequest(t *testing.T, h http.Handler, method, path string, headers map[st
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// 显式写入格式接管:effort_format=chat_completions_skip_none 时命中档
+// 写顶层 reasoning_effort;档号未声明/未提供不动体(defaults 的值原样
+// 保留,客户端直传值原样透传);0 档(none)删字段不落且不会被 defaults
+// 回填;overrides 恒压映射值;reasoning_level 消费后恒不泄漏。
+func TestEffortFormatForward(t *testing.T) {
+	for _, tc := range []struct {
+		name, params, want string
+		wantAbsent         bool
+		emptyEfforts       bool
+		override           string
+	}{
+		{name: "missing", params: `{}`, want: "medium"},
+		{name: "unknown level", params: `{"reasoning_level":"99"}`, want: "medium"},
+		{name: "invalid level", params: `{"reasoning_level":{}}`, want: "medium"},
+		{name: "empty efforts", params: `{"reasoning_level":"2"}`, want: "medium", emptyEfforts: true},
+		{name: "client effort passes through", params: `{"reasoning_effort":"low"}`, want: "low"},
+		{name: "client none passes through", params: `{"reasoning_effort":"none"}`, want: "none"},
+		{name: "disabled level drops field", params: `{"reasoning_level":0,"reasoning_effort":"low"}`, wantAbsent: true},
+		{name: "low", params: `{"reasoning_level":"1","reasoning_effort":"ultra"}`, want: "low"},
+		{name: "medium", params: `{"reasoning_level":"2"}`, want: "medium"},
+		{name: "xhigh", params: `{"reasoning_level":"3"}`, want: "xhigh"},
+		{name: "overrides win", params: `{}`, want: "xhigh", override: `{"reasoning_effort":"xhigh"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &captured{}
+			up := httptest.NewServer(cap.handler(http.StatusOK, `{"ok":true}`))
+			defer up.Close()
+			target := resolve.ResolvedTarget{
+				ModelID: "bailian-test", ProviderID: "bailian-cn/token-plan", NativeModel: "qwen3.8-max",
+				Protocol: provider.ProtocolChatCompletions, BaseURL: up.URL,
+				Defaults:     json.RawMessage(`{"reasoning_effort":"medium"}`),
+				Overrides:    json.RawMessage(tc.override),
+				EffortFormat: effort.FormatChatCompletionsSkipNone,
+				Efforts:      []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}},
+			}
+			if tc.emptyEfforts {
+				target.Efforts = nil
+			}
+			h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{"bailian-test": target}}, nil)
+			var req map[string]any
+			if err := json.Unmarshal([]byte(tc.params), &req); err != nil {
+				t.Fatal(err)
+			}
+			req["model"] = "bailian-test"
+			req["messages"] = []any{}
+			req["thinking_budget"] = 1024
+			encoded, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions", map[string]string{"Authorization": "Bearer " + testKey}, string(encoded))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+			}
+			body, _, _ := cap.snapshot()
+			var got map[string]any
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantAbsent {
+				if _, exists := got["reasoning_effort"]; exists {
+					t.Fatalf("0 档 none 应删字段不落(defaults 也不回填): %s", body)
+				}
+			} else if got["reasoning_effort"] != tc.want {
+				t.Fatalf("effort = %v, want %s", got["reasoning_effort"], tc.want)
+			}
+			// 通用底层不再顺手删厂商字段:thinking_budget 原样透传。
+			if got["thinking_budget"] != float64(1024) {
+				t.Fatalf("thinking_budget 应原样透传: %s", body)
+			}
+			if _, exists := got["reasoning_level"]; exists {
+				t.Fatalf("reasoning_level leaked upstream: %s", body)
+			}
+		})
+	}
 }
 
 func TestAnthropicForwardRewritesModelMergesParamsSwapsAuth(t *testing.T) {
@@ -257,7 +316,7 @@ func TestOpenAIChatCompletionsForward(t *testing.T) {
 }
 
 func TestBailianChatCompletionsForward(t *testing.T) {
-	spec, ok := provider.Get("bailian")
+	spec, ok := provider.Get("bailian-cn/token-plan")
 	if !ok {
 		t.Fatal("bailian not registered")
 	}
@@ -352,7 +411,8 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
 	}
 
-	// 未声明的档号:原样透传,不赋任何思考参数。
+	// 未声明的档号:不赋任何思考参数;reasoning_level 是网关扩展字段,
+	// 未命中也消费删除、不泄漏上游。
 	rec = doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey},
 		`{"model":"my-gpt","messages":[],"reasoning_level":"9"}`)
@@ -360,8 +420,8 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
 	got = upstreamBody()
-	if got["reasoning_level"] != "9" {
-		t.Fatalf("未命中档位应透传 reasoning_level, got %v", got)
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("未命中档位也不应泄漏 reasoning_level, got %v", got)
 	}
 	if _, assigned := got["reasoning_effort"]; assigned {
 		t.Fatalf("未命中档位不应赋 reasoning_effort: %v", got)
@@ -439,10 +499,10 @@ func TestReasoningLevelYieldsToOverrides(t *testing.T) {
 	}
 }
 
-// 映射脚本接管:模型配了 effort_script 即由脚本决定写入位置(顶层
+// 显式写入格式接管:模型配了 effort_format 即按格式决定写入位置(顶层
 // reasoning_effort),协议内置映射(anthropic 本应写 output_config)不
-// 再生效;ctx 带档号与映射值,reasoning_level 照例消费不泄漏。
-func TestReasoningLevelScriptTakesOver(t *testing.T) {
+// 再生效;reasoning_level 照例消费不泄漏。
+func TestReasoningLevelFormatTakesOver(t *testing.T) {
 	h, cap, cleanup := newTestHandler(t, "")
 	defer cleanup()
 
@@ -458,38 +518,16 @@ func TestReasoningLevelScriptTakesOver(t *testing.T) {
 		t.Fatalf("upstream body not json: %v", err)
 	}
 	if got["reasoning_effort"] != "low" {
-		t.Fatalf("脚本应写顶层 reasoning_effort: %v", got)
-	}
-	if got["seen_level"] != "1" {
-		t.Fatalf("ctx.level 未传给脚本: %v", got)
+		t.Fatalf("格式应写顶层 reasoning_effort: %v", got)
 	}
 	if _, ok := got["output_config"]; ok {
-		t.Fatalf("脚本接管后内置映射不应再写 output_config: %v", got)
+		t.Fatalf("格式接管后内置映射不应再写 output_config: %v", got)
 	}
 	if _, leaked := got["reasoning_level"]; leaked {
 		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
 	}
 	if got["model"] != "k3-256k" {
 		t.Fatalf("model = %v, want k3-256k", got["model"])
-	}
-}
-
-// 脚本运行期失败:请求按 502 家族错误外壳回,不把坏请求发上游。
-func TestReasoningLevelScriptFailure(t *testing.T) {
-	h, cap, cleanup := newTestHandler(t, "")
-	defer cleanup()
-
-	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer " + testKey},
-		`{"model":"my-badscript","messages":[],"reasoning_level":"1"}`)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502, body %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "effort_script_failed") {
-		t.Fatalf("body = %s, want effort_script_failed", rec.Body.String())
-	}
-	if body, _, _ := cap.snapshot(); len(body) != 0 {
-		t.Fatalf("脚本失败的请求不应发上游: %s", body)
 	}
 }
 
@@ -535,14 +573,14 @@ func TestListModelsNativeShapes(t *testing.T) {
 	h, _, cleanup := newTestHandler(t, "")
 	defer cleanup()
 	h.resolver = fakeResolver{listing: []resolve.Listing{
-		{ID: "my-claude", ProviderID: "kimi", Protocol: "anthropic", Enabled: true,
+		{ID: "my-claude", ProviderID: "kimi/coding", Protocol: "anthropic", Enabled: true,
 			Efforts: []effort.Entry{{Name: "低", Value: "low"}, {Name: "ultra", Value: "ultra"}}},
 		{ID: "my-gpt", ProviderID: "openai", Protocol: "chat_completions", Enabled: true,
 			Efforts: []effort.Entry{{Name: "高", Value: "high"}}},
 		{ID: "my-o3", ProviderID: "openai", Protocol: "responses", Enabled: true,
 			Efforts: []effort.Entry{}},
-		{ID: "disabled-one", ProviderID: "kimi", Protocol: "anthropic", Enabled: false},
-		{ID: "my-gemini", ProviderID: "gemini", Protocol: "gemini", Enabled: true,
+		{ID: "disabled-one", ProviderID: "kimi/coding", Protocol: "anthropic", Enabled: false},
+		{ID: "my-gemini", ProviderID: "gemini/api", Protocol: "gemini", Enabled: true,
 			Efforts: []effort.Entry{{Name: "中", Value: "medium"}}},
 	}}
 

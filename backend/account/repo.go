@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `name, provider_id, credential, base_url, headers, quota_script, enabled, created_at, updated_at, sort_order`
+const columns = `name, provider_id, credential, base_url, headers, quota_settings, enabled, created_at, updated_at, sort_order`
 
 type Repo struct {
 	pool  *pgxpool.Pool
@@ -30,15 +30,15 @@ func NewRepo(pool *pgxpool.Pool, c *cache.Cache) *Repo {
 }
 
 // Input 是创建与更新的入参。Update 时 Credential 为零值表示保留原凭据，
-// QuotaScript 为 nil 表示保留原脚本；要清除脚本传零值 QuotaScript 指针。
+// QuotaSettings 为 nil 表示保留原配置；要清除配置传零值 QuotaSettings 指针。
 type Input struct {
-	Name        string
-	ProviderID  string
-	Credential  credential.Credential
-	BaseURL     string
-	Headers     map[string]string
-	QuotaScript *QuotaScript
-	Enabled     bool
+	Name          string
+	ProviderID    string
+	Credential    credential.Credential
+	BaseURL       string
+	Headers       map[string]string
+	QuotaSettings *QuotaSettings
+	Enabled       bool
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
@@ -49,7 +49,7 @@ func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
 	now := time.Now().UTC()
 	acc.CreatedAt, acc.UpdatedAt = now, now
 
-	credRaw, headersRaw, scriptRaw, err := encode(acc)
+	credRaw, headersRaw, settingsRaw, err := encode(acc)
 	if err != nil {
 		return Account{}, err
 	}
@@ -60,7 +60,7 @@ func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO accounts (`+columns+`)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, scriptRaw, acc.Enabled, acc.CreatedAt, acc.UpdatedAt, acc.SortOrder)
+			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, settingsRaw, acc.Enabled, acc.CreatedAt, acc.UpdatedAt, acc.SortOrder)
 		return mapWriteErr(err, "account", acc.Name)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.AccountKey(acc.Name), acc, persist); err != nil {
@@ -145,18 +145,13 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 		in.Credential = existing.Credential
 	} else if in.Credential.Kind == provider.CredAPIKey &&
 		existing.Credential.Kind == provider.CredAPIKey {
-		// api_key 形态的留空保留语义:密钥框留空=不换密钥;网页会话
-		// token 留空=保留原值(kimi 月度额度凭据)。整体替换凭据会误清
-		// 用户没碰的那一半,所以这里按字段合并而不是全量覆盖。
-		if strings.TrimSpace(in.Credential.APIKey) == "" {
-			in.Credential.APIKey = existing.Credential.APIKey
-		}
-		if in.Credential.WebRefreshToken == "" {
-			in.Credential.WebRefreshToken = existing.Credential.WebRefreshToken
-		}
+		in.Credential = mergeAPIKeyCredential(in.Credential, existing.Credential)
+	} else if in.ProviderID == existing.ProviderID &&
+		in.Credential.Kind == provider.CredKiroRefresh && existing.Credential.Kind == provider.CredKiroRefresh {
+		in.Credential = mergeKiroCredential(in.Credential, existing.Credential)
 	}
-	if in.QuotaScript == nil {
-		in.QuotaScript = existing.QuotaScript
+	if in.QuotaSettings == nil {
+		in.QuotaSettings = existing.QuotaSettings
 	}
 	acc, err := validate(in)
 	if err != nil {
@@ -166,15 +161,15 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 	acc.SortOrder = existing.SortOrder
 	acc.UpdatedAt = time.Now().UTC()
 
-	credRaw, headersRaw, scriptRaw, err := encode(acc)
+	credRaw, headersRaw, settingsRaw, err := encode(acc)
 	if err != nil {
 		return Account{}, err
 	}
 	persist := func() error {
 		tag, err := r.pool.Exec(ctx, `UPDATE accounts SET
-			provider_id=$2, credential=$3, base_url=$4, headers=$5, quota_script=$6, enabled=$7, updated_at=$8
+			provider_id=$2, credential=$3, base_url=$4, headers=$5, quota_settings=$6, enabled=$7, updated_at=$8
 			WHERE name=$1`,
-			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, scriptRaw, acc.Enabled, acc.UpdatedAt)
+			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, settingsRaw, acc.Enabled, acc.UpdatedAt)
 		if err != nil {
 			return apperr.Wrap(apperr.StorageError, "update account", err)
 		}
@@ -187,6 +182,34 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 		return Account{}, err
 	}
 	return acc, nil
+}
+
+// api_key 凭据按字段留空保留,避免换推理密钥时误清网页/控制台令牌。
+func mergeAPIKeyCredential(in, existing credential.Credential) credential.Credential {
+	if strings.TrimSpace(in.APIKey) == "" {
+		in.APIKey = existing.APIKey
+	}
+	if in.WebRefreshToken == "" {
+		in.WebRefreshToken = existing.WebRefreshToken
+	}
+	if strings.TrimSpace(in.ConsoleAccessToken) == "" {
+		in.ConsoleAccessToken = existing.ConsoleAccessToken
+	}
+	return in
+}
+
+func mergeKiroCredential(in, existing credential.Credential) credential.Credential {
+	if strings.TrimSpace(in.RefreshToken) == "" {
+		in.RefreshToken = existing.RefreshToken
+	}
+	if in.ClientID != "" && in.ClientID == existing.ClientID && in.ClientSecret == "" {
+		in.ClientSecret = existing.ClientSecret
+	}
+	if in.RefreshToken == existing.RefreshToken && in.KiroAuthRegion() == existing.KiroAuthRegion() &&
+		in.ClientID == existing.ClientID && in.ClientSecret == existing.ClientSecret && in.AccessToken == "" {
+		in.AccessToken, in.Expiry = existing.AccessToken, existing.Expiry
+	}
+	return in
 }
 
 // UpdateCredential 只回写凭据字段:OAuth 续期产物(access_token/expiry/轮换
@@ -293,73 +316,41 @@ func validate(in Input) (Account, error) {
 	if headers == nil {
 		headers = map[string]string{}
 	}
-	if in.QuotaScript != nil {
-		s := *in.QuotaScript
-		s.Code = strings.TrimSpace(s.Code)
-		if s.Enabled && s.Code == "" {
-			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script is enabled but code is empty")
-		}
-		if s.TimeoutSeconds < 0 || s.TimeoutSeconds > 120 {
-			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script timeout_seconds must be between 0 and 120")
-		}
+	if in.QuotaSettings != nil {
+		s := *in.QuotaSettings
 		if s.AutoIntervalMinutes < 0 || s.AutoIntervalMinutes > 1440 {
-			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script auto_interval_minutes must be between 0 and 1440")
+			return Account{}, apperr.New(apperr.InvalidRequest, "quota_settings auto_interval_minutes must be between 0 and 1440")
 		}
 		if s.StopIntervalMinutes < 0 || s.StopIntervalMinutes > 1440 {
-			return Account{}, apperr.New(apperr.InvalidRequest, "quota_script stop_interval_minutes must be between 0 and 1440")
+			return Account{}, apperr.New(apperr.InvalidRequest, "quota_settings stop_interval_minutes must be between 0 and 1440")
 		}
-		if err := validateScriptVariables(s.Variables); err != nil {
-			return Account{}, err
-		}
-		in.QuotaScript = &s
+		in.QuotaSettings = &s
 	}
 	return Account{
-		Name:        name,
-		ProviderID:  in.ProviderID,
-		Credential:  in.Credential,
-		BaseURL:     base,
-		Headers:     headers,
-		QuotaScript: in.QuotaScript,
-		Enabled:     in.Enabled,
+		Name:          name,
+		ProviderID:    in.ProviderID,
+		Credential:    in.Credential,
+		BaseURL:       base,
+		Headers:       headers,
+		QuotaSettings: in.QuotaSettings,
+		Enabled:       in.Enabled,
 	}, nil
 }
 
-// validateScriptVariables 校验脚本自定义变量:名须为合法标识符且不占用
-// 内置占位符名,条数与值长封顶防配置膨胀。
-func validateScriptVariables(vars map[string]string) error {
-	if len(vars) > 32 {
-		return apperr.New(apperr.InvalidRequest, "quota_script variables must not exceed 32 entries")
-	}
-	for name, value := range vars {
-		if !scriptVarName.MatchString(name) {
-			return apperr.New(apperr.InvalidRequest,
-				fmt.Sprintf("quota_script variable name %q is not a valid identifier", name))
-		}
-		if ReservedScriptVar(name) {
-			return apperr.New(apperr.InvalidRequest,
-				fmt.Sprintf("quota_script variable %q is reserved (built-in placeholder)", name))
-		}
-		if len(value) > 4096 {
-			return apperr.New(apperr.InvalidRequest,
-				fmt.Sprintf("quota_script variable %q value must not exceed 4096 bytes", name))
-		}
-	}
-	return nil
-}
-
-func encode(a Account) (credRaw, headersRaw, scriptRaw []byte, err error) {	if credRaw, err = a.Credential.Encode(); err != nil {
+func encode(a Account) (credRaw, headersRaw, settingsRaw []byte, err error) {
+	if credRaw, err = a.Credential.Encode(); err != nil {
 		return nil, nil, nil, apperr.Wrap(apperr.InvalidCredential, "encode credential", err)
 	}
 	if headersRaw, err = json.Marshal(a.Headers); err != nil {
 		return nil, nil, nil, apperr.Wrap(apperr.InvalidJSON, "encode headers", err)
 	}
-	// 未配置脚本落 '{}',与列默认值同形,读取侧统一按空脚本处理。
-	if a.QuotaScript == nil {
-		scriptRaw = []byte(`{}`)
-	} else if scriptRaw, err = json.Marshal(a.QuotaScript); err != nil {
-		return nil, nil, nil, apperr.Wrap(apperr.InvalidJSON, "encode quota_script", err)
+	// 未配置落 '{}',与列默认值同形,读取侧统一按未配置处理。
+	if a.QuotaSettings == nil {
+		settingsRaw = []byte(`{}`)
+	} else if settingsRaw, err = json.Marshal(a.QuotaSettings); err != nil {
+		return nil, nil, nil, apperr.Wrap(apperr.InvalidJSON, "encode quota_settings", err)
 	}
-	return credRaw, headersRaw, scriptRaw, nil
+	return credRaw, headersRaw, settingsRaw, nil
 }
 
 type scanner interface {
@@ -368,12 +359,12 @@ type scanner interface {
 
 func scan(s scanner) (Account, error) {
 	var (
-		a          Account
-		credRaw    []byte
-		headersRaw []byte
-		scriptRaw  []byte
+		a           Account
+		credRaw     []byte
+		headersRaw  []byte
+		settingsRaw []byte
 	)
-	if err := s.Scan(&a.Name, &a.ProviderID, &credRaw, &a.BaseURL, &headersRaw, &scriptRaw, &a.Enabled, &a.CreatedAt, &a.UpdatedAt, &a.SortOrder); err != nil {
+	if err := s.Scan(&a.Name, &a.ProviderID, &credRaw, &a.BaseURL, &headersRaw, &settingsRaw, &a.Enabled, &a.CreatedAt, &a.UpdatedAt, &a.SortOrder); err != nil {
 		return Account{}, err
 	}
 	cred, err := credential.Decode(credRaw)
@@ -387,13 +378,13 @@ func scan(s scanner) (Account, error) {
 	if a.Headers == nil {
 		a.Headers = map[string]string{}
 	}
-	var script QuotaScript
-	if err := json.Unmarshal(scriptRaw, &script); err != nil {
-		return Account{}, fmt.Errorf("account %q quota_script: %w", a.Name, err)
+	var settings QuotaSettings
+	if err := json.Unmarshal(settingsRaw, &settings); err != nil {
+		return Account{}, fmt.Errorf("account %q quota_settings: %w", a.Name, err)
 	}
-	// 空脚本(未启用且无代码)不保留指针,读取形态与未配置一致。
-	if script.Enabled || script.Code != "" {
-		a.QuotaScript = &script
+	// 两间隔均为 0 不保留指针,读取形态与未配置一致。
+	if !settings.Empty() {
+		a.QuotaSettings = &settings
 	}
 	return a, nil
 }

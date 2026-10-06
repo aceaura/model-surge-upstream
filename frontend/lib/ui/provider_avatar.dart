@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../models.dart';
+
 /// 提供商头像:内置厂商用官方 Logo(白底圆+细描边,深浅主题下都清晰),
 /// 未知厂商回落 id 首字母 + 哈希配色圆(CC Switch 式供应商图标位)。
 class ProviderAvatar extends StatelessWidget {
@@ -9,14 +11,14 @@ class ProviderAvatar extends StatelessWidget {
   final String providerId;
   final double size;
 
-  /// 内置厂商 id → Logo 资源;currentColor 单色 SVG 给品牌色,
-  /// null 表示资源自带颜色(多色 Logo 或 PNG)。
+  /// 内置厂商 → Logo 资源,按 id 的厂商段(见 providerVendor)命中;
+  /// currentColor 单色 SVG 给品牌色,null 表示资源自带颜色(多色 Logo 或 PNG)。
   static const _logos = <String, (String, Color?)>{
     'anthropic': ('assets/providers/anthropic.svg', Color(0xFF161C28)),
     'openai': ('assets/providers/openai.svg', Color(0xFF161C28)),
-    'openai-codex': ('assets/providers/openai.svg', Color(0xFF161C28)),
     'gemini': ('assets/providers/gemini.svg', null),
     'kimi': ('assets/providers/kimi.svg', null),
+    'kiro': ('assets/providers/kiro.png', null),
     'deepseek': ('assets/providers/deepseek.svg', Color(0xFF4D6BFE)),
     'ark': ('assets/providers/ark.png', null),
     'bailian': ('assets/providers/bailian.svg', Color(0xFF624AFF)),
@@ -56,7 +58,7 @@ class ProviderAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final logo = _logos[providerId];
+    final logo = _logos[providerVendor(providerId)];
     if (logo != null) {
       final (asset, color) = logo;
       final inner = size * 0.62;

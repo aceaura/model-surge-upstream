@@ -1,4 +1,4 @@
-// Package codex 收口 ChatGPT 订阅(openai-codex provider)的 backend-api
+// Package codex 收口 ChatGPT 订阅(openai/codex provider)的 backend-api
 // 特殊策略:认证与身份头、请求体硬约束、路径映射、官方 instructions 内嵌。
 // 口径取 codex CLI 官方实现与 sub2api/new-api/cc-switch 三家生产网关的交集;
 // 这些约束是上游服务端强制(缺了 400/404),不是风格选择。
@@ -13,7 +13,7 @@ import (
 )
 
 // ProviderID 是本策略作用的内置 provider。
-const ProviderID = "openai-codex"
+const ProviderID = "openai/codex"
 
 // droppedFields 是 backend-api 不接受的采样参数:带了直接 400,
 // 转发前剥掉(new-api/sub2api 实测清单)。

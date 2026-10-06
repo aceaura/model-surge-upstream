@@ -19,6 +19,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -121,6 +122,9 @@ func (l *Lister) List(ctx context.Context, accountName string) (Report, error) {
 }
 
 func (l *Lister) fetch(ctx context.Context, spec provider.Spec, acc account.Account) (Report, error) {
+	if spec.ID == kiro.ProviderID {
+		return l.fetchKiro(ctx, spec, acc)
+	}
 	method := spec.Models.Method
 	if method == "" {
 		method = http.MethodGet
@@ -192,14 +196,14 @@ func parseEntries(body []byte) []Entry {
 		if !ok {
 			continue
 		}
-		id := firstString(obj, "id", "name", "model", "slug")
+		id := firstString(obj, "id", "modelId", "name", "model", "slug")
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
 		out = append(out, Entry{
 			ID:          id,
-			DisplayName: firstString(obj, "display_name", "displayName"),
+			DisplayName: firstString(obj, "display_name", "displayName", "modelName"),
 			Efforts:     parseDeclaredEfforts(obj),
 		})
 	}

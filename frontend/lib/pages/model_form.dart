@@ -49,26 +49,33 @@ class _ModelFormState extends State<ModelForm> {
   UpstreamModel? get _source => widget.editing ?? widget.copyFrom;
 
   late final TextEditingController _id = TextEditingController(
-      text: widget.editing?.id ??
-          (widget.copyFrom != null ? '${widget.copyFrom!.id}-copy' : ''));
-  late final TextEditingController _nativeModel =
-      TextEditingController(text: _source?.nativeModel ?? '');
+    text:
+        widget.editing?.id ??
+        (widget.copyFrom != null ? '${widget.copyFrom!.id}-copy' : ''),
+  );
+  late final TextEditingController _nativeModel = TextEditingController(
+    text: _source?.nativeModel ?? '',
+  );
   // 上下文窗口按 k 单位录入/回显(1k = 1000 tokens),提交时换回 token 数
   late final TextEditingController _contextWindow = TextEditingController(
-      text: tokensToK(_source?.contextWindow ?? 0));
+    text: tokensToK(_source?.contextWindow ?? 0),
+  );
   late final TextEditingController _defaults = TextEditingController(
-      text: prettyJson(_source?.defaults ?? const {}));
+    text: prettyJson(_source?.defaults ?? const {}),
+  );
   late final TextEditingController _overrides = TextEditingController(
-      text: prettyJson(_source?.overrides ?? const {}));
+    text: prettyJson(_source?.overrides ?? const {}),
+  );
 
   // 上下文压缩策略:模式三选一(passive 元数据/error 客户端压缩/
   // auto 上游压缩);阈值按百分比录入(85 = 窗口的 85%),提交时换回比例
-  late String _compactMode =
-      (_source?.compact['mode'] as String?) ?? 'passive';
+  late String _compactMode = (_source?.compact['mode'] as String?) ?? 'passive';
   late final TextEditingController _compactThreshold = TextEditingController(
-      text: _compactThresholdText(_source?.compact));
+    text: _compactThresholdText(_source?.compact),
+  );
   late final TextEditingController _compactKeepTurns = TextEditingController(
-      text: '${_source?.compact['keep_turns'] ?? 6}');
+    text: '${_source?.compact['keep_turns'] ?? 6}',
+  );
 
   static String _compactThresholdText(Map<String, dynamic>? compact) {
     final t = compact?['threshold'];
@@ -89,10 +96,9 @@ class _ModelFormState extends State<ModelForm> {
   late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
   late bool _disableThinking = _effortInit.off;
   late final List<_EffortRow> _effortRows = _effortInit.rows;
-  // 档位映射脚本:留空=协议内置映射(output_config.effort 等);非空即由
-  // 脚本接管 effort 写入位置,承接「协议外壳+自家字段」的厂商差异。
-  late final TextEditingController _effortScript =
-      TextEditingController(text: _source?.effortScript ?? '');
+  // effort 写入格式:空=协议内置映射(按出站协议选字段);非空=显式格式
+  // 压过协议外形,承接「协议外壳+自家字段」的厂商差异。
+  late String _effortFormat = _source?.effortFormat ?? '';
 
   ({bool off, List<_EffortRow> rows}) _initialEffort() {
     final source = _source;
@@ -129,7 +135,6 @@ class _ModelFormState extends State<ModelForm> {
     _overrides.dispose();
     _compactThreshold.dispose();
     _compactKeepTurns.dispose();
-    _effortScript.dispose();
     for (final r in _effortRows) {
       r.dispose();
     }
@@ -138,8 +143,9 @@ class _ModelFormState extends State<ModelForm> {
 
   /// 所选账号 → 其 provider → 支持协议。
   List<String> get _protocols {
-    final account =
-        widget.accounts.where((a) => a.name == _account).firstOrNull;
+    final account = widget.accounts
+        .where((a) => a.name == _account)
+        .firstOrNull;
     if (account == null) return const [];
     final spec = widget.providers
         .where((p) => p.id == account.providerId)
@@ -148,7 +154,8 @@ class _ModelFormState extends State<ModelForm> {
   }
 
   /// 卡顶居中头像取所选账号的提供商,随账号切换联动。
-  String get _avatarProvider => widget.accounts
+  String get _avatarProvider =>
+      widget.accounts
           .where((a) => a.name == _account)
           .firstOrNull
           ?.providerId ??
@@ -199,7 +206,7 @@ class _ModelFormState extends State<ModelForm> {
           overrides: overrides!,
           compact: _buildCompact(),
           efforts: _efforts,
-          effortScript: _effortScript.text.trim(),
+          effortFormat: _effortFormat,
           enabled: _enabled,
         );
       } else {
@@ -213,7 +220,7 @@ class _ModelFormState extends State<ModelForm> {
           overrides: overrides!,
           compact: _buildCompact(),
           efforts: _efforts,
-          effortScript: _effortScript.text.trim(),
+          effortFormat: _effortFormat,
           enabled: _enabled,
         );
       }
@@ -235,8 +242,8 @@ class _ModelFormState extends State<ModelForm> {
       title: _isEdit
           ? '编辑模型 ${widget.editing!.id}'
           : widget.copyFrom != null
-              ? '拷贝模型 ${widget.copyFrom!.id}'
-              : '新建模型',
+          ? '拷贝模型 ${widget.copyFrom!.id}'
+          : '新建模型',
       avatar: ProviderAvatar(providerId: _avatarProvider, size: 56),
       onCancel: () => widget.onDone(false),
       onSubmit: _submit,
@@ -326,9 +333,8 @@ class _ModelFormState extends State<ModelForm> {
                   hintText: 'kimi-1/k2',
                   border: OutlineInputBorder(),
                 ),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? '模型标识不能为空'
-                    : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? '模型标识不能为空' : null,
               ),
             ),
           ],
@@ -342,9 +348,8 @@ class _ModelFormState extends State<ModelForm> {
                 hintText: 'kimi-k2-turbo',
                 border: OutlineInputBorder(),
               ),
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? '上游模型名不能为空'
-                  : null,
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? '上游模型名不能为空' : null,
             ),
           ),
         ],
@@ -381,8 +386,9 @@ class _ModelFormState extends State<ModelForm> {
               child: TextFormField(
                 key: const ValueKey('model-context'),
                 controller: _contextWindow,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
                   suffixText: 'k',
                   border: OutlineInputBorder(),
@@ -424,8 +430,9 @@ class _ModelFormState extends State<ModelForm> {
                 child: TextFormField(
                   key: const ValueKey('model-compact-threshold'),
                   controller: _compactThreshold,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   decoration: const InputDecoration(
                     suffixText: '%',
                     border: OutlineInputBorder(),
@@ -476,7 +483,10 @@ class _ModelFormState extends State<ModelForm> {
       if (_disableThinking) const EffortEntry(name: '0', value: 'none'),
       for (var i = 0; i < _effortRows.length; i++)
         if (_effortRows[i].value.text.trim().isNotEmpty)
-          EffortEntry(name: '${i + 1}', value: _effortRows[i].value.text.trim()),
+          EffortEntry(
+            name: '${i + 1}',
+            value: _effortRows[i].value.text.trim(),
+          ),
     ];
   }
 
@@ -488,8 +498,29 @@ class _ModelFormState extends State<ModelForm> {
           '${i + 1}·${_effortRows[i].value.text.trim()}',
     ];
     final base = levels.isEmpty ? '不支持' : levels.join(' / ');
-    return _effortScript.text.trim().isEmpty ? base : '$base · 脚本';
+    return _effortFormat.isEmpty
+        ? base
+        : '$base · ${_effortFormatLabel(_effortFormat)}';
   }
+
+  /// 写入格式选项(value 与后端 effort.FormatXxx 枚举一致)与中文名。
+  static const _effortFormats = [
+    '',
+    'chat_completions',
+    'chat_completions_skip_none',
+    'responses',
+    'anthropic',
+    'gemini',
+  ];
+
+  static String _effortFormatLabel(String f) => switch (f) {
+    'chat_completions' => 'OpenAI Chat 协议格式（顶层 reasoning_effort，none 原样上发）',
+    'chat_completions_skip_none' => 'OpenAI Chat 协议格式（none 不落字段）',
+    'responses' => 'OpenAI Responses 协议格式（嵌套 reasoning.effort）',
+    'anthropic' => 'Anthropic 协议格式（output_config.effort）',
+    'gemini' => 'Gemini 协议格式（thinkingConfig.thinkingLevel 大写）',
+    _ => '协议内置（跟随出站协议）',
+  };
 
   Widget _effortSection() {
     final rows = _effortRows;
@@ -501,7 +532,6 @@ class _ModelFormState extends State<ModelForm> {
       child: LabeledField(
         key: const ValueKey('model-effort-mode-field'),
         label: '元数据',
-        hint: '档位是 0..N 的数字：关闭思考开关=0 档（上行值 none）；每行一个 effort 值，行号即档位，对话页与下游按数字选档、上行发映射的值；开关关且删掉所有行即声明不支持推理档',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -514,7 +544,7 @@ class _ModelFormState extends State<ModelForm> {
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
-                  child: Text('关闭思考（0 档）', style: TextStyle(fontSize: 12.5)),
+                  child: Text('允许关闭思考（0 档）', style: TextStyle(fontSize: 12.5)),
                 ),
               ],
             ),
@@ -540,9 +570,7 @@ class _ModelFormState extends State<ModelForm> {
                       child: TextFormField(
                         key: ValueKey('model-effort-value-$i'),
                         controller: rows[i].value,
-                        decoration: const InputDecoration(
-                          hintText: '值（发上游）',
-                        ),
+                        decoration: const InputDecoration(hintText: '值（发上游）'),
                       ),
                     ),
                     IconButton(
@@ -568,32 +596,15 @@ class _ModelFormState extends State<ModelForm> {
             ),
             const SizedBox(height: 14),
             LabeledField(
-              key: const ValueKey('model-effort-script-field'),
-              label: '映射脚本',
-              hint: '选档后决定 effort 写进请求的哪个位置：apply(ctx) 可读 ctx.level（档号）、ctx.protocol、ctx.efforts（上面元数据）与 ctx.request（当前请求体），返回完整请求体；上行值由脚本按档号在元数据里查出再写入，查不到就不落字段（上游吃自家默认）。留空走协议内置映射；脚本结果仍可被下方 JSON 覆盖参数压盖',
-              child: TextFormField(
-                key: const ValueKey('model-effort-script'),
-                controller: _effortScript,
-                maxLines: 10,
-                minLines: 4,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontFamily: 'Consolas',
-                  fontFamilyFallback: ['monospace'],
-                  height: 1.45,
-                ),
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  hintText:
-                      '({ apply: function(ctx) { for (var i = 0; i < ctx.efforts.length; i++) { if (ctx.efforts[i].name === ctx.level) { ctx.request.reasoning_effort = ctx.efforts[i].value; break; } } return ctx.request; } })',
-                  hintStyle: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).hintColor,
-                    fontFamily: 'Consolas',
-                    fontFamilyFallback: const ['monospace'],
-                  ),
-                ),
-                onChanged: (_) => setState(() {}),
+              key: const ValueKey('model-effort-format-field'),
+              label: '写入格式',
+              child: StyledDropdownFormField(
+                key: const ValueKey('model-effort-format'),
+                value: _effortFormat,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                options: _effortFormats,
+                labelOf: _effortFormatLabel,
+                onChanged: (v) => setState(() => _effortFormat = v ?? ''),
               ),
             ),
           ],

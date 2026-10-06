@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:msu_admin/api_client.dart';
+import 'package:msu_admin/models.dart';
 import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/quota_inline.dart';
 
@@ -38,6 +39,171 @@ Future<void> pumpInline(
 }
 
 void main() {
+  test('Credits model preserves only returned windows and RFC3339 reset', () {
+    final report = QuotaReport.fromJson({
+      'account': 'bl-1',
+      'queryable': true,
+      'meters': [
+        {
+          'kind': 'usage',
+          'unit': 'credits',
+          'label': '本月',
+          'used': 0.9192,
+          'total': 180000,
+          'remaining': 179999.0808,
+          'reset_at': '2026-11-01T00:00:00+08:00',
+          'extra': 'Pro',
+        },
+      ],
+    });
+    expect(report.meters, hasLength(1));
+    final m = report.meters.single;
+    expect(m.used, 0.9192);
+    expect(m.total, 180000);
+    expect(m.remaining, 179999.0808);
+    expect(m.resetAt, DateTime.utc(2026, 10, 31, 16));
+    expect(m.extra, 'Pro');
+  });
+
+  testWidgets('Credits tiny usage shows nonzero percent and countdown only',
+      (tester) async {
+    final reset = DateTime.now().add(const Duration(days: 3, hours: 8));
+    await pumpInline(tester, queryable: true, body: {
+      'queryable': true,
+      'meters': [
+        {
+          'kind': 'usage',
+          'unit': 'credits',
+          'label': '本月',
+          'used': 0.9192,
+          'total': 180000,
+          'remaining': 179999.0808,
+          'reset_at': reset.toUtc().toIso8601String(),
+          'extra': 'Pro',
+        },
+      ],
+    });
+    final line = find.textContaining('本月:');
+    final spans = (tester.widget<Text>(line).textSpan! as TextSpan).children!;
+    final percent = spans.whereType<TextSpan>()
+        .firstWhere((span) => span.text == '0.0005%');
+    final tokens = Theme.of(tester.element(line)).extension<AppTokens>()!;
+    expect(percent.style?.color, tokens.success);
+    expect(percent.style?.fontWeight, FontWeight.w600);
+    expect(spans.whereType<TextSpan>().map((s) => s.text ?? ''),
+        everyElement(isNot(contains('Credits'))),
+        reason: '行内只留百分比,不摊具体额度');
+    final d = reset.difference(DateTime.now());
+    expect(spans.whereType<TextSpan>().map((s) => s.text),
+        contains('${d.inDays}d${d.inHours % 24}h'));
+    expect(find.textContaining('5小时:'), findsNothing);
+    expect(find.textContaining('7天:'), findsNothing,
+        reason: '缺失窗口不补零');
+  });
+
+  testWidgets('Credits thresholds derive from used over total, not raw used',
+      (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'queryable': true,
+      'meters': [
+        {'unit': 'credits', 'label': '本月', 'used': 6400, 'total': 10000, 'remaining': 3600},
+        {'unit': 'credits', 'label': '5小时', 'used': 15, 'total': 20, 'remaining': 5},
+        {'unit': 'credits', 'label': '7天', 'used': 19, 'total': 20, 'remaining': 1},
+      ],
+    });
+    final line = find.textContaining('本月:');
+    final spans = (tester.widget<Text>(line).textSpan! as TextSpan).children!;
+    final tokens = Theme.of(tester.element(line)).extension<AppTokens>()!;
+    TextSpan spanOf(String text) =>
+        spans.whereType<TextSpan>().firstWhere((s) => s.text == text);
+    expect(spanOf('64%').style?.color, tokens.success);
+    expect(spanOf('75%').style?.color, tokens.warn);
+    expect(spanOf('95%').style?.color, tokens.danger);
+    expect(spans.whereType<TextSpan>().map((s) => s.text ?? ''),
+        everyElement(isNot(contains('剩余'))),
+        reason: '行内不摊剩余额度');
+  });
+
+  for (final (used, expected) in [
+    (0.0, '0%'),
+    (0.00001, '0.000001%'),
+    (0.0000001, '<0.000001%'),
+  ]) {
+    testWidgets('Credits adaptive percent renders $used as $expected',
+        (tester) async {
+      await pumpInline(tester, queryable: true, body: {
+        'queryable': true,
+        'meters': [{'unit': 'credits', 'label': '本月', 'used': used, 'total': 1000}],
+      });
+      final line = find.textContaining('本月:');
+      final spans = (tester.widget<Text>(line).textSpan! as TextSpan).children!;
+      expect(spans.whereType<TextSpan>().map((s) => s.text), contains(expected));
+      expect(find.textContaining('剩余'), findsNothing,
+          reason: '上游未提供 remaining 时不推算、不补零');
+    });
+  }
+
+  testWidgets('Credits without positive total or used keep prior fallback',
+      (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'queryable': true,
+      'meters': [
+        {'unit': 'credits', 'label': '本月', 'used': 2, 'total': 0},
+        {'unit': 'credits', 'label': '5小时', 'remaining': 3, 'total': 10},
+        {'unit': 'credits', 'label': '7天', 'used': 1},
+      ],
+    });
+    expect(find.textContaining('已用 2.0 点数'), findsOneWidget);
+    expect(find.textContaining('余额 3.0 点数'), findsOneWidget);
+    expect(find.textContaining('已用 1.0 点数'), findsOneWidget);
+    expect(find.byType(Tooltip), findsNothing,
+        reason: '成功态不挂 Tooltip');
+  });
+
+  testWidgets('unknown quota stays percent and currency stays unchanged',
+      (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'queryable': true,
+      'meters': [
+        {'unit': 'percent', 'label': '5小时', 'used': 12.34},
+        {'unit': 'currency', 'currency': 'CNY', 'remaining': 180000.25},
+      ],
+    });
+    final line = find.textContaining('5小时:');
+    final spans = (tester.widget<Text>(line).textSpan! as TextSpan).children!;
+    expect(spans.whereType<TextSpan>().map((s) => s.text),
+        containsAll(['5小时:', '12.34%', '余额 180000.25 CNY']));
+    expect(find.byType(Tooltip), findsNothing,
+        reason: '成功态不挂 Tooltip');
+  });
+
+  testWidgets('unknown total preserves tiny nonzero percent', (tester) async {
+    await pumpInline(tester, queryable: true, body: {
+      'queryable': true,
+      'meters': [
+        {'unit': 'percent', 'label': '本月', 'used': 0.0005106666666666667},
+      ],
+    });
+    expect(find.textContaining('本月:0.0005%'), findsOneWidget);
+    expect(find.textContaining('Credits'), findsNothing);
+  });
+
+  for (final reason in [
+    '缺少额度查询 Token,请先运行 bl auth login --console',
+    '额度查询 Token 已过期,请重新登录',
+  ]) {
+    testWidgets('quota failure tooltip explains actionable cause: $reason',
+        (tester) async {
+      await pumpInline(tester, queryable: true, status: 502, body: {
+        'error': {'code': 'quota_unavailable', 'message': reason},
+      });
+      expect(find.text('额度不可用 · 点击重试'), findsOneWidget);
+      expect(find.text(reason), findsNothing, reason: '原因不挤入列表行');
+      expect(tester.widget<Tooltip>(find.byType(Tooltip)).message,
+          '$reason\n点击重新查询额度');
+    });
+  }
+
   testWidgets('not queryable renders nothing', (tester) async {
     await pumpInline(tester, queryable: false);
     expect(find.byType(Text), findsNothing);

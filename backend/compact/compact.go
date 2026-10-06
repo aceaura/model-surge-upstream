@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/codex"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -147,7 +148,7 @@ func NewRunner(g Defaults) *Runner {
 	return &Runner{
 		globals: g,
 		// 不设整体超时：摘要调用时限由 Run 里的 context.WithTimeout 控制。
-		client: &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		client: &http.Client{Transport: kiro.NewTransport(http.DefaultTransport.(*http.Transport).Clone())},
 		logf:   log.Printf,
 	}
 }

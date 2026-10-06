@@ -24,8 +24,8 @@ func TestBuiltinSpecsWellFormed(t *testing.T) {
 		if len(s.Protocols) == 0 {
 			t.Errorf("provider %q: no protocols", s.ID)
 		}
-		if s.Credential != CredAPIKey && s.Credential != CredOAuthRefresh {
-			t.Errorf("provider %q: credential = %q, supported: api_key, oauth_refresh", s.ID, s.Credential)
+		if s.Credential != CredAPIKey && s.Credential != CredOAuthRefresh && s.Credential != CredKiroRefresh {
+			t.Errorf("provider %q: unsupported credential = %q", s.ID, s.Credential)
 		}
 		if s.Auth != AuthBearer && s.Auth != AuthAnthropicKey {
 			t.Errorf("provider %q: unknown auth scheme %q", s.ID, s.Auth)
@@ -33,23 +33,34 @@ func TestBuiltinSpecsWellFormed(t *testing.T) {
 	}
 }
 
-func TestKiroNotRegistered(t *testing.T) {
-	if _, ok := Get("kiro"); ok {
-		t.Error("kiro is deferred out of this iteration but is registered")
+func TestKiroRegistered(t *testing.T) {
+	s, ok := Get("kiro")
+	if !ok {
+		t.Fatal("kiro should be registered")
+	}
+	if s.Credential != CredKiroRefresh || s.Auth != AuthBearer || s.Billing != BillingSubscription {
+		t.Fatalf("kiro spec = %+v", s)
+	}
+	if !s.Supports(ProtocolAnthropic) || !s.Supports(ProtocolChatCompletions) || s.Supports(ProtocolResponses) {
+		t.Fatalf("kiro protocols = %v", s.Protocols)
+	}
+	if s.Models == nil || !s.QuotaQueryable {
+		t.Fatalf("kiro queries = %+v", s)
 	}
 }
 
 func TestBuiltinBilling(t *testing.T) {
 	want := map[string]Billing{
-		"anthropic": BillingPayGo,
-		"openai":    BillingPayGo,
-		"gemini":    BillingPayGo,
+		"anthropic/api": BillingPayGo,
+		"openai/api":    BillingPayGo,
+		"gemini/api":    BillingPayGo,
 		// kimi 预设端点是 api.kimi.com/coding,即 Kimi For Coding 订阅产品。
-		"kimi":         BillingSubscription,
-		"ark":          BillingPayGo,
-		"deepseek":     BillingPayGo,
-		"openai-codex": BillingSubscription,
-		"bailian":      BillingSubscription,
+		"kimi/coding":           BillingSubscription,
+		"ark/api":               BillingPayGo,
+		"deepseek/api":          BillingPayGo,
+		"openai/codex":          BillingSubscription,
+		"bailian-cn/token-plan": BillingSubscription,
+		"bailian-cn/coding-plan": BillingSubscription,
 	}
 	for id, billing := range want {
 		s, ok := Get(id)
@@ -65,14 +76,15 @@ func TestBuiltinBilling(t *testing.T) {
 
 func TestBuiltinRegion(t *testing.T) {
 	want := map[string]string{
-		"anthropic":    RegionGlobal,
-		"openai":       RegionGlobal,
-		"gemini":       RegionGlobal,
-		"kimi":         RegionGlobal,
-		"ark":          RegionGlobal,
-		"deepseek":     RegionGlobal,
-		"openai-codex": RegionGlobal,
-		"bailian":      RegionCN,
+		"anthropic/api":         RegionGlobal,
+		"openai/api":            RegionGlobal,
+		"gemini/api":            RegionGlobal,
+		"kimi/coding":           RegionGlobal,
+		"ark/api":               RegionGlobal,
+		"deepseek/api":          RegionGlobal,
+		"openai/codex":          RegionGlobal,
+		"bailian-cn/token-plan": RegionCN,
+		"bailian-cn/coding-plan": RegionCN,
 	}
 	for id, region := range want {
 		s, ok := Get(id)
@@ -86,22 +98,48 @@ func TestBuiltinRegion(t *testing.T) {
 	}
 }
 
+func TestBuiltinPlan(t *testing.T) {
+	want := map[string]string{
+		"anthropic/api":         PlanStandard,
+		"openai/api":            PlanStandard,
+		"gemini/api":            PlanStandard,
+		"kimi/coding":           PlanStandard,
+		"ark/api":               PlanStandard,
+		"deepseek/api":          PlanStandard,
+		"openai/codex":          PlanStandard,
+		"kiro":                  PlanStandard,
+		"bailian-cn/token-plan": "Token Plan",
+		"bailian-cn/coding-plan": "Coding Plan",
+	}
+	for id, plan := range want {
+		s, ok := Get(id)
+		if !ok {
+			t.Errorf("provider %q not registered", id)
+			continue
+		}
+		if s.Plan != plan {
+			t.Errorf("provider %q plan = %q, want %q", id, s.Plan, plan)
+		}
+	}
+}
+
 // 官网要对上计费模式与服务区域:订阅产品挂订阅站,按量 API 挂控制台,
 // 别把 marketing 主页或另一产品线地址挂上来。
 func TestBuiltinWebsite(t *testing.T) {
 	want := map[string]string{
-		"anthropic": "https://console.anthropic.com",
-		"openai":    "https://platform.openai.com",
-		"gemini":    "https://aistudio.google.com",
+		"anthropic/api": "https://console.anthropic.com",
+		"openai/api":    "https://platform.openai.com",
+		"gemini/api":    "https://aistudio.google.com",
 		// kimi 是订阅(Kimi For Coding),订阅站在 kimi.com;
 		// platform.moonshot.cn 是按量平台,不挂。
-		"kimi":     "https://www.kimi.com",
-		"ark":      "https://console.volcengine.com/ark",
-		"deepseek": "https://platform.deepseek.com",
-		// openai-codex 是订阅(ChatGPT Plus/Pro),订阅站在 chatgpt.com;
-		// platform.openai.com 是按量平台,已挂给 openai。
-		"openai-codex": "https://chatgpt.com",
-		"bailian":      "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
+		"kimi/coding":  "https://www.kimi.com",
+		"ark/api":      "https://console.volcengine.com/ark",
+		"deepseek/api": "https://platform.deepseek.com",
+		// openai/codex 是订阅(ChatGPT 登录态),订阅站在 chatgpt.com;
+		// platform.openai.com 是按量平台,已挂给 openai/api。
+		"openai/codex":          "https://chatgpt.com",
+		"bailian-cn/token-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
+		"bailian-cn/coding-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/coding-plan/personal",
 	}
 	for id, website := range want {
 		s, ok := Get(id)
@@ -136,9 +174,9 @@ func TestAllReturnsCopy(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	s, ok := Get("kimi")
+	s, ok := Get("kimi/coding")
 	if !ok {
-		t.Fatal("kimi should be registered")
+		t.Fatal("kimi/coding should be registered")
 	}
 	if s.BaseURL != "https://api.kimi.com/coding" {
 		t.Errorf("kimi base_url = %q", s.BaseURL)
@@ -149,7 +187,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestSupports(t *testing.T) {
-	ark, _ := Get("ark")
+	ark, _ := Get("ark/api")
 	if !ark.Supports(ProtocolAnthropic) {
 		t.Error("ark should support anthropic")
 	}
@@ -162,16 +200,13 @@ func TestSupports(t *testing.T) {
 }
 
 func TestQuotaDeclaration(t *testing.T) {
-	ds, _ := Get("deepseek")
-	if ds.Quota == nil {
-		t.Fatal("deepseek should declare a quota api")
+	ds, _ := Get("deepseek/api")
+	if !ds.QuotaQueryable {
+		t.Fatal("deepseek should declare a builtin quota query")
 	}
-	if ds.Quota.Reset != ResetPrepaid {
-		t.Errorf("deepseek reset = %q", ds.Quota.Reset)
-	}
-	anth, _ := Get("anthropic")
-	if anth.Quota != nil {
-		t.Error("anthropic declares no quota api in this iteration")
+	anth, _ := Get("anthropic/api")
+	if anth.QuotaQueryable {
+		t.Error("anthropic declares no quota query in this iteration")
 	}
 }
 
@@ -183,9 +218,9 @@ func TestIDs(t *testing.T) {
 }
 
 func TestOpenAICodexSpec(t *testing.T) {
-	s, ok := Get("openai-codex")
+	s, ok := Get("openai/codex")
 	if !ok {
-		t.Fatal("openai-codex should be registered")
+		t.Fatal("openai/codex should be registered")
 	}
 	if s.Credential != CredOAuthRefresh {
 		t.Errorf("credential = %q, want oauth_refresh", s.Credential)
@@ -200,14 +235,14 @@ func TestOpenAICodexSpec(t *testing.T) {
 		t.Errorf("codex /models 清单端点是推理档声明的数据源,应声明 Models, got %+v", s.Models)
 	}
 	if s.DisplayName != "OpenAI" {
-		t.Errorf("display_name = %q, 与按量 openai 同名才能在级联里同厂商分组", s.DisplayName)
+		t.Errorf("display_name = %q, 与按量 openai/api 同名才能在级联里同厂商分组", s.DisplayName)
 	}
 }
 
 func TestBailianSpec(t *testing.T) {
-	s, ok := Get("bailian")
+	s, ok := Get("bailian-cn/token-plan")
 	if !ok {
-		t.Fatal("bailian should be registered")
+		t.Fatal("bailian-cn/token-plan should be registered")
 	}
 	if s.BaseURL != "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode" {
 		t.Errorf("base_url = %q", s.BaseURL)
@@ -221,14 +256,38 @@ func TestBailianSpec(t *testing.T) {
 	if s.Models == nil || s.Models.Path != "/v1/models" || s.Models.Method != "GET" {
 		t.Errorf("models = %+v, want GET /v1/models", s.Models)
 	}
-	if s.Quota != nil {
-		t.Errorf("unverified quota endpoint must not be declared: %+v", s.Quota)
+	if !s.QuotaQueryable {
+		t.Fatal("bailian should declare the builtin console quota query")
+	}
+}
+
+func TestBailianCodingSpec(t *testing.T) {
+	s, ok := Get("bailian-cn/coding-plan")
+	if !ok {
+		t.Fatal("bailian-cn/coding-plan should be registered")
+	}
+	if s.BaseURL != "https://coding.dashscope.aliyuncs.com" {
+		t.Errorf("base_url = %q", s.BaseURL)
+	}
+	if s.DisplayName != "Aliyun Bailian" || s.Plan != "Coding Plan" {
+		t.Errorf("display_name/plan = %q/%q, 须与 Token Plan 同厂商分组、套餐区分", s.DisplayName, s.Plan)
+	}
+	// 探针实测:chat completions 401(存在)、responses 404(不存在)、
+	// anthropic 在 /apps/anthropic 独立路径(单 BaseURL 表达不了)。
+	if len(s.Protocols) != 1 || !s.Supports(ProtocolChatCompletions) {
+		t.Errorf("protocols = %v, want chat_completions only", s.Protocols)
+	}
+	if s.Models == nil || s.Models.Path != "/v1/models" || s.Models.Method != "GET" {
+		t.Errorf("models = %+v, want GET /v1/models(探针 200)", s.Models)
+	}
+	if s.QuotaQueryable {
+		t.Error("Coding Plan 额度按请求数计且控制台无开放查询 API,不应声明内置额度查询")
 	}
 }
 
 func TestRegisterRejects(t *testing.T) {
 	cases := map[string]Spec{
-		"duplicate id": {ID: "kimi", BaseURL: "https://x", Protocols: []string{ProtocolAnthropic}},
+		"duplicate id": {ID: "kimi/coding", BaseURL: "https://x", Protocols: []string{ProtocolAnthropic}},
 		"empty id":     {BaseURL: "https://x", Protocols: []string{ProtocolAnthropic}},
 		"empty base":   {ID: "fresh-a", Protocols: []string{ProtocolAnthropic}},
 		"no protocol":  {ID: "fresh-b", BaseURL: "https://x"},

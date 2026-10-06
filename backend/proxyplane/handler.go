@@ -19,6 +19,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/compact"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/ringlog"
@@ -81,7 +82,7 @@ func NewHandler(apiKey string, resolver Resolver, sink UsageSink) *Handler {
 	return &Handler{
 		key:      []byte(apiKey),
 		resolver: resolver,
-		client:   &http.Client{Transport: tr},
+		client:   &http.Client{Transport: kiro.NewTransport(tr)},
 		sink:     sink,
 	}
 }
@@ -230,13 +231,12 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 
 	obj["model"] = target.NativeModel
 	// reasoning_level 是网关自有的顶层数字档:命中模型声明的档位即消费
-	// (不进上游)并给思考开关/档位参数赋值,先于 defaults/overrides 合并,
-	// 之后 overrides 仍可压盖(强制值优先级最高)。
-	if err := applyReasoningLevel(target, obj); err != nil {
-		writeFamilyError(w, fam, err)
-		return
-	}
+	// (不进上游)并给思考开关/档位参数赋值。映射在 defaults 合并后施加——
+	// 映射恒压 defaults 与客户端参数,且 none 不落字段的格式(skip_none)
+	// 删字段后不会被 defaults 回填;overrides 最后合并仍可压盖(强制值
+	// 优先级最高)。
 	merged := mergeParams(rawObject(target.Defaults), obj)
+	applyReasoningLevel(target, merged)
 	merged = mergeParams(merged, rawObject(target.Overrides))
 	// OpenAI 流式默认不回 usage，统计会全盲。仅当客户端要流式时注入
 	// include_usage：非流式响应本就带 usage，不碰请求体。
@@ -317,11 +317,8 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 	} else {
 		obj = map[string]any{}
 	}
-	if err := applyReasoningLevel(target, obj); err != nil {
-		writeFamilyError(w, familyGemini, err)
-		return
-	}
 	merged := mergeParams(rawObject(target.Defaults), obj)
+	applyReasoningLevel(target, merged)
 	merged = mergeParams(merged, rawObject(target.Overrides))
 
 	newSuffix := "/v1beta/models/" + target.NativeModel
@@ -357,6 +354,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 			return nil, err
 		}
 		copyHeaders(up.Header, r.Header, stripRequestHeaders)
+		up.Header.Del(kiro.HeaderProvider)
+		up.Header.Del(kiro.HeaderProfileARN)
 		up.Header.Set("Content-Type", "application/json")
 		if target.ProviderID == codex.ProviderID {
 			// 客户端自带的会话头一律作废(sub2api 同款):session 由服务端
@@ -392,11 +391,15 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	}
 
 	// OAuth 账号 401:作废旧 token 重解析重放一次;仍 401 则原样透传给客户端。
-	if resp.StatusCode == http.StatusUnauthorized && h.invalidator != nil && target.ProviderID == codex.ProviderID {
+	// Kiro 额外把 403 当作令牌失效(KiroaaS auth.py 的 reactive refresh 走 403)。
+	refreshable := resp.StatusCode == http.StatusUnauthorized &&
+		(target.ProviderID == codex.ProviderID || target.ProviderID == kiro.ProviderID)
+	refreshable = refreshable || (resp.StatusCode == http.StatusForbidden && target.ProviderID == kiro.ProviderID)
+	if refreshable && h.invalidator != nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
-		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← 401 model=%s account=%s: invalidate access token and retry once",
-			target.ModelID, target.Account))
+		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← %d model=%s account=%s: invalidate access token and retry once",
+			resp.StatusCode, target.ModelID, target.Account))
 		h.invalidator.Invalidate(target.Account, bearerTokenValue(target.Headers))
 		fresh, rerr := h.resolver.Resolve(r.Context(), target.ModelID)
 		if rerr != nil {
@@ -404,8 +407,12 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusUnauthorized, 0, time.Since(start))
 			return
 		}
-		if up, err = build(fresh.Headers); err == nil {
-			target = fresh
+		target = fresh
+		url = strings.TrimRight(target.BaseURL, "/") + suffix
+		if q := stripKeyQuery(r.URL.RawQuery); q != "" {
+			url += "?" + q
+		}
+		if up, err = build(target.Headers); err == nil {
 			resp, err = h.client.Do(up)
 		}
 		if err != nil {
@@ -533,7 +540,7 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 			data = append(data, map[string]any{
 				"id": m.ID, "type": "model", "display_name": m.ID,
 				"created_at": time.Now().UTC().Format(time.RFC3339),
-				"efforts": m.Efforts,
+				"efforts":    m.Efforts,
 			})
 		}
 		body := map[string]any{"data": data, "has_more": false}
@@ -569,45 +576,18 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 	}
 }
 
-// applyReasoningLevel 消费请求顶层的 reasoning_level 数字档:命中模型
-// 声明的档位(名=档号)即从体里删除(网关自有字段不进上游);未提供的、
-// 形态不对的、值不在声明列表里的都原样透传。赋值落点两级:模型配了映射
-// 脚本(effort_script)即由脚本接管——脚本按档号在元数据里查上行值并
-// 决定写入位置(网关不做查表,ctx 不带映射值),否则走协议内置映射按
-// 元数据值赋值(effort.Apply,0 档映射 none=关闭思考)。赋值落在客户端
-// 参数层:优先级 defaults < 映射 < overrides,JSON 覆盖参数恒可压盖
-// 映射结果。
-func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) error {
-	level, ok := reasoningLevel(body["reasoning_level"])
-	if !ok {
-		return nil
-	}
+// applyReasoningLevel 通用档位映射:reasoning_level 是本网关的扩展字段,
+// 消费即删(未命中也不得泄漏上游);先取档号,再在模型声明里查匹配
+// (查不到/值为空不落字段,上游吃自家默认),命中按模型的写入格式
+// (effort_format,空=协议内置)格式化进请求体。
+func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
+	level, _ := reasoningLevel(body["reasoning_level"])
+	delete(body, "reasoning_level")
 	mapped, hit := effort.LevelOf(target.Efforts, level)
 	if !hit {
-		return nil
+		return
 	}
-	delete(body, "reasoning_level")
-	if target.EffortScript == "" {
-		effort.Apply(target.Protocol, body, mapped)
-		return nil
-	}
-	out, err := effort.RunScript(target.EffortScript, effort.ScriptContext{
-		Level:    level,
-		Protocol: target.Protocol,
-		Efforts:  target.Efforts,
-		Request:  body,
-	})
-	if err != nil {
-		return err
-	}
-	// 脚本返回完整新体,替换原 map 内容(调用方持有的是同一引用)。
-	for k := range body {
-		delete(body, k)
-	}
-	for k, v := range out {
-		body[k] = v
-	}
-	return nil
+	effort.ApplyFormat(target.EffortFormat, target.Protocol, body, mapped)
 }
 
 // reasoningLevel 归一 reasoning_level 的取值:字符串("2")与整数

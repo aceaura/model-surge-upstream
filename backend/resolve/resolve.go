@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/oauth"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
@@ -40,9 +42,9 @@ type ResolvedTarget struct {
 	// Efforts 是模型的有效推理档列表（自动模式=上游声明，显式数组=管理员
 	// 声明），对话页发送侧按它校验所选档位；空列表表示该模型不支持 effort。
 	Efforts []effort.Entry `json:"efforts,omitempty"`
-	// EffortScript 是模型的档位映射脚本：空=走协议内置映射，非空即由脚本
-	// 接管 effort 写入位置（厂商差异的承接点）。
-	EffortScript string `json:"effort_script,omitempty"`
+	// EffortFormat 是模型的 effort 写入格式(effort.FormatXxx 枚举):
+	// 空=协议内置映射,非空=显式格式压过协议外形(厂商差异的承接点)。
+	EffortFormat string `json:"effort_format,omitempty"`
 }
 
 // 认证头名。
@@ -149,6 +151,12 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 	if err != nil {
 		return ResolvedTarget{}, err
 	}
+	if spec.ID == kiro.ProviderID {
+		acc, err = r.accounts.Get(ctx, acc.Name)
+		if err != nil {
+			return ResolvedTarget{}, err
+		}
+	}
 
 	return ResolvedTarget{
 		ModelID:       m.ID,
@@ -163,7 +171,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Overrides:     m.Overrides,
 		Compact:       m.Compact,
 		Efforts:       r.effectiveEfforts(ctx, acc.Name, m),
-		EffortScript:  m.EffortScript,
+		EffortFormat:  m.EffortFormat,
 	}, nil
 }
 
@@ -193,7 +201,7 @@ func (r *Resolver) HeadersFor(ctx context.Context, spec provider.Spec, acc accou
 // access_token 并套 codex 头集(订阅登录态目前只有 codex 一种);
 // 其余沿用 provider 声明的静态认证头形态。
 func (r *Resolver) authHeaders(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error) {
-	if acc.Credential.Kind != provider.CredOAuthRefresh {
+	if acc.Credential.Kind != provider.CredOAuthRefresh && acc.Credential.Kind != provider.CredKiroRefresh {
 		return AuthHeaders(spec, acc), nil
 	}
 	if r.tokens == nil {
@@ -208,10 +216,29 @@ func (r *Resolver) authHeaders(ctx context.Context, spec provider.Spec, acc acco
 		}
 		return nil, apperr.Wrap(apperr.UpstreamUnavailable, "refresh oauth token", err)
 	}
-	out := codex.Headers(token, acc.Credential.AccountID)
+	var out map[string]string
+	if spec.ID == kiro.ProviderID {
+		acc, err = r.accounts.Get(ctx, acc.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = kiro.Headers(token, acc.Credential.ProfileARN)
+	} else {
+		out = codex.Headers(token, acc.Credential.AccountID)
+	}
 	// 账号自定义头后写,允许运维者覆盖默认头(与静态形态同语义)。
 	for k, v := range acc.Headers {
+		if strings.EqualFold(k, kiro.HeaderProvider) || strings.EqualFold(k, kiro.HeaderProfileARN) {
+			continue
+		}
 		out[k] = v
+	}
+	if spec.ID == kiro.ProviderID {
+		out[kiro.HeaderProvider] = kiro.ProviderID
+		out[kiro.HeaderProfileARN] = acc.Credential.ProfileARN
+	} else {
+		delete(out, kiro.HeaderProvider)
+		delete(out, kiro.HeaderProfileARN)
 	}
 	return out, nil
 }
@@ -228,6 +255,9 @@ func AuthHeaders(spec provider.Spec, acc account.Account) map[string]string {
 		out[headerAuthorization] = "Bearer " + acc.Credential.APIKey
 	}
 	for k, v := range acc.Headers {
+		if strings.EqualFold(k, kiro.HeaderProvider) || strings.EqualFold(k, kiro.HeaderProfileARN) {
+			continue
+		}
 		out[k] = v
 	}
 	return out

@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_script, enabled, created_at, updated_at, sort_order`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, enabled, created_at, updated_at, sort_order`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -46,10 +46,10 @@ type Input struct {
 	// Efforts 原始配置：空=跟随现状（Create 落 null 自动，Update 保留旧值），
 	// "null"=恢复自动，数组=显式声明。
 	Efforts json.RawMessage
-	// EffortScript 映射脚本：nil=跟随现状（Create 落空串，Update 保留旧值），
-	// 指向空串=清除脚本回内置映射，非空=新脚本（保存期语法预检）。
-	EffortScript *string
-	Enabled bool
+	// EffortFormat 写入格式：nil=跟随现状（Create 落空串=协议内置，Update
+	// 保留旧值），指向空串=回内置映射，非空=显式格式（保存期校验枚举）。
+	EffortFormat *string
+	Enabled      bool
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
@@ -70,7 +70,7 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortScript, m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
+			m.EffortFormat, m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -138,8 +138,8 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	if len(in.Efforts) == 0 {
 		in.Efforts = existing.Efforts
 	}
-	if in.EffortScript == nil {
-		in.EffortScript = &existing.EffortScript
+	if in.EffortFormat == nil {
+		in.EffortFormat = &existing.EffortFormat
 	}
 	m, err := r.validate(ctx, in)
 	if err != nil {
@@ -152,11 +152,11 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	persist := func() error {
 		tag, err := r.pool.Exec(ctx, `UPDATE models SET
 			account=$2, native_model=$3, protocol=$4, context_window=$5,
-			defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_script=$10,
+			defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
 			enabled=$11, updated_at=$12 WHERE id=$1`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortScript, m.Enabled, m.UpdatedAt)
+			m.EffortFormat, m.Enabled, m.UpdatedAt)
 		if err != nil {
 			return apperr.Wrap(apperr.StorageError, "update model", err)
 		}
@@ -260,14 +260,13 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if _, err := effort.Effective(efforts, nil); err != nil {
 		return Model{}, err
 	}
-	script := ""
-	if in.EffortScript != nil {
-		script = strings.TrimSpace(*in.EffortScript)
+	format := ""
+	if in.EffortFormat != nil {
+		format = strings.TrimSpace(*in.EffortFormat)
 	}
-	if script != "" {
-		if err := effort.ValidateScript(script); err != nil {
-			return Model{}, err
-		}
+	if !effort.ValidFormat(format) {
+		return Model{}, apperr.New(apperr.InvalidRequest,
+			"effort_format must be one of: chat_completions, chat_completions_skip_none, responses, anthropic, gemini")
 	}
 
 	return Model{
@@ -280,7 +279,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		Overrides:     overrides,
 		Compact:       compactCfg,
 		Efforts:       efforts,
-		EffortScript:  script,
+		EffortFormat:  format,
 		Enabled:       in.Enabled,
 	}, nil
 }
@@ -369,7 +368,7 @@ func scan(s scanner) (Model, error) {
 		efforts   []byte
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &compact, &efforts, &m.EffortScript, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
+		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)

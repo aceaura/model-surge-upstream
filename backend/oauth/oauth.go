@@ -40,7 +40,9 @@ const (
 	ClientVersion = "0.160.0"
 
 	refreshWindow = 5 * time.Minute
-	defaultTTL    = time.Hour
+	// kiroRefreshWindow 对齐 KiroaaS TOKEN_REFRESH_THRESHOLD=600s。
+	kiroRefreshWindow = 10 * time.Minute
+	defaultTTL        = time.Hour
 )
 
 // ErrNeedsReauth 是终态授权失败:refresh_token 过期/被复用/被吊销,
@@ -93,8 +95,8 @@ func newManager(store Store, client *http.Client, tokenURL, clientID string) *Ma
 // 形态属于接线错误,直接报错。
 func (m *Manager) AccessToken(ctx context.Context, acc account.Account) (string, error) {
 	cred := acc.Credential
-	if cred.Kind != provider.CredOAuthRefresh {
-		return "", fmt.Errorf("oauth: account %q credential kind %q is not %q", acc.Name, cred.Kind, provider.CredOAuthRefresh)
+	if cred.Kind != provider.CredOAuthRefresh && cred.Kind != provider.CredKiroRefresh {
+		return "", fmt.Errorf("oauth: account %q credential kind %q is not refreshable", acc.Name, cred.Kind)
 	}
 
 	m.mu.Lock()
@@ -102,9 +104,13 @@ func (m *Manager) AccessToken(ctx context.Context, acc account.Account) (string,
 		m.mu.Unlock()
 		return "", ErrNeedsReauth
 	}
+	window := refreshWindow
+	if cred.Kind == provider.CredKiroRefresh {
+		window = kiroRefreshWindow
+	}
 	fresh := cred.AccessToken != "" &&
 		cred.AccessToken != m.invalid[acc.Name] &&
-		time.Until(cred.Expiry) > refreshWindow
+		time.Until(cred.Expiry) > window
 	if fresh {
 		m.mu.Unlock()
 		return cred.AccessToken, nil
@@ -164,6 +170,9 @@ type tokenResponse struct {
 }
 
 func (m *Manager) refresh(ctx context.Context, acc account.Account) (string, error) {
+	if acc.Credential.Kind == provider.CredKiroRefresh {
+		return m.refreshKiro(ctx, acc)
+	}
 	// form 编码:sub2api/new-api/cc-switch 三家生产实现一致,JSON 编码未见实证。
 	form := url.Values{
 		"grant_type":    {"refresh_token"},

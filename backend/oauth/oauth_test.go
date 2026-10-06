@@ -50,7 +50,7 @@ func oauthCred(accessToken string, expiry time.Time) credential.Credential {
 }
 
 func accWith(cred credential.Credential) account.Account {
-	return account.Account{Name: "a1", ProviderID: "openai-codex", Credential: cred}
+	return account.Account{Name: "a1", ProviderID: "openai/codex", Credential: cred}
 }
 
 // tokenServer 记录请求数并按脚本应答。

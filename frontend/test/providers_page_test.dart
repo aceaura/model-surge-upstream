@@ -17,7 +17,7 @@ ApiClient fakeClient() => ApiClient(
       jsonEncode({
         'providers': [
           {
-            'id': 'kimi',
+            'id': 'kimi/coding',
             'display_name': 'Moonshot Kimi',
             'website': 'https://www.kimi.com',
             'base_url': 'https://api.kimi.com/coding',
@@ -28,7 +28,7 @@ ApiClient fakeClient() => ApiClient(
             'region': 'Global',
           },
           {
-            'id': 'ark',
+            'id': 'ark-cn/api',
             'display_name': 'Volcengine Ark',
             'website': 'https://console.volcengine.com/ark',
             'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
@@ -39,7 +39,7 @@ ApiClient fakeClient() => ApiClient(
             'region': 'CN',
           },
           {
-            'id': 'openai',
+            'id': 'openai/api',
             'display_name': 'OpenAI',
             'website': 'https://openai.com',
             'base_url': 'https://api.openai.com',
@@ -58,6 +58,41 @@ ApiClient fakeClient() => ApiClient(
 );
 
 void main() {
+  testWidgets('Kiro displays subscription, protocols, credential label and provider logo',
+      (tester) async {
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((_) async => http.Response(jsonEncode({
+        'providers': [{
+          'id': 'kiro',
+          'display_name': 'Kiro',
+          'website': 'https://kiro.dev',
+          'base_url': 'https://q.us-east-1.amazonaws.com',
+          'protocols': ['anthropic', 'chat_completions'],
+          'auth': 'bearer',
+          'credential': 'kiro_refresh',
+          'billing': 'subscription',
+          'region': 'Global',
+        }],
+      }), 200, headers: {'content-type': 'application/json'})),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(body: ProvidersPage(client: client, onOpenSettings: () {})),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Kiro'), findsOneWidget);
+    expect(find.text('kiro'), findsOneWidget);
+    expect(find.text('订阅 · 全球'), findsOneWidget);
+    expect(find.text('anthropic, chat_completions'), findsOneWidget);
+    expect(find.text('Kiro 登录态 (Desktop / SSO)'), findsOneWidget);
+    final logo = tester.widget<Image>(find.byType(Image));
+    expect((logo.image as AssetImage).assetName, 'assets/providers/kiro.png');
+    expect(find.text('K'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('百炼订阅中国版显示厂商、端点与 SVG Logo', (tester) async {
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -67,7 +102,7 @@ void main() {
           jsonEncode({
             'providers': [
               {
-                'id': 'bailian',
+                'id': 'bailian-cn/token-plan',
                 'display_name': 'Aliyun Bailian',
                 'website':
                     'https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal',
@@ -78,6 +113,7 @@ void main() {
                 'credential': 'api_key',
                 'billing': 'subscription',
                 'region': 'CN',
+                'plan': 'Token Plan',
               },
             ],
           }),
@@ -96,8 +132,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Aliyun Bailian'), findsOneWidget);
-    expect(find.text('订阅 · 中国'), findsOneWidget);
-    expect(find.text('bailian'), findsOneWidget);
+    expect(find.text('订阅 · 中国 · Token Plan'), findsOneWidget);
+    expect(find.text('服务类型'), findsOneWidget);
+    expect(find.widgetWithText(SelectableText, 'Token Plan'), findsOneWidget);
+    expect(find.text('bailian-cn/token-plan'), findsOneWidget);
     expect(
       find.text(
         'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
@@ -136,13 +174,17 @@ void main() {
     expect(find.text('计费模式'), findsNothing, reason: '独立属性行已被类型签取代');
     expect(find.text('服务区域'), findsNothing);
 
-    // 缩写标签就是 provider id,不拼任何区域后缀(区域由类型签承载)
-    expect(find.text('kimi'), findsOneWidget);
-    expect(find.text('ark'), findsOneWidget, reason: 'CN 区域也不加 -cn 后缀');
-    expect(find.textContaining('-CN'), findsNothing);
-    expect(find.textContaining('-cn'), findsNothing, reason: '分组形态下名字一律不带区域后缀');
+    // 缩写标签就是 provider id:厂商[-区域]/服务路径式,Global 省略区域,
+    // CN 带 -cn 段,按量计费标 /api
+    expect(find.text('kimi/coding'), findsOneWidget);
+    expect(find.text('ark-cn/api'), findsOneWidget, reason: 'CN 区域在 id 里带 -cn 段');
+    expect(find.text('openai/api'), findsOneWidget);
+    expect(find.textContaining('-CN'), findsNothing, reason: '区域段一律小写');
 
-    // 属性行按节下发(官网/请求地址每节各一份)
+    // 属性行按节下发(官网/请求地址每节各一份);服务类型行对无真实
+    // 服务类型(Standard 占位/空)的规格隐藏
+    expect(find.text('服务类型'), findsNothing);
+    expect(find.widgetWithText(SelectableText, '—'), findsNothing);
     expect(find.text('官网'), findsNWidgets(3));
     expect(find.text('请求地址'), findsNWidgets(3));
     expect(find.text('额度查询'), findsNothing, reason: '额度查询由账号脚本配置决定,不是供应商的属性');
@@ -159,7 +201,7 @@ void main() {
           jsonEncode({
             'providers': [
               {
-                'id': 'kimi-cn',
+                'id': 'kimi-cn/api',
                 'display_name': 'Moonshot Kimi',
                 'website': 'https://platform.moonshot.cn',
                 'base_url': 'https://api.moonshot.cn/v1',
@@ -170,7 +212,7 @@ void main() {
                 'region': 'CN',
               },
               {
-                'id': 'kimi',
+                'id': 'kimi/coding',
                 'display_name': 'Moonshot Kimi',
                 'website': 'https://www.kimi.com',
                 'base_url': 'https://api.kimi.com/coding',
@@ -207,6 +249,73 @@ void main() {
     final subTop = tester.getTopLeft(find.text('订阅 · 全球')).dy;
     final paygoTop = tester.getTopLeft(find.text('按量计费 · 中国')).dy;
     expect(subTop, lessThan(paygoTop), reason: '组内订阅类型排在按量前面');
-    expect(find.text('kimi-cn'), findsOneWidget);
+    expect(find.text('kimi-cn/api'), findsOneWidget);
+    expect(find.text('服务类型'), findsNothing,
+        reason: '两条记录都无真实服务类型,该行隐藏');
+    expect(find.widgetWithText(SelectableText, '—'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('同厂商同计费同区域的多服务类型各成一节,类型签带类型名', (tester) async {
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'providers': [
+              {
+                'id': 'bailian-cn/token-plan',
+                'display_name': 'Aliyun Bailian',
+                'website': 'https://example.com/token-plan',
+                'base_url': 'https://token-plan.example.com',
+                'protocols': ['chat_completions'],
+                'auth': 'bearer',
+                'credential': 'api_key',
+                'billing': 'subscription',
+                'region': 'CN',
+                'plan': 'Token Plan',
+              },
+              {
+                'id': 'bailian-cn/coding-plan',
+                'display_name': 'Aliyun Bailian',
+                'website': 'https://example.com/coding-plan',
+                'base_url': 'https://coding-plan.example.com',
+                'protocols': ['anthropic'],
+                'auth': 'bearer',
+                'credential': 'api_key',
+                'billing': 'subscription',
+                'region': 'CN',
+                'plan': 'Coding Plan',
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: ProvidersPage(client: client, onOpenSettings: () {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Aliyun Bailian'), findsOneWidget,
+        reason: '两个服务类型并入一张厂商卡');
+    expect(find.text('订阅 · 中国 · Coding Plan'), findsOneWidget);
+    expect(find.text('订阅 · 中国 · Token Plan'), findsOneWidget);
+    expect(find.text('服务类型'), findsNWidgets(2));
+    expect(find.widgetWithText(SelectableText, 'Coding Plan'), findsOneWidget);
+    expect(find.widgetWithText(SelectableText, 'Token Plan'), findsOneWidget);
+    final codingTop =
+        tester.getTopLeft(find.text('订阅 · 中国 · Coding Plan')).dy;
+    final tokenTop =
+        tester.getTopLeft(find.text('订阅 · 中国 · Token Plan')).dy;
+    expect(codingTop, lessThan(tokenTop), reason: '组内服务类型按名排序');
   });
 }

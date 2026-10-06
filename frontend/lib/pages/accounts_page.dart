@@ -229,9 +229,9 @@ class _AccountsPageState extends State<AccountsPage> {
 
   void _openModels(Account account) => widget.onOpenModels(account);
 
-  /// 检测连通性(参考 CC Switch stream_check):GET 生效请求地址,拿到任意
-  /// HTTP 响应即「可达」——可达 ≠ 凭据正确,凭据与模型名的验证在模型页
-  /// 的模型级检测。结果用顶部提示框呈现,行内容不因此抖动。
+  /// 检测连通性:服务端用该账号下任一模型发模型级探针(带凭据、带原生
+  /// 模型名),判据与模型页一致——非 2xx 判失败,回答「能不能用」而不只是
+  /// 「能不能到」。结果用顶部提示框呈现,行内容不因此抖动。
   Future<void> _test(Account account) async {
     setState(() => _testing.add(account.name));
     try {
@@ -239,7 +239,7 @@ class _AccountsPageState extends State<AccountsPage> {
       if (!mounted) return;
       if (res.ok) {
         TopToast.show(context,
-            '账号 ${account.name} 可达 · HTTP ${res.statusCode} · ${res.latencyMs} ms');
+            '账号 ${account.name} 连通 · HTTP ${res.statusCode} · ${res.latencyMs} ms');
       } else {
         TopToast.show(context, '账号 ${account.name} 检测失败：${res.error}',
             error: true);
@@ -436,15 +436,14 @@ class _AccountsPageState extends State<AccountsPage> {
                 ),
               ),
               const SizedBox(width: 8),
-              // 行内额度摘要(CC Switch 式):提供商声明了额度接口或账号
-              // 启用了额度脚本才出现,加载后自动查询一次;脚本配了自动
-              // 间隔则按间隔自刷
+              // 行内额度摘要(CC Switch 式):提供商声明了内置额度查询才出现,
+              // 加载后自动查询一次;账号配了自动查询间隔则按间隔自刷
               QuotaInline(
                 client: widget.client,
                 accountName: a.name,
-                queryable: (spec?.quotaQueryable ?? false) ||
-                    (a.quotaScript?.active ?? false),
-                autoIntervalMinutes: a.quotaScript?.autoIntervalMinutes ?? 0,
+                queryable: (spec?.quotaQueryable ?? false) &&
+                    (a.quotaSettings?.quotaEnabled ?? true),
+                autoIntervalMinutes: a.quotaSettings?.autoIntervalMinutes ?? 0,
               ),
               const SizedBox(width: 16),
               if (_toggling.contains(a.name))

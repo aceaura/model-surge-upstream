@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aceaura/model-surge-upstream/backend/codex"
+	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -29,6 +30,63 @@ func target(protocol string) resolve.ResolvedTarget {
 		Protocol:    protocol,
 		BaseURL:     "https://up.example/api",
 		NativeModel: "native-1",
+	}
+}
+
+// 显式写入格式接管对话页选档:选定值按格式写顶层 reasoning_effort
+// (skip_none 下 none 删字段不落);未选档不动体(defaults 原样保留),
+// overrides 恒压选定档;通用底层不再顺手删厂商字段。
+func TestCompleteEffortFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name, selected, defaults, overrides, want string
+		wantAbsent                                bool
+	}{
+		{name: "missing", wantAbsent: true},
+		{name: "defaults kept", defaults: `{"reasoning_effort":"medium"}`, want: "medium"},
+		{name: "disabled drops field", selected: "none", defaults: `{"reasoning_effort":"medium"}`, wantAbsent: true},
+		{name: "low", selected: "low", want: "low"},
+		{name: "medium", selected: "medium", want: "medium"},
+		{name: "xhigh", selected: "xhigh", want: "xhigh"},
+		{name: "overrides win", overrides: `{"reasoning_effort":"xhigh"}`, want: "xhigh"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var got map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Error(err)
+				}
+				if tc.wantAbsent {
+					if _, exists := got["reasoning_effort"]; exists {
+						t.Errorf("none 应删字段不落: %v", got)
+					}
+				} else if got["reasoning_effort"] != tc.want {
+					t.Errorf("effort = %v, want %s", got["reasoning_effort"], tc.want)
+				}
+				if got["thinking_budget"] != float64(1024) {
+					t.Errorf("thinking_budget 应原样透传: %v", got)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+			}))
+			defer up.Close()
+			tgt := target(provider.ProtocolChatCompletions)
+			tgt.BaseURL = up.URL
+			tgt.EffortFormat = effort.FormatChatCompletionsSkipNone
+			tgt.Efforts = []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}}
+			tgt.Defaults = json.RawMessage(tc.defaults)
+			tgt.Overrides = json.RawMessage(tc.overrides)
+			defaults := rawObject(tgt.Defaults)
+			defaults["thinking_budget"] = 1024
+			encoded, err := json.Marshal(defaults)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tgt.Defaults = encoded
+			_, _, status, err := Complete(context.Background(), tgt, "", tc.selected, history())
+			if err != nil || status != http.StatusOK {
+				t.Fatalf("status = %d, err = %v", status, err)
+			}
+		})
 	}
 }
 

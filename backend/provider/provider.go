@@ -27,6 +27,7 @@ type CredentialKind string
 const (
 	CredAPIKey       CredentialKind = "api_key"
 	CredOAuthRefresh CredentialKind = "oauth_refresh"
+	CredKiroRefresh  CredentialKind = "kiro_refresh"
 )
 
 // Billing 计费模式判别式:订阅制按周期配额收费(如 Kimi For Coding),
@@ -44,6 +45,11 @@ const (
 	RegionCN     = "CN"
 	RegionGlobal = "Global"
 )
+
+// PlanStandard 是厂商只有一种服务类型时的统一标签:表单服务类型级
+// 对所有供应商渲染,这类厂商只有"标准"一个选项(自动落定、不可改)。
+// 订阅档位(如 ChatGPT Plus/Pro)不是服务类型,不拆变体。
+const PlanStandard = "Standard"
 
 // ResetRule 额度重置规律。
 type ResetRule string
@@ -79,17 +85,6 @@ const (
 	UnitPercent MeterUnit = "percent"
 )
 
-// QuotaAPI 额度查询接口声明。provider 未声明时 Spec.Quota 为 nil。
-// Kind/Unit/Reset 描述该端点主计量项的形态，作为解析结果的兜底：
-// 上游响应自带更精确的信息时以响应为准。
-type QuotaAPI struct {
-	Path   string    `json:"path"`
-	Method string    `json:"method"`
-	Kind   MeterKind `json:"kind"`
-	Unit   MeterUnit `json:"unit"`
-	Reset  ResetRule `json:"reset"`
-}
-
 // ModelsAPI 上游模型列举接口声明。provider 未声明时 Spec.Models 为 nil，
 // 表示该上游没有可用的列举端点（无此接口，或实测恒鉴权失败）。
 type ModelsAPI struct {
@@ -108,9 +103,12 @@ type Spec struct {
 	Billing     Billing        `json:"billing"`
 	// Region 服务区域(CN/Global 或厂商自定义分区),普通字符串:
 	// 值域开放,只强制非空。
-	Region string     `json:"region"`
-	Quota  *QuotaAPI  `json:"quota,omitempty"`
-	Models *ModelsAPI `json:"models,omitempty"`
+	Region string `json:"region"`
+	Plan   string `json:"plan,omitempty"`
+	// QuotaQueryable 表示该 provider 有内置的额度查询实现(quota 包按
+	// provider ID 自动整合)。
+	QuotaQueryable bool       `json:"quota_queryable,omitempty"`
+	Models         *ModelsAPI `json:"models,omitempty"`
 }
 
 func (s Spec) Supports(protocol string) bool {
@@ -151,9 +149,6 @@ func register(s Spec) {
 	}
 	if s.Region == "" {
 		panic(fmt.Sprintf("provider %q: region is required", s.ID))
-	}
-	if s.Quota != nil && (s.Quota.Kind == "" || s.Quota.Unit == "") {
-		panic(fmt.Sprintf("provider %q: quota must declare kind and unit", s.ID))
 	}
 	byID[s.ID] = len(specs)
 	specs = append(specs, s)

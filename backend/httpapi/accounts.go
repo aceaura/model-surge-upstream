@@ -11,26 +11,26 @@ import (
 )
 
 type accountRequest struct {
-	Name        string               `json:"name"`
-	ProviderID  string               `json:"provider_id"`
-	APIKey      string               `json:"api_key"`
-	Credential  json.RawMessage      `json:"credential"`
-	BaseURL     string               `json:"base_url"`
-	Headers     map[string]string    `json:"headers"`
-	QuotaScript *account.QuotaScript `json:"quota_script"`
-	Enabled     *bool                `json:"enabled"`
+	Name          string                 `json:"name"`
+	ProviderID    string                 `json:"provider_id"`
+	APIKey        string                 `json:"api_key"`
+	Credential    json.RawMessage        `json:"credential"`
+	BaseURL       string                 `json:"base_url"`
+	Headers       map[string]string      `json:"headers"`
+	QuotaSettings *account.QuotaSettings `json:"quota_settings"`
+	Enabled       *bool                  `json:"enabled"`
 }
 
 // input 把请求体转成仓储入参。凭据支持两种写法：完整 credential 对象，
 // 或只给 api_key（客户端常用的简写）。两者都不给表示保留原凭据。
 func (r accountRequest) input(name string) (account.Input, error) {
 	in := account.Input{
-		Name:        name,
-		ProviderID:  r.ProviderID,
-		BaseURL:     r.BaseURL,
-		Headers:     r.Headers,
-		QuotaScript: r.QuotaScript,
-		Enabled:     true,
+		Name:          name,
+		ProviderID:    r.ProviderID,
+		BaseURL:       r.BaseURL,
+		Headers:       r.Headers,
+		QuotaSettings: r.QuotaSettings,
+		Enabled:       true,
 	}
 	if r.Enabled != nil {
 		in.Enabled = *r.Enabled

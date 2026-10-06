@@ -22,9 +22,9 @@ type modelRequest struct {
 	Compact       json.RawMessage `json:"compact"`
 	// Efforts 推理档支持列表:null=自动(跟随上游声明),数组=显式声明;缺省不改现状。
 	Efforts json.RawMessage `json:"efforts"`
-	// EffortScript 档位映射脚本:缺省(null)不改现状,空串=清除回内置映射,
-	// 非空=新脚本(保存期语法预检)。
-	EffortScript *string `json:"effort_script"`
+	// EffortFormat effort 写入格式:缺省(null)不改现状,空串=协议内置映射,
+	// 非空=显式格式(effort.FormatXxx 枚举,保存期校验)。
+	EffortFormat *string `json:"effort_format"`
 	Enabled      *bool   `json:"enabled"`
 }
 
@@ -39,7 +39,7 @@ func (r modelRequest) input(id string) model.Input {
 		Overrides:     r.Overrides,
 		Compact:       r.Compact,
 		Efforts:       r.Efforts,
-		EffortScript:  r.EffortScript,
+		EffortFormat:  r.EffortFormat,
 		Enabled:       true,
 	}
 	if r.Enabled != nil {

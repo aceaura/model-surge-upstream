@@ -32,18 +32,16 @@ func TestValidateRejects(t *testing.T) {
 		in   Input
 		code apperr.Code
 	}{
-		"empty name":       {Input{ProviderID: "kimi", Credential: apiKey("sk-x-secret")}, apperr.InvalidRequest},
+		"empty name":       {Input{ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret")}, apperr.InvalidRequest},
 		"unknown provider": {Input{Name: "a", ProviderID: "nope", Credential: apiKey("sk-x-secret")}, apperr.InvalidProvider},
-		"empty credential": {Input{Name: "a", ProviderID: "kimi"}, apperr.InvalidCredential},
-		"blank api key":    {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("  ")}, apperr.InvalidCredential},
-		"bad base url":     {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"), BaseURL: "moonshot.cn"}, apperr.InvalidRequest},
-		"mismatched kind":  {Input{Name: "a", ProviderID: "kimi", Credential: credential.Credential{Kind: "oauth_refresh"}}, apperr.InvalidCredential},
-		"script var reserved name": {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
-			QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"apiKey": "override"}}}, apperr.InvalidRequest},
-		"script var bad identifier": {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
-			QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"1bad": "v"}}}, apperr.InvalidRequest},
-		"script var blank name": {Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
-			QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"": "v"}}}, apperr.InvalidRequest},
+		"empty credential": {Input{Name: "a", ProviderID: "kimi/coding"}, apperr.InvalidCredential},
+		"blank api key":    {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("  ")}, apperr.InvalidCredential},
+		"bad base url":     {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"), BaseURL: "moonshot.cn"}, apperr.InvalidRequest},
+		"mismatched kind":  {Input{Name: "a", ProviderID: "kimi/coding", Credential: credential.Credential{Kind: "oauth_refresh"}}, apperr.InvalidCredential},
+		"auto interval out of range": {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"),
+			QuotaSettings: &QuotaSettings{AutoIntervalMinutes: 1441}}, apperr.InvalidRequest},
+		"stop interval negative": {Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"),
+			QuotaSettings: &QuotaSettings{StopIntervalMinutes: -1}}, apperr.InvalidRequest},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -59,7 +57,7 @@ func TestValidateRejects(t *testing.T) {
 }
 
 func TestValidateNormalizes(t *testing.T) {
-	acc, err := validate(Input{Name: "  kimi-1 ", ProviderID: "kimi", Credential: apiKey("sk-x-secret"), BaseURL: "https://gw.example.com/"})
+	acc, err := validate(Input{Name: "  kimi-1 ", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"), BaseURL: "https://gw.example.com/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,24 +72,102 @@ func TestValidateNormalizes(t *testing.T) {
 	}
 }
 
-func TestValidateScriptVariablesAccepted(t *testing.T) {
-	acc, err := validate(Input{Name: "a", ProviderID: "kimi", Credential: apiKey("sk-x-secret"),
-		QuotaScript: &QuotaScript{Code: "({})", Variables: map[string]string{"web_token": "abc", "_x": "1"}}})
+func TestValidateQuotaSettingsAccepted(t *testing.T) {
+	acc, err := validate(Input{Name: "a", ProviderID: "kimi/coding", Credential: apiKey("sk-x-secret"),
+		QuotaSettings: &QuotaSettings{AutoIntervalMinutes: 5, StopIntervalMinutes: 8}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(acc.QuotaScript.Variables) != 2 || acc.QuotaScript.Variables["web_token"] != "abc" {
-		t.Errorf("variables = %+v", acc.QuotaScript.Variables)
+	if acc.QuotaSettings.AutoIntervalMinutes != 5 || acc.QuotaSettings.StopIntervalMinutes != 8 {
+		t.Errorf("quota_settings = %+v", acc.QuotaSettings)
 	}
 }
 
 func TestEffectiveBaseURL(t *testing.T) {
-	spec, _ := provider.Get("kimi")
+	spec, _ := provider.Get("kimi/coding")
 	if got := (Account{}).EffectiveBaseURL(spec); got != spec.BaseURL {
 		t.Errorf("empty override should fall back to provider default, got %q", got)
 	}
 	if got := (Account{BaseURL: "https://gw"}).EffectiveBaseURL(spec); got != "https://gw" {
 		t.Errorf("override should win, got %q", got)
+	}
+}
+
+func TestKiroEffectiveBaseURL(t *testing.T) {
+	spec, _ := provider.Get("kiro")
+	acc := Account{Credential: credential.Credential{Region: "us-east-1", ProfileARN: "arn:aws:codewhisperer:eu-central-1:123:profile/test"}}
+	if got := acc.EffectiveBaseURL(spec); got != "https://runtime.eu-central-1.kiro.dev" {
+		t.Fatalf("effective base = %q", got)
+	}
+	acc.BaseURL = spec.BaseURL
+	acc.Credential.APIRegion = "eu-west-1"
+	if got := acc.EffectiveBaseURL(spec); got != "https://runtime.eu-west-1.kiro.dev" {
+		t.Fatalf("default form URL must follow account API region: %q", got)
+	}
+	acc.Credential.ProfileARN = ""
+	acc.BaseURL = spec.BaseURL
+	if got := acc.EffectiveBaseURL(spec); got != "https://q.eu-west-1.amazonaws.com" {
+		t.Fatalf("Builder ID fallback = %q", got)
+	}
+	acc.BaseURL = "https://runtime.ap-southeast-1.kiro.dev/"
+	if got := acc.EffectiveBaseURL(spec); got != "https://q.ap-southeast-1.amazonaws.com" {
+		t.Fatalf("explicit runtime fallback = %q", got)
+	}
+	acc.BaseURL = "http://localhost:9001"
+	if got := acc.EffectiveBaseURL(spec); got != acc.BaseURL {
+		t.Fatalf("custom base URL lost: %q", got)
+	}
+}
+
+func TestMergeKiroCredential(t *testing.T) {
+	existing := credential.Credential{Kind: provider.CredKiroRefresh, RefreshToken: "rt", AccessToken: "at", Expiry: time.Now().Add(time.Hour), Region: "us-east-1", ClientID: "id", ClientSecret: "secret"}
+	in := credential.Credential{Kind: provider.CredKiroRefresh, Region: "us-east-1", ClientID: "id"}
+	got := mergeKiroCredential(in, existing)
+	if got.RefreshToken != "rt" || got.AccessToken != "at" || got.ClientSecret != "secret" {
+		t.Fatal("blank secrets must preserve login state for unchanged registration")
+	}
+	in.Region = "eu-west-1"
+	if got := mergeKiroCredential(in, existing); got.AccessToken != "" || !got.Expiry.IsZero() {
+		t.Fatal("authentication region change must discard old access token")
+	}
+	in.Region = "us-east-1"
+	in.ClientID = "new-registration"
+	if got := mergeKiroCredential(in, existing); got.ClientSecret != "" || got.AccessToken != "" {
+		t.Fatal("new registration must not reuse old registration secret")
+	}
+	in.ClientID = ""
+	if got := mergeKiroCredential(in, existing); got.ClientSecret != "" || got.AccessToken != "" {
+		t.Fatal("switching to Desktop must remove SSO registration")
+	}
+}
+
+func TestKiroCredentialUpdateRoundTrip(t *testing.T) {
+	r := newRepo(t)
+	ctx := context.Background()
+	cred := credential.Credential{Kind: provider.CredKiroRefresh, RefreshToken: "rt-original", ClientID: "id", ClientSecret: "secret", Region: "us-east-1", ProfileARN: "arn:aws:codewhisperer:us-east-1:123:profile/test"}
+	acc, err := r.Create(ctx, Input{Name: "kiro-1", ProviderID: "kiro", Credential: cred, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc.View().Credential.ClientSecret != "***" {
+		t.Fatal("SSO secret must be masked")
+	}
+	cred.AccessToken, cred.Expiry, cred.RefreshToken = "at-live", time.Now().Add(time.Hour), "rt-rotated"
+	if err := r.UpdateCredential(ctx, acc.Name, cred); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := r.Update(ctx, Input{Name: acc.Name, ProviderID: "kiro", Credential: credential.Credential{
+		Kind: provider.CredKiroRefresh, ClientID: "id", Region: "us-east-1", ProfileARN: cred.ProfileARN, APIRegion: "eu-central-1",
+	}, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Credential.RefreshToken != "rt-rotated" || updated.Credential.AccessToken != "at-live" || updated.Credential.ClientSecret != "secret" || updated.Credential.APIRegion != "eu-central-1" {
+		t.Fatal("blank-secret edit lost rotated credentials or region change")
+	}
+	read, err := r.Get(ctx, acc.Name)
+	if err != nil || read.Credential != updated.Credential {
+		t.Fatalf("kiro credential persistence/cache mismatch: %v", err)
 	}
 }
 
@@ -106,7 +182,7 @@ func TestCreateAndGet(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, input("kimi-1", "kimi"))
+	created, err := repo.Create(ctx, input("kimi-1", "kimi/coding"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -118,7 +194,7 @@ func TestCreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.ProviderID != "kimi" || got.Credential.APIKey != created.Credential.APIKey {
+	if got.ProviderID != "kimi/coding" || got.Credential.APIKey != created.Credential.APIKey {
 		t.Errorf("round trip mismatch: %+v", got)
 	}
 	if !got.Enabled {
@@ -137,10 +213,10 @@ func TestGetNotFound(t *testing.T) {
 func TestCreateDuplicate(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
 		t.Fatal(err)
 	}
-	_, err := repo.Create(ctx, input("kimi-1", "deepseek"))
+	_, err := repo.Create(ctx, input("kimi-1", "deepseek/api"))
 	if !apperr.Is(err, apperr.AlreadyExists) {
 		t.Errorf("err = %v, want already_exists", err)
 	}
@@ -149,12 +225,12 @@ func TestCreateDuplicate(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	created, err := repo.Create(ctx, input("kimi-1", "kimi"))
+	created, err := repo.Create(ctx, input("kimi-1", "kimi/coding"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	in := input("kimi-1", "kimi")
+	in := input("kimi-1", "kimi/coding")
 	in.Enabled = false
 	in.BaseURL = "https://gw.example.com"
 	in.Headers = map[string]string{"x-trace": "on"}
@@ -184,7 +260,7 @@ func TestUpdate(t *testing.T) {
 func TestUpdateKeepsCredentialWhenOmitted(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	created, err := repo.Create(ctx, input("kimi-1", "kimi"))
+	created, err := repo.Create(ctx, input("kimi-1", "kimi/coding"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,10 +276,51 @@ func TestUpdateKeepsCredentialWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestMergeAPIKeyCredentialConsoleAccessToken(t *testing.T) {
+	existing := credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-existing", WebRefreshToken: "web-existing", ConsoleAccessToken: "console-existing"}
+	for _, blank := range []string{"", "   "} {
+		merged := mergeAPIKeyCredential(credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-new", ConsoleAccessToken: blank}, existing)
+		if merged.APIKey != "sk-new" || merged.ConsoleAccessToken != existing.ConsoleAccessToken || merged.WebRefreshToken != existing.WebRefreshToken {
+			t.Error("changing API key must preserve blank console/web tokens")
+		}
+	}
+	merged := mergeAPIKeyCredential(credential.Credential{Kind: provider.CredAPIKey, ConsoleAccessToken: "console-new"}, existing)
+	if merged.APIKey != existing.APIKey || merged.ConsoleAccessToken != "console-new" {
+		t.Error("changing console token must preserve blank API key")
+	}
+}
+
+func TestUpdateConsoleAccessToken(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+	in := input("bailian-1", "bailian-cn/token-plan")
+	in.Credential.ConsoleAccessToken = "console-initial"
+	if _, err := repo.Create(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	in.Credential = credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-new"}
+	updated, err := repo.Update(ctx, in)
+	if err != nil || updated.Credential.ConsoleAccessToken != "console-initial" {
+		t.Fatalf("blank console token should be preserved: %v", err)
+	}
+	in.Credential = credential.Credential{Kind: provider.CredAPIKey, ConsoleAccessToken: "console-new"}
+	if _, err := repo.Update(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	// List 直读 JSONB,不依赖账号缓存来验证持久化。
+	accounts, err := repo.List(ctx)
+	if err != nil || len(accounts) != 1 {
+		t.Fatalf("list persisted account: %v", err)
+	}
+	if accounts[0].Credential.APIKey != "sk-new" || accounts[0].Credential.ConsoleAccessToken != "console-new" {
+		t.Error("console token and API key must persist independently")
+	}
+}
+
 func TestUpdateMergesAPIKeyCredentialFields(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,8 +360,9 @@ func TestUpdateMergesAPIKeyCredentialFields(t *testing.T) {
 	}
 }
 
-func TestUpdateNotFound(t *testing.T) {	repo := newRepo(t)
-	_, err := repo.Update(context.Background(), input("ghost", "kimi"))
+func TestUpdateNotFound(t *testing.T) {
+	repo := newRepo(t)
+	_, err := repo.Update(context.Background(), input("ghost", "kimi/coding"))
 	if !apperr.Is(err, apperr.NotFound) {
 		t.Errorf("err = %v, want not_found", err)
 	}
@@ -255,7 +373,7 @@ func TestList(t *testing.T) {
 	repo := NewRepo(s.Pool(), testenv.Cache(t))
 	ctx := context.Background()
 	for _, name := range []string{"kimi-2", "kimi-1"} {
-		if _, err := repo.Create(ctx, input(name, "kimi")); err != nil {
+		if _, err := repo.Create(ctx, input(name, "kimi/coding")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -284,7 +402,7 @@ func TestReorder(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
 	for _, name := range []string{"a-1", "a-2", "a-3"} {
-		if _, err := repo.Create(ctx, input(name, "kimi")); err != nil {
+		if _, err := repo.Create(ctx, input(name, "kimi/coding")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -320,7 +438,7 @@ func TestReorder(t *testing.T) {
 func TestDeleteCascades(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"kimi-1/k2", "kimi-1/k3"} {
@@ -370,7 +488,7 @@ func TestGetBackfillsCache(t *testing.T) {
 	_ = backend.Del(ctx, key)
 
 	repo := NewRepo(s.Pool(), cache.New(backend, time.Minute))
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err := backend.Get(ctx, key); err != nil || len(raw) == 0 {
@@ -392,7 +510,7 @@ func TestDeleteInvalidatesCache(t *testing.T) {
 	ctx := context.Background()
 
 	repo := NewRepo(s.Pool(), cache.New(backend, time.Minute))
-	if _, err := repo.Create(ctx, input("kimi-1", "kimi")); err != nil {
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi/coding")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.Delete(ctx, "kimi-1"); err != nil {

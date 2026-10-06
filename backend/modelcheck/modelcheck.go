@@ -5,11 +5,13 @@
 // 的价值正在于验证凭据与模型名。检测只读：不合并 defaults/overrides、
 // 不进用量统计、不看模型与账号的启用状态（未启用也该能先测通）。
 //
-// 本包含两级刻意不同的判据，勿统一：
-//   - Check（模型级）：非 2xx 判失败——回答「能不能用」（凭据+模型名）。
-//   - Reachability（账号级）：拿到任意 HTTP 响应（含 401/403/404/5xx）即
-//     可达——回答「能不能到」。对齐 CC Switch stream_check 的「可达 ≠
-//     配置正确」：账号级不验鉴权，凭据对错归模型级管。
+// 本包含两个判据：
+//   - Check：非 2xx 判失败——回答「能不能用」（凭据+模型名）。账号级与
+//     模型级检测都走它（账号级取该账号下任一模型发探针）。
+//   - Reachability：拿到任意 HTTP 响应（含 401/403/404/5xx）即可达——只
+//     回答「能不能到」，不带鉴权。仅作账号下没有模型时的退路，因为那时
+//     没有可发的原生模型名。别拿它当账号级主路径：供应商根地址多数不接
+//     GET，裸可达探测恒回 403/404，看着像故障。
 package modelcheck
 
 import (
@@ -24,6 +26,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -79,7 +82,7 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 	}
 
 	start := time.Now()
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := (&http.Client{Transport: kiro.NewTransport(nil)}).Do(req)
 	latency := time.Since(start)
 	if err != nil {
 		// 网络级失败：DNS、拒连、TLS、超时都落到这里（CC Switch 同款判据）。
@@ -87,8 +90,11 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 			Error: "上游不可达：" + err.Error()}
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, bodyLimit))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, bodyLimit))
 	latency = time.Since(start)
+	if readErr != nil {
+		return Result{StatusCode: resp.StatusCode, LatencyMS: latency.Milliseconds(), Error: "读取上游响应失败：" + readErr.Error()}
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Result{

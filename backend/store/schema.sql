@@ -1,23 +1,53 @@
 CREATE TABLE IF NOT EXISTS accounts (
-    name         TEXT PRIMARY KEY,
-    provider_id  TEXT        NOT NULL,
-    credential   JSONB       NOT NULL,
-    base_url     TEXT        NOT NULL DEFAULT '',
-    headers      JSONB       NOT NULL DEFAULT '{}',
-    quota_script JSONB       NOT NULL DEFAULT '{}',
-    enabled      BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    name           TEXT PRIMARY KEY,
+    provider_id    TEXT        NOT NULL,
+    credential     JSONB       NOT NULL,
+    base_url       TEXT        NOT NULL DEFAULT '',
+    headers        JSONB       NOT NULL DEFAULT '{}',
+    quota_settings JSONB       NOT NULL DEFAULT '{}',
+    enabled        BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- 已存在的库补列:CREATE TABLE IF NOT EXISTS 不会改旧表结构。
--- quota_script 承载账号级额度查询脚本(enabled/code/timeout_seconds/
--- auto_interval_minutes),CC Switch usage_script 同款机制,'{}' 即未配置。
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS quota_script JSONB NOT NULL DEFAULT '{}';
+-- quota_settings 承载账号级额度查询节奏(auto_interval_minutes/
+-- stop_interval_minutes);查询本身走 provider 的 Go 内置实现,'{}' 即未配置。
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS quota_settings JSONB NOT NULL DEFAULT '{}';
 
 -- sort_order 承载账号页拖拽排序:小者在前。老库与新建账号同为 0 起,
 -- 并列时列表回落 name 序,即拖拽功能存在之前的显示顺序。
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+
+-- quota_script(账号级 JS 额度脚本)已废除:旧库把两个调度间隔迁入
+-- quota_settings 后整列删除,脚本代码/超时/自定义变量一并随列销毁。
+DO $$
+BEGIN
+    -- 必须限定 table_schema:测试用临时 schema 的同名旧表会让这里误判,
+    -- 随后 UPDATE 在当前 schema 上找不到该列而报错。
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = current_schema()
+                 AND table_name = 'accounts' AND column_name = 'quota_script') THEN
+        UPDATE accounts SET quota_settings = jsonb_build_object(
+            'auto_interval_minutes', COALESCE((quota_script->>'auto_interval_minutes')::int, 0),
+            'stop_interval_minutes', COALESCE((quota_script->>'stop_interval_minutes')::int, 0))
+        WHERE quota_script <> '{}'::jsonb;
+        ALTER TABLE accounts DROP COLUMN quota_script;
+    END IF;
+END $$;
+
+-- provider id 路径式改名(2026-10-06):厂商[-区域]/服务,Global 省略区域,
+-- 按量计费标 /api,订阅标套餐 slug;kiro 无可命名套餐保持裸 id。存量账号
+-- 的 provider_id 逐个改写,幂等可重复执行。
+UPDATE accounts SET provider_id = 'anthropic/api' WHERE provider_id = 'anthropic';
+UPDATE accounts SET provider_id = 'openai/api' WHERE provider_id = 'openai';
+UPDATE accounts SET provider_id = 'openai/codex' WHERE provider_id = 'openai-codex';
+UPDATE accounts SET provider_id = 'gemini/api' WHERE provider_id = 'gemini';
+UPDATE accounts SET provider_id = 'kimi/coding' WHERE provider_id = 'kimi';
+UPDATE accounts SET provider_id = 'ark/api' WHERE provider_id = 'ark';
+UPDATE accounts SET provider_id = 'deepseek/api' WHERE provider_id = 'deepseek';
+UPDATE accounts SET provider_id = 'bailian-cn/token-plan' WHERE provider_id = 'bailian';
+UPDATE accounts SET provider_id = 'bailian-cn/coding-plan' WHERE provider_id = 'bailian-coding';
 
 CREATE TABLE IF NOT EXISTS models (
     id             TEXT PRIMARY KEY,
@@ -41,11 +71,34 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS compact JSONB NOT NULL DEFAULT '{}';
 -- 数组=管理员显式声明（空数组即该模型不支持 effort）。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS efforts JSONB NOT NULL DEFAULT 'null';
 
--- effort_script 为档位映射脚本（JS 对象字面量 {apply: function(ctx){...}}）：
--- 空串=未配置走协议内置映射；非空即接管——apply 读元数据（数字档声明）与
--- 当前请求体，返回写入了 effort 的完整新请求体，承接「协议外壳+自家字段」
--- 的厂商差异（如 kimi 顶层 reasoning_effort）。
-ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_script TEXT NOT NULL DEFAULT '';
+-- effort_format 为 effort 写入格式(effort.FormatXxx 枚举):空串=协议内置
+-- 映射(按出站协议选字段);非空=显式格式压过协议外形,按目标协议命名
+-- (chat_completions/responses/anthropic/gemini,+chat_completions_skip_none
+-- 变体),承接「协议外壳+自家字段」的厂商差异(如 kimi 顶层 reasoning_effort)。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_format TEXT NOT NULL DEFAULT '';
+
+-- 存量 effort_script 迁移(2026-10-05 脚本配置收进通用底层):按官方文档
+-- 口径分流——百炼式脚本(none 时 delete 字段)归入 chat_completions
+-- (qwen3.8 官方:none 原样上发映射 enable_thinking=False;删字段反而吃
+-- 默认 xhigh=思考开到最大);kimi 式脚本(思考不可关,none 不落字段)
+-- 归入 chat_completions_skip_none。迁移后删列。
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'models' AND column_name = 'effort_script') THEN
+        UPDATE models SET effort_format = 'chat_completions'
+        WHERE effort_script LIKE '%delete%reasoning_effort%' AND effort_format = '';
+        UPDATE models SET effort_format = 'chat_completions_skip_none'
+        WHERE effort_script LIKE '%reasoning_effort%' AND effort_format = '';
+        ALTER TABLE models DROP COLUMN effort_script;
+    END IF;
+END $$;
+
+-- 格式枚举协议化改名(2026-10-06):旧字段式命名→协议式命名,值一一对应。
+UPDATE models SET effort_format = 'chat_completions' WHERE effort_format = 'reasoning_effort';
+UPDATE models SET effort_format = 'chat_completions_skip_none' WHERE effort_format = 'reasoning_effort_skip_none';
+UPDATE models SET effort_format = 'responses' WHERE effort_format = 'reasoning_object';
+UPDATE models SET effort_format = 'anthropic' WHERE effort_format = 'output_config';
+UPDATE models SET effort_format = 'gemini' WHERE effort_format = 'thinking_level';
 
 -- sort_order 承载模型页拖拽排序,语义同 accounts.sort_order:小者在前,
 -- 并列回落 id 序(即拖拽功能存在之前的显示顺序)。

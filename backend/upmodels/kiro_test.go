@@ -1,0 +1,256 @@
+package upmodels
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aceaura/model-surge-upstream/backend/account"
+	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
+	"github.com/aceaura/model-surge-upstream/backend/provider"
+)
+
+type kiroHeaderFunc func(context.Context, provider.Spec, account.Account) (map[string]string, error)
+
+func (f kiroHeaderFunc) HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error) {
+	return f(ctx, spec, acc)
+}
+
+func kiroAccount(base string) account.Account {
+	a := acct("kiro-1", kiro.ProviderID, base)
+	a.Credential.Kind = provider.CredKiroRefresh
+	a.Credential.RefreshToken = "refresh-token"
+	a.Credential.ProfileARN = "arn:aws:codewhisperer:eu-west-1:123:profile/test"
+	return a
+}
+
+func kiroTestHeaders(_ context.Context, _ provider.Spec, acc account.Account) (map[string]string, error) {
+	return kiro.Headers("live-token", acc.Credential.ProfileARN), nil
+}
+
+func TestKiroListAuthenticationPaginationAndRefresh(t *testing.T) {
+	calls := 0
+	freshProfile := "arn:aws:codewhisperer:eu-central-1:123:profile/fresh"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != "GET" || r.URL.Path != "/native/ListAvailableModels" {
+			t.Errorf("method/path = %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("origin") != "AI_EDITOR" || r.URL.Query().Get("profileArn") != freshProfile {
+			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer live-token" || r.Header.Get("X-Amz-User-Agent") == "" || r.Header.Get("Accept") != "application/json" {
+			t.Errorf("headers = %v", r.Header)
+		}
+		if r.Header.Get(kiro.HeaderProvider) != "" || r.Header.Get(kiro.HeaderProfileARN) != "" {
+			t.Error("internal routing headers leaked")
+		}
+		switch calls {
+		case 1:
+			if r.URL.Query().Get("nextToken") != "" {
+				t.Error("unexpected initial pagination token")
+			}
+			fmt.Fprint(w, `{"models":[{"modelId":"z","modelName":"Zed"}],"nextToken":"page +/2"}`)
+		case 2:
+			if r.URL.Query().Get("nextToken") != "page +/2" {
+				t.Errorf("pagination token = %q", r.URL.Query().Get("nextToken"))
+			}
+			// auto 属 HIDDEN_FROM_LIST:抓到了也不入列表。
+			fmt.Fprint(w, `{"models":[{"modelId":"a","modelName":"Alpha"},{"modelId":"z"},{"modelId":"auto"}]}`)
+		default:
+			t.Error("unexpected extra page")
+		}
+	}))
+	defer srv.Close()
+	accounts := fakeAccounts{"kiro-1": kiroAccount("http://127.0.0.1:1")}
+	l := New(accounts, time.Minute).WithHeaderSource(kiroHeaderFunc(func(ctx context.Context, spec provider.Spec, a account.Account) (map[string]string, error) {
+		a.Credential.ProfileARN = freshProfile
+		a.BaseURL = srv.URL + "/native"
+		accounts[a.Name] = a
+		return kiroTestHeaders(ctx, spec, a)
+	}))
+	// Production clients may carry the generation transport: flags must be
+	// removed before GET reaches that transport.
+	l.SetClient(&http.Client{Transport: kiro.NewTransport(srv.Client().Transport)})
+	got, err := l.List(context.Background(), "kiro-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{{ID: "a", DisplayName: "Alpha"}, {ID: "z", DisplayName: "Zed"}}
+	if !got.Queryable || !reflect.DeepEqual(got.Models, want) || calls != 2 {
+		t.Fatalf("report = %+v, calls = %d", got, calls)
+	}
+	if _, err := l.List(context.Background(), "kiro-1"); err != nil || calls != 2 {
+		t.Fatalf("cache failed: %v, calls=%d", err, calls)
+	}
+}
+
+func TestKiroModelsControlEndpoint(t *testing.T) {
+	spec := provider.Spec{BaseURL: kiro.DefaultBaseURL}
+	for _, tc := range []struct {
+		name, base, apiRegion, profile, ssoRegion, want string
+	}{
+		{"default does not use SSO", "", "", "", "eu-west-1", "https://q.us-east-1.amazonaws.com"},
+		{"profile region", "", "", "arn:aws:codewhisperer:eu-west-1:123:profile/x", "us-east-2", "https://q.eu-west-1.amazonaws.com"},
+		{"explicit API region", "", "ap-northeast-1", "arn:aws:codewhisperer:eu-west-1:123:profile/x", "", "https://q.ap-northeast-1.amazonaws.com"},
+		{"default override", kiro.DefaultBaseURL + "/", "eu-west-2", "", "", "https://q.eu-west-2.amazonaws.com"},
+		{"official runtime", "https://runtime.eu-central-1.kiro.dev/", "ap-northeast-1", "", "", "https://q.eu-central-1.amazonaws.com"},
+		{"Q unchanged", "https://q.us-west-2.amazonaws.com/", "eu-west-2", "", "", "https://q.us-west-2.amazonaws.com"},
+		{"custom unchanged", "http://127.0.0.1:9999/native/", "eu-west-2", "", "", "http://127.0.0.1:9999/native"},
+		{"lookalike unchanged", "https://runtime.us-east-1.kiro.dev.example.com", "", "", "", "https://runtime.us-east-1.kiro.dev.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := kiroAccount(tc.base)
+			a.Credential.APIRegion, a.Credential.ProfileARN, a.Credential.Region = tc.apiRegion, tc.profile, tc.ssoRegion
+			if got := kiroControlBase(spec, a); got != tc.want {
+				t.Errorf("base = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestKiroModelsFailures(t *testing.T) {
+	// account_manager.py:534-538: 拉取失败一律回退静态已知模型表。
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"HTTP failure", `{"models":[]}`, 401},
+		{"invalid JSON", `nope`, 200},
+		{"missing list", `{}`, 200},
+		{"null list", `{"models":null}`, 200},
+		{"wrong list type", `{"models":{}}`, 200},
+		{"bad next token", `{"models":[],"nextToken":123}`, 200},
+		{"oversized body", strings.Repeat(" ", bodyLimit+1), 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+			l := New(fakeAccounts{"kiro-1": kiroAccount(srv.URL)}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+			got, err := l.List(context.Background(), "kiro-1")
+			if err != nil {
+				t.Fatalf("expected fallback, error = %v", err)
+			}
+			if len(got.Models) != len(kiroFallbackModels) || got.Models[0].ID != "claude-sonnet-4" {
+				t.Fatalf("fallback = %v", got.Models)
+			}
+			if _, cached := l.lookup("kiro-1"); !cached {
+				t.Error("fallback report should be cached like a normal listing")
+			}
+		})
+	}
+	// 重复 token:已拿到合法(空)列表,翻页终止而非回退。
+	t.Run("repeated token", func(t *testing.T) {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			fmt.Fprint(w, `{"models":[],"nextToken":"same"}`)
+		}))
+		defer srv.Close()
+		l := New(fakeAccounts{"kiro-1": kiroAccount(srv.URL)}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+		got, err := l.List(context.Background(), "kiro-1")
+		if err != nil || len(got.Models) != 0 || calls != 2 {
+			t.Fatalf("report = %+v, err = %v, calls = %d", got, err, calls)
+		}
+	})
+}
+
+func TestKiroModelsPaginationLimit(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		fmt.Fprintf(w, `{"models":[],"nextToken":"%d"}`, calls)
+	}))
+	defer srv.Close()
+	l := New(fakeAccounts{"kiro-1": kiroAccount(srv.URL)}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+	got, err := l.List(context.Background(), "kiro-1")
+	if err != nil || len(got.Models) != 0 || calls != kiroMaxPages {
+		t.Fatalf("report = %+v, err = %v, calls = %d", got, err, calls)
+	}
+}
+
+func TestKiroModelsTokenWiring(t *testing.T) {
+	accounts := fakeAccounts{"kiro-1": kiroAccount("http://127.0.0.1:1")}
+	l := New(accounts, time.Minute)
+	if _, err := l.List(context.Background(), "kiro-1"); !apperr.Is(err, apperr.UpstreamUnavailable) || !strings.Contains(err.Error(), "header source") {
+		t.Fatalf("missing wiring: %v", err)
+	}
+	l.WithHeaderSource(kiroHeaderFunc(func(context.Context, provider.Spec, account.Account) (map[string]string, error) {
+		return kiro.Headers("", ""), nil
+	}))
+	if _, err := l.List(context.Background(), "kiro-1"); !apperr.Is(err, apperr.UpstreamUnavailable) || !strings.Contains(err.Error(), "access token") {
+		t.Fatalf("empty token: %v", err)
+	}
+	failure := errors.New("refresh failed")
+	l.WithHeaderSource(kiroHeaderFunc(func(context.Context, provider.Spec, account.Account) (map[string]string, error) { return nil, failure }))
+	if _, err := l.List(context.Background(), "kiro-1"); !errors.Is(err, failure) {
+		t.Fatalf("refresh failure: %v", err)
+	}
+	l.WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+	got, err := l.List(context.Background(), "kiro-1")
+	if err != nil || len(got.Models) != len(kiroFallbackModels) {
+		t.Fatalf("network failure should fall back: %v", err)
+	}
+}
+
+func TestKiroModelsEmptyListNoProfile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("profileArn") {
+			t.Error("empty profile must not be sent")
+		}
+		fmt.Fprint(w, `{"models":[]}`)
+	}))
+	defer srv.Close()
+	a := kiroAccount(srv.URL)
+	a.Credential.ProfileARN = ""
+	l := New(fakeAccounts{a.Name: a}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+	got, err := l.List(context.Background(), a.Name)
+	if err != nil || got.Models == nil || len(got.Models) != 0 {
+		t.Fatalf("empty list = %+v, error = %v", got, err)
+	}
+}
+
+type kiroRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f kiroRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestKiroModelsOfficialRequestURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/ListAvailableModels" {
+			t.Errorf("method/path = %s %s", r.Method, r.URL.Path)
+		}
+		fmt.Fprint(w, `{"models":[{"modelId":"actual-upstream-model"}]}`)
+	}))
+	defer srv.Close()
+	a := kiroAccount("")
+	a.Credential.APIRegion = "ap-northeast-1"
+	a.Credential.Region = "us-east-2"
+	l := New(fakeAccounts{a.Name: a}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+	l.SetClient(&http.Client{Transport: kiroRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Scheme != "https" || r.URL.Host != "q.ap-northeast-1.amazonaws.com" || r.URL.Query().Get("profileArn") != a.Credential.ProfileARN {
+			t.Errorf("official URL = %s", r.URL)
+		}
+		// Redirect only inside the test transport; production selection remains
+		// observable without making any request to the public service.
+		local, err := http.NewRequestWithContext(r.Context(), r.Method, srv.URL+r.URL.RequestURI(), nil)
+		if err != nil {
+			return nil, err
+		}
+		local.Header = r.Header.Clone()
+		return srv.Client().Transport.RoundTrip(local)
+	})})
+	got, err := l.List(context.Background(), a.Name)
+	if err != nil || len(got.Models) != 1 || got.Models[0].ID != "actual-upstream-model" {
+		t.Fatalf("report = %+v, err = %v", got, err)
+	}
+}

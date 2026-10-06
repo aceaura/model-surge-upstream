@@ -7,6 +7,30 @@
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  HWND existing_window = ::FindWindowW(
+      L"FLUTTER_RUNNER_WIN32_WINDOW",
+      L"ModelSurge Upstream \u914d\u7f6e\u4e2d\u5fc3");
+  if (!existing_window) {
+    existing_window = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"msu_admin");
+  }
+  if (existing_window) {
+    if (::IsIconic(existing_window)) {
+      ::ShowWindow(existing_window, SW_RESTORE);
+    }
+    ::SetForegroundWindow(existing_window);
+    return EXIT_SUCCESS;
+  }
+
+  HANDLE instance_mutex =
+      ::CreateMutexW(nullptr, FALSE, L"Local\\ModelSurgeUpstreamAdmin");
+  if (!instance_mutex) {
+    return EXIT_FAILURE;
+  }
+  if (::GetLastError() == ERROR_ALREADY_EXISTS) {
+    ::CloseHandle(instance_mutex);
+    return EXIT_SUCCESS;
+  }
+
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
@@ -28,6 +52,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"msu_admin", origin, size)) {
+    ::CloseHandle(instance_mutex);
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
@@ -39,5 +64,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
+  ::CloseHandle(instance_mutex);
   return EXIT_SUCCESS;
 }

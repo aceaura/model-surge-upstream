@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// DefaultIdleWindow 账号未配置停止查询间隔(quota_script
+// DefaultIdleWindow 账号未配置停止查询间隔(quota_settings
 // stop_interval_minutes)时的空闲窗口。
 const DefaultIdleWindow = 5 * time.Minute
 

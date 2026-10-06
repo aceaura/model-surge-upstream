@@ -49,7 +49,6 @@ type Resolver interface {
 
 type Quota interface {
 	Query(ctx context.Context, accountName string) (quota.Report, error)
-	TestScript(ctx context.Context, accountName, code string, timeoutSeconds int) (quota.Report, error)
 	// Cached 无视存活期回缓存报告,供 auto=1 轮询对空闲账号短路。
 	Cached(accountName string) (quota.Report, bool)
 	Forget(name string)
@@ -147,7 +146,6 @@ func NewServer(d Deps) http.Handler {
 	// 额度与上游模型清单同时挂在管理面：桌面客户端只持管理密钥，
 	// 不该为查这两项再配下发密钥。
 	admin.HandleFunc("GET /admin/accounts/{name}/quota", h.quota)
-	admin.HandleFunc("POST /admin/accounts/{name}/quota-test", h.testQuotaScript)
 	admin.HandleFunc("GET /admin/accounts/{name}/upstream-models", h.upstreamModels)
 	admin.HandleFunc("GET /admin/models", h.listModels)
 	admin.HandleFunc("POST /admin/models", h.createModel)

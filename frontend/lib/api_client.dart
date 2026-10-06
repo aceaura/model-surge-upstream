@@ -50,9 +50,9 @@ class ApiClient {
   static const _timeout = Duration(seconds: 15);
 
   Map<String, String> get _headers => {
-        'Authorization': 'Bearer $adminKey',
-        'Content-Type': 'application/json',
-      };
+    'Authorization': 'Bearer $adminKey',
+    'Content-Type': 'application/json',
+  };
 
   Uri _uri(String path, [Map<String, String>? query]) {
     final root = baseUrl.endsWith('/')
@@ -76,8 +76,7 @@ class ApiClient {
 
     http.Response response;
     try {
-      final streamed =
-          await _http.send(request).timeout(timeout ?? _timeout);
+      final streamed = await _http.send(request).timeout(timeout ?? _timeout);
       response = await http.Response.fromStream(streamed);
     } catch (e) {
       throw UnreachableException(baseUrl, '无法连接服务：$baseUrl');
@@ -107,7 +106,10 @@ class ApiClient {
       );
     } catch (_) {
       return ValidationException(
-          'unknown', '请求失败（HTTP ${response.statusCode}）', response.statusCode);
+        'unknown',
+        '请求失败（HTTP ${response.statusCode}）',
+        response.statusCode,
+      );
     }
   }
 
@@ -140,53 +142,62 @@ class ApiClient {
     required String apiKey,
     String? baseUrl,
     Map<String, String>? headers,
-    Map<String, dynamic>? quotaScript,
+    Map<String, dynamic>? quotaSettings,
     bool enabled = true,
     Map<String, dynamic>? credential,
   }) async {
-    final body = await _send('POST', '/admin/accounts', body: {
-      'name': name,
-      'provider_id': providerId,
-      // 完整 credential 对象(oauth_refresh 等)优先于 api_key 简写。
-      if (credential != null) 'credential': credential else 'api_key': apiKey,
-      'base_url': ?baseUrl,
-      'headers': ?headers,
-      'quota_script': ?quotaScript,
-      'enabled': enabled,
-    });
+    final body = await _send(
+      'POST',
+      '/admin/accounts',
+      body: {
+        'name': name,
+        'provider_id': providerId,
+        // 完整 credential 对象(oauth_refresh 等)优先于 api_key 简写。
+        if (credential != null) 'credential': credential else 'api_key': apiKey,
+        'base_url': ?baseUrl,
+        'headers': ?headers,
+        'quota_settings': ?quotaSettings,
+        'enabled': enabled,
+      },
+    );
     return Account.fromJson(body['account'] as Map<String, dynamic>);
   }
 
   /// apiKey 为空表示保留服务端已存的凭据。
   /// credential(oauth 登录态)非空时整体替换凭据,优先于 apiKey。
-  /// quotaScript 为 null 表示保留原脚本配置;传空 Map 表示清除。
+  /// quotaSettings 为 null 表示保留原配置;传空 Map 表示清除。
   Future<Account> updateAccount({
     required String name,
     String? providerId,
     String? apiKey,
     String? baseUrl,
     Map<String, String>? headers,
-    Map<String, dynamic>? quotaScript,
+    Map<String, dynamic>? quotaSettings,
     required bool enabled,
     Map<String, dynamic>? credential,
   }) async {
-    final body = await _send('PUT', '/admin/accounts/$name', body: {
-      'provider_id': ?providerId,
-      if (credential != null)
-        'credential': credential
-      else if (apiKey != null && apiKey.isNotEmpty)
-        'api_key': apiKey,
-      'base_url': ?baseUrl,
-      'headers': ?headers,
-      'quota_script': ?quotaScript,
-      'enabled': enabled,
-    });
+    final body = await _send(
+      'PUT',
+      '/admin/accounts/$name',
+      body: {
+        'provider_id': ?providerId,
+        if (credential != null)
+          'credential': credential
+        else if (apiKey != null && apiKey.isNotEmpty)
+          'api_key': apiKey,
+        'base_url': ?baseUrl,
+        'headers': ?headers,
+        'quota_settings': ?quotaSettings,
+        'enabled': enabled,
+      },
+    );
     return Account.fromJson(body['account'] as Map<String, dynamic>);
   }
 
   Future<List<String>> deleteAccount(String name) async {
     final body = await _send('DELETE', '/admin/accounts/$name');
-    return (body['deleted_models'] as List<dynamic>? ?? const []).cast<String>();
+    return (body['deleted_models'] as List<dynamic>? ?? const [])
+        .cast<String>();
   }
 
   /// 账号页拖拽排序落库:全量账号名的新顺序。
@@ -198,8 +209,11 @@ class ApiClient {
       _send('POST', '/admin/models/reorder', body: {'ids': ids});
 
   Future<List<UpstreamModel>> listModels({String? account}) async {
-    final body = await _send('GET', '/admin/models',
-        query: account == null ? null : {'account': account});
+    final body = await _send(
+      'GET',
+      '/admin/models',
+      query: account == null ? null : {'account': account},
+    );
     return (body['models'] as List<dynamic>? ?? const [])
         .map((e) => UpstreamModel.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -215,24 +229,28 @@ class ApiClient {
     required Map<String, dynamic> overrides,
     Map<String, dynamic>? compact,
     List<EffortEntry>? efforts,
-    String? effortScript,
+    String? effortFormat,
     bool enabled = true,
   }) async {
-    final body = await _send('POST', '/admin/models', body: {
-      'id': id,
-      'account': account,
-      'native_model': nativeModel,
-      'protocol': protocol,
-      'context_window': contextWindow,
-      'defaults': defaults,
-      'overrides': overrides,
-      'compact': ?compact,
-      // efforts 恒带键:数组=显式声明(空数组=不支持);null=自动仅存量兼容,表单不写。
-      'efforts': efforts?.map((e) => e.toJson()).toList(),
-      // 表单恒带键:空串=无脚本走内置映射;服务端对非空脚本做语法预检。
-      'effort_script': ?effortScript,
-      'enabled': enabled,
-    });
+    final body = await _send(
+      'POST',
+      '/admin/models',
+      body: {
+        'id': id,
+        'account': account,
+        'native_model': nativeModel,
+        'protocol': protocol,
+        'context_window': contextWindow,
+        'defaults': defaults,
+        'overrides': overrides,
+        'compact': ?compact,
+        // efforts 恒带键:数组=显式声明(空数组=不支持);null=自动仅存量兼容,表单不写。
+        'efforts': efforts?.map((e) => e.toJson()).toList(),
+        // 表单恒带键:空串=协议内置映射;非空=显式格式(服务端校验枚举)。
+        'effort_format': ?effortFormat,
+        'enabled': enabled,
+      },
+    );
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);
   }
 
@@ -246,22 +264,26 @@ class ApiClient {
     Map<String, dynamic>? overrides,
     Map<String, dynamic>? compact,
     List<EffortEntry>? efforts,
-    String? effortScript,
+    String? effortFormat,
     required bool enabled,
   }) async {
-    final body = await _send('PUT', '/admin/models/$id', body: {
-      'account': ?account,
-      'native_model': ?nativeModel,
-      'protocol': ?protocol,
-      'context_window': ?contextWindow,
-      'defaults': ?defaults,
-      'overrides': ?overrides,
-      'compact': ?compact,
-      // 表单总是知道目标形态(自动/显式),恒带键提交;null=恢复自动。
-      'efforts': efforts?.map((e) => e.toJson()).toList(),
-      'effort_script': ?effortScript,
-      'enabled': enabled,
-    });
+    final body = await _send(
+      'PUT',
+      '/admin/models/$id',
+      body: {
+        'account': ?account,
+        'native_model': ?nativeModel,
+        'protocol': ?protocol,
+        'context_window': ?contextWindow,
+        'defaults': ?defaults,
+        'overrides': ?overrides,
+        'compact': ?compact,
+        // 表单总是知道目标形态(自动/显式),恒带键提交;null=恢复自动。
+        'efforts': efforts?.map((e) => e.toJson()).toList(),
+        'effort_format': ?effortFormat,
+        'enabled': enabled,
+      },
+    );
     return UpstreamModel.fromJson(body['model'] as Map<String, dynamic>);
   }
 
@@ -278,9 +300,10 @@ class ApiClient {
     return ModelTestResult.fromJson(body);
   }
 
-  /// 检测账号生效请求地址的可达性。服务端恒回 200：不可达是检测结果
-  /// 而非请求错误。注意 ok 口径与 testModel 不同——拿到任意 HTTP 响应
-  /// 即 ok（可达 ≠ 凭据正确；CC Switch 同款语义）。超时同 testModel。
+  /// 检测账号连通性：服务端取该账号下任一模型发模型级探针，判据与
+  /// testModel 一致（带凭据、非 2xx 判失败）。账号下没有模型时退回根
+  /// 地址可达性探测。服务端恒回 200：失败是检测结果而非请求错误。
+  /// 超时同 testModel。
   Future<ModelTestResult> testAccount(String name) async {
     final body = await _send(
       'POST',
@@ -294,38 +317,15 @@ class ApiClient {
   /// 默认走缓存,自动轮询与首次加载不必每次都打上游。
   /// auto=true 标记这是定时轮询:账号空闲(窗口内无转发/对话请求)时
   /// 服务端直接回过缓存不打上游,直到下一次请求到达自动恢复。
-  Future<QuotaReport> queryQuota(String account,
-      {bool force = false, bool auto = false}) async {
+  Future<QuotaReport> queryQuota(
+    String account, {
+    bool force = false,
+    bool auto = false,
+  }) async {
     final params = [if (force) 'refresh=1', if (auto) 'auto=1'];
     final qs = params.isEmpty ? '' : '?${params.join('&')}';
     final body = await _send('GET', '/admin/accounts/$account/quota$qs');
     return QuotaReport.fromJson(body);
-  }
-
-  /// 用账号内置凭据试跑一段未落库的额度脚本(保存前验证代码与渠道
-  /// 端点)。服务端恒回 200:脚本/上游失败是试跑结果(ok=false+error)
-  /// 而非请求错误。超时放宽到 130s(脚本超时上限 120s + 余量)。
-  Future<(bool, String, QuotaReport?)> testQuotaScript(
-    String name, {
-    required String code,
-    int timeoutSeconds = 0,
-    Map<String, String> variables = const {},
-  }) async {
-    final body = await _send(
-      'POST',
-      '/admin/accounts/$name/quota-test',
-      body: {
-        'code': code,
-        'timeout_seconds': timeoutSeconds,
-        'variables': variables,
-      },
-      timeout: const Duration(seconds: 130),
-    );
-    final ok = body['ok'] as bool? ?? false;
-    final error = body['error'] as String? ?? '';
-    final raw = body['report'];
-    final report = raw is Map<String, dynamic> ? QuotaReport.fromJson(raw) : null;
-    return (ok, error, report);
   }
 
   Future<ProxySettings> getProxySettings() async {
@@ -339,18 +339,17 @@ class ApiClient {
     required int port,
     required bool lanOpen,
   }) async {
-    final body = await _send('PUT', '/admin/proxy-settings', body: {
-      'api_key': apiKey,
-      'port': port,
-      'lan_open': lanOpen,
-    });
+    final body = await _send(
+      'PUT',
+      '/admin/proxy-settings',
+      body: {'api_key': apiKey, 'port': port, 'lan_open': lanOpen},
+    );
     return ProxySettings.fromJson(body['settings'] as Map<String, dynamic>);
   }
 
   /// 增量拉取进程日志：since 之后（不含）的条目 + 服务端当前尾 seq。
   Future<(List<LogEntry>, int)> fetchLogs(int since) async {
-    final body =
-        await _send('GET', '/admin/logs', query: {'since': '$since'});
+    final body = await _send('GET', '/admin/logs', query: {'since': '$since'});
     final entries = (body['entries'] as List<dynamic>? ?? const [])
         .map((e) => LogEntry.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -456,9 +455,17 @@ class ApiClient {
     String? account,
     String? source,
   }) async {
-    final body = await _send('GET', '/admin/usage/summary',
-        query: _usageQuery(
-            start: start, end: end, model: model, account: account, source: source));
+    final body = await _send(
+      'GET',
+      '/admin/usage/summary',
+      query: _usageQuery(
+        start: start,
+        end: end,
+        model: model,
+        account: account,
+        source: source,
+      ),
+    );
     return UsageTotals.fromJson(body);
   }
 
@@ -471,14 +478,18 @@ class ApiClient {
     String? source,
     String? granularity,
   }) async {
-    final body = await _send('GET', '/admin/usage/trend',
-        query: _usageQuery(
-            start: start,
-            end: end,
-            model: model,
-            account: account,
-            source: source,
-            granularity: granularity));
+    final body = await _send(
+      'GET',
+      '/admin/usage/trend',
+      query: _usageQuery(
+        start: start,
+        end: end,
+        model: model,
+        account: account,
+        source: source,
+        granularity: granularity,
+      ),
+    );
     final g = body['granularity'] as String? ?? 'hour';
     final buckets = (body['buckets'] as List<dynamic>? ?? const [])
         .map((e) => UsageBucket.fromJson(e as Map<String, dynamic>))
@@ -493,9 +504,16 @@ class ApiClient {
     String? account,
     String? source,
   }) async {
-    final body = await _send('GET', '/admin/usage/models',
-        query: _usageQuery(
-            start: start, end: end, account: account, source: source));
+    final body = await _send(
+      'GET',
+      '/admin/usage/models',
+      query: _usageQuery(
+        start: start,
+        end: end,
+        account: account,
+        source: source,
+      ),
+    );
     return (body['models'] as List<dynamic>? ?? const [])
         .map((e) => UsageGroup.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -508,8 +526,11 @@ class ApiClient {
     String? model,
     String? source,
   }) async {
-    final body = await _send('GET', '/admin/usage/accounts',
-        query: _usageQuery(start: start, end: end, model: model, source: source));
+    final body = await _send(
+      'GET',
+      '/admin/usage/accounts',
+      query: _usageQuery(start: start, end: end, model: model, source: source),
+    );
     return (body['accounts'] as List<dynamic>? ?? const [])
         .map((e) => UsageGroup.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -525,15 +546,19 @@ class ApiClient {
     int limit = 50,
     int offset = 0,
   }) async {
-    final body = await _send('GET', '/admin/usage/logs',
-        query: _usageQuery(
-            start: start,
-            end: end,
-            model: model,
-            account: account,
-            source: source,
-            limit: limit,
-            offset: offset));
+    final body = await _send(
+      'GET',
+      '/admin/usage/logs',
+      query: _usageQuery(
+        start: start,
+        end: end,
+        model: model,
+        account: account,
+        source: source,
+        limit: limit,
+        offset: offset,
+      ),
+    );
     final logs = (body['logs'] as List<dynamic>? ?? const [])
         .map((e) => UsageLogRow.fromJson(e as Map<String, dynamic>))
         .toList();

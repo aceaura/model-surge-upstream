@@ -64,14 +64,14 @@ func (h handler) quota(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-// stopWindow 取账号配置的停止查询间隔(额度脚本 stop_interval_minutes),
-// 未配置或账号不可读走默认窗口。
+// stopWindow 取账号配置的停止查询间隔(quota_settings
+// stop_interval_minutes),未配置或账号不可读走默认窗口。
 func (h handler) stopWindow(r *http.Request, name string) time.Duration {
 	acc, err := h.Accounts.Get(r.Context(), name)
-	if err != nil || acc.QuotaScript == nil || acc.QuotaScript.StopIntervalMinutes <= 0 {
+	if err != nil || acc.QuotaSettings == nil || acc.QuotaSettings.StopIntervalMinutes <= 0 {
 		return activity.DefaultIdleWindow
 	}
-	return time.Duration(acc.QuotaScript.StopIntervalMinutes) * time.Minute
+	return time.Duration(acc.QuotaSettings.StopIntervalMinutes) * time.Minute
 }
 
 func (h handler) upstreamModels(w http.ResponseWriter, r *http.Request) {

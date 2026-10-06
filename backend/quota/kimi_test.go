@@ -24,7 +24,7 @@ func fakeJWT(exp time.Time) string {
 }
 
 func kimiAcct(name, baseURL, webToken string) account.Account {
-	a := acct(name, "kimi", baseURL)
+	a := acct(name, "kimi/coding", baseURL)
 	a.Credential = credential.Credential{
 		Kind:            provider.CredAPIKey,
 		APIKey:          "sk-abcdefghijkl",
@@ -66,65 +66,31 @@ func useKimiStubs(t *testing.T, refreshURL, statsURL string) {
 
 const kimiStatsOK = `{"subscriptionBalance":{"type":"SUBSCRIPTION","unit":"UNIT_CREDIT","amountUsedRatio":0.1515,"expireTime":"2099-10-27T00:00:00Z"}}`
 
-func TestKimiMonthlyAppendedOnScriptPath(t *testing.T) {
+func TestKimiMonthlyAppendedOnBuiltinPath(t *testing.T) {
 	refreshURL, statsURL, refreshCalls, statsCalls := kimiStubs(t,
-		`{"accessToken":"`+fakeJWT(time.Now().Add(time.Hour))+`"}`,
+		`{"access_token":"`+fakeJWT(time.Now().Add(time.Hour))+`"}`,
 		kimiStatsOK, http.StatusOK)
 	useKimiStubs(t, refreshURL, statsURL)
 
-	// 5h/7d 走账号脚本的桩上游,月度应追加为第三条计量。
+	// 5h/7d 走内置 usages 查询,月度追加为第二条计量。
 	usagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"usage":{"limit":"100","used":"70","remaining":"30","resetTime":"2099-01-01T00:00:00Z"}}`))
 	}))
 	defer usagesSrv.Close()
 
-	a := kimiAcct("kimi-1", usagesSrv.URL, "web-refresh-token")
-	a.QuotaScript = &account.QuotaScript{
-		Enabled: true,
-		Code: `({request:{url:"{{baseUrl}}/v1/usages"},
-			extractor:function(r){return {planName:"7天",used:Number(r.usage.used),total:100,unit:"%"}}})`,
-	}
-	q := New(fakeAccounts{"kimi-1": a}, time.Minute)
-
-	report, err := q.Query(context.Background(), "kimi-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Meters) != 2 {
-		t.Fatalf("meters = %+v, want 7天+本月", report.Meters)
-	}
-	m := report.Meters[1]
-	if m.Label != "本月" || m.Unit != provider.UnitPercent {
-		t.Errorf("monthly meter = %+v", m)
-	}
-	if m.Used == nil || *m.Used != 15.2 {
-		t.Errorf("used = %v, want 15.2 (0.1515 四舍五入到一位小数)", m.Used)
-	}
-	if m.ResetAt == nil || m.ResetAt.Year() != 2099 {
-		t.Errorf("reset_at = %v, want expireTime", m.ResetAt)
-	}
-	if atomic.LoadInt32(refreshCalls) != 1 || atomic.LoadInt32(statsCalls) != 1 {
-		t.Errorf("refresh/stats calls = %d/%d, want 1/1", *refreshCalls, *statsCalls)
-	}
-}
-
-func TestKimiMonthlyMakesUnqueryableAccountQueryable(t *testing.T) {
-	refreshURL, statsURL, _, _ := kimiStubs(t,
-		`{"access_token":"`+fakeJWT(time.Now().Add(time.Hour))+`"}`,
-		kimiStatsOK, http.StatusOK)
-	useKimiStubs(t, refreshURL, statsURL)
-
-	// kimi 内置规格未声明额度接口,无脚本只有网页 token 时月度单列。
-	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", "", "web-refresh-token")}, time.Minute)
+	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", usagesSrv.URL, "web-refresh-token")}, time.Minute)
 	report, err := q.Query(context.Background(), "kimi-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !report.Queryable {
-		t.Error("配了网页 token 的 kimi 账号应可查询")
+		t.Error("kimi 有内置额度查询,应可查询")
 	}
-	if len(report.Meters) != 1 || report.Meters[0].Label != "本月" {
-		t.Errorf("meters = %+v, want 本月 only", report.Meters)
+	if len(report.Meters) != 2 || report.Meters[0].Label != "7天" || report.Meters[1].Label != "本月" {
+		t.Errorf("meters = %+v, want 7天+本月", report.Meters)
+	}
+	if atomic.LoadInt32(refreshCalls) != 1 || atomic.LoadInt32(statsCalls) != 1 {
+		t.Errorf("refresh/stats calls = %d/%d, want 1/1", *refreshCalls, *statsCalls)
 	}
 }
 
@@ -132,16 +98,21 @@ func TestKimiMonthlySkippedWithoutWebToken(t *testing.T) {
 	refreshURL, statsURL, refreshCalls, statsCalls := kimiStubs(t, `{}`, kimiStatsOK, http.StatusOK)
 	useKimiStubs(t, refreshURL, statsURL)
 
-	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", "", "")}, time.Minute)
+	usagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"usage":{"limit":"100","used":"70","remaining":"30"}}`))
+	}))
+	defer usagesSrv.Close()
+
+	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", usagesSrv.URL, "")}, time.Minute)
 	report, err := q.Query(context.Background(), "kimi-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Queryable || len(report.Meters) != 0 {
-		t.Errorf("无网页 token 应维持不可查询: %+v", report)
+	if len(report.Meters) != 1 || report.Meters[0].Label != "7天" {
+		t.Errorf("无网页 token 应只有内置窗口计量: %+v", report)
 	}
 	if atomic.LoadInt32(refreshCalls) != 0 || atomic.LoadInt32(statsCalls) != 0 {
-		t.Error("无网页 token 不应触网")
+		t.Error("无网页 token 不应触发月度链")
 	}
 }
 
@@ -154,7 +125,7 @@ func TestKimiMonthlySkippedForOtherProviders(t *testing.T) {
 	}))
 	defer balanceSrv.Close()
 
-	a := acct("ds-1", "deepseek", balanceSrv.URL)
+	a := acct("ds-1", "deepseek/api", balanceSrv.URL)
 	a.Credential.WebRefreshToken = "web-refresh-token"
 	q := New(fakeAccounts{"ds-1": a}, time.Minute)
 	if _, err := q.Query(context.Background(), "ds-1"); err != nil {
@@ -175,14 +146,9 @@ func TestKimiMonthlyDegradesOnRefreshFailure(t *testing.T) {
 	defer usagesSrv.Close()
 
 	a := kimiAcct("kimi-1", usagesSrv.URL, "dead-token")
-	a.QuotaScript = &account.QuotaScript{
-		Enabled: true,
-		Code: `({request:{url:"{{baseUrl}}/v1/usages"},
-			extractor:function(r){return {planName:"7天",used:Number(r.usage.used),total:100,unit:"%"}}})`,
-	}
 	q := New(fakeAccounts{"kimi-1": a}, time.Minute)
 
-	// 刷新端点 200 但无 access_token:月度降级,5h/7d 主报告不受影响。
+	// 刷新端点 200 但无 access_token:月度降级,内置主报告不受影响。
 	report, err := q.Query(context.Background(), "kimi-1")
 	if err != nil {
 		t.Fatalf("月度失败不应拖垮主报告: %v", err)
@@ -198,8 +164,13 @@ func TestKimiAccessTokenCachedAcrossQueries(t *testing.T) {
 		kimiStatsOK, http.StatusOK)
 	useKimiStubs(t, refreshURL, statsURL)
 
+	usagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"usage":{"limit":"100","used":"70","remaining":"30"}}`))
+	}))
+	defer usagesSrv.Close()
+
 	// 报告缓存 TTL 调极短强制每次重查,refresh 仍应只换一次。
-	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", "", "web-refresh-token")}, time.Nanosecond)
+	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", usagesSrv.URL, "web-refresh-token")}, time.Nanosecond)
 	for i := 0; i < 3; i++ {
 		if _, err := q.Query(context.Background(), "kimi-1"); err != nil {
 			t.Fatal(err)
@@ -217,7 +188,12 @@ func TestKimiStats401DropsCachedToken(t *testing.T) {
 		`{"code":"unauthenticated"}`, http.StatusUnauthorized)
 	useKimiStubs(t, refreshURL, statsURL)
 
-	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", "", "web-refresh-token")}, time.Nanosecond)
+	usagesSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"usage":{"limit":"100","used":"70","remaining":"30"}}`))
+	}))
+	defer usagesSrv.Close()
+
+	q := New(fakeAccounts{"kimi-1": kimiAcct("kimi-1", usagesSrv.URL, "web-refresh-token")}, time.Nanosecond)
 	if _, err := q.Query(context.Background(), "kimi-1"); err != nil {
 		t.Fatal(err)
 	}

@@ -9,10 +9,11 @@ import 'package:msu_admin/api_client.dart';
 import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/account_form.dart';
 import 'package:msu_admin/theme.dart';
+import 'package:sqlite3/sqlite3.dart' hide Row;
 
 final providers = [
   ProviderSpec.fromJson(const {
-    'id': 'deepseek',
+    'id': 'deepseek/api',
     'display_name': 'DeepSeek',
     'website': 'https://platform.deepseek.com',
     'base_url': 'https://api.deepseek.com',
@@ -21,9 +22,10 @@ final providers = [
     'credential': 'api_key',
     'billing': 'paygo',
     'region': 'Global',
+    'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'openai',
+    'id': 'openai/api',
     'display_name': 'OpenAI',
     'website': 'https://openai.com',
     'base_url': 'https://api.openai.com',
@@ -32,9 +34,10 @@ final providers = [
     'credential': 'api_key',
     'billing': 'paygo',
     'region': 'Global',
+    'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'openai-codex',
+    'id': 'openai/codex',
     'display_name': 'OpenAI',
     'website': 'https://chatgpt.com',
     'base_url': 'https://chatgpt.com/backend-api/codex',
@@ -43,9 +46,10 @@ final providers = [
     'credential': 'oauth_refresh',
     'billing': 'subscription',
     'region': 'Global',
+    'plan': 'Standard',
   }),
   ProviderSpec.fromJson(const {
-    'id': 'kimi',
+    'id': 'kimi/coding',
     'display_name': 'Kimi',
     'website': 'https://www.kimi.com',
     'base_url': 'https://api.kimi.com',
@@ -54,13 +58,48 @@ final providers = [
     'credential': 'api_key',
     'billing': 'subscription',
     'region': 'CN',
+    'plan': 'Standard',
+  }),
+  ProviderSpec.fromJson(const {
+    'id': 'bailian-cn/token-plan',
+    'display_name': '百炼',
+    'base_url': 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode',
+    'protocols': ['chat_completions'],
+    'auth': 'bearer',
+    'credential': 'api_key',
+    'billing': 'subscription',
+    'region': 'CN',
+    'plan': 'Token Plan',
+    'quota_queryable': true,
+  }),
+  ProviderSpec.fromJson(const {
+    'id': 'bailian-cn/coding-plan',
+    'display_name': '百炼',
+    'base_url': 'https://coding-plan.example.com/v1',
+    'protocols': ['anthropic'],
+    'auth': 'bearer',
+    'credential': 'api_key',
+    'billing': 'subscription',
+    'region': 'CN',
+    'plan': 'Coding Plan',
+  }),
+  ProviderSpec.fromJson(const {
+    'id': 'kiro',
+    'display_name': 'Kiro',
+    'base_url': 'https://q.us-east-1.amazonaws.com',
+    'protocols': ['anthropic', 'chat_completions'],
+    'auth': 'bearer',
+    'credential': 'kiro_refresh',
+    'billing': 'subscription',
+    'region': 'Global',
+    'plan': 'Standard',
   }),
 ];
 
 /// oauth_refresh(订阅登录态)账号样本。
 final accountOAuth = Account.fromJson(const {
   'name': 'gpt-1',
-  'provider_id': 'openai-codex',
+  'provider_id': 'openai/codex',
   'credential': {
     'kind': 'oauth_refresh',
     'refresh_token': 'rt-a***z',
@@ -72,7 +111,7 @@ final accountOAuth = Account.fromJson(const {
 
 final account = Account.fromJson(const {
   'name': 'ds-1',
-  'provider_id': 'deepseek',
+  'provider_id': 'deepseek/api',
   'credential': {'kind': 'api_key', 'api_key': 'sk-d***efgh'},
   'base_url': 'https://ds.example.com',
   'headers': <String, dynamic>{'x-tenant': 'a'},
@@ -82,39 +121,56 @@ final account = Account.fromJson(const {
 /// 无 base_url 的账号:拷贝/编辑时请求地址应回落到提供商默认值。
 final accountNoOverride = Account.fromJson(const {
   'name': 'ds-2',
-  'provider_id': 'deepseek',
+  'provider_id': 'deepseek/api',
   'credential': {'kind': 'api_key', 'api_key': 'sk-x***y'},
   'base_url': '',
   'enabled': true,
 });
 
-/// 带额度脚本的账号:脚本区预填与清除语义的样本。
-final accountWithScript = Account.fromJson(const {
+/// 带额度查询节奏配置的账号:分栏预填与清除语义的样本。
+final accountWithQuota = Account.fromJson(const {
   'name': 'ds-3',
-  'provider_id': 'deepseek',
+  'provider_id': 'deepseek/api',
   'credential': {'kind': 'api_key', 'api_key': 'sk-s***t'},
   'base_url': '',
   'enabled': true,
-  'quota_script': {
-    'enabled': true,
-    'code': '({request: {url: "{{baseUrl}}/x"}, extractor: function(r) { return {remaining: r.b, unit: "USD"}; }})',
-    'timeout_seconds': 15,
+  'quota_settings': {
     'auto_interval_minutes': 5,
     'stop_interval_minutes': 8,
-    'variables': {'session': 's3cr3t', 'tenant': 'acme'},
   },
+});
+
+/// 关掉实时额度查询的账号:总开关回显与间隔置灰的样本。
+final accountQuotaDisabled = Account.fromJson(const {
+  'name': 'ds-4',
+  'provider_id': 'deepseek/api',
+  'credential': {'kind': 'api_key', 'api_key': 'sk-s***t'},
+  'base_url': '',
+  'enabled': true,
+  'quota_settings': {'enabled': false, 'auto_interval_minutes': 5},
 });
 
 /// kimi 账号样本:api_key 形态附带网页会话 token(月度额度凭据)。
 final accountKimi = Account.fromJson(const {
   'name': 'kimi-1',
-  'provider_id': 'kimi',
+  'provider_id': 'kimi/coding',
   'credential': {
     'kind': 'api_key',
     'api_key': 'sk-k***i',
     'web_refresh_token': 'eyJh***xyz',
   },
   'base_url': '',
+  'enabled': true,
+});
+
+final accountBailian = Account.fromJson(const {
+  'name': 'bailian-1',
+  'provider_id': 'bailian-cn/token-plan',
+  'credential': {
+    'kind': 'api_key',
+    'api_key': 'sk-b***n',
+    'console_access_token': '********',
+  },
   'enabled': true,
 });
 
@@ -134,7 +190,7 @@ ApiClient recordingClient(List<String> captured) => ApiClient(
             jsonEncode({
               'account': {
                 'name': 'a',
-                'provider_id': 'deepseek',
+                'provider_id': 'deepseek/api',
                 'credential': {'kind': 'api_key', 'api_key': 'k'},
                 'base_url': '',
                 'enabled': true,
@@ -166,43 +222,835 @@ Future<void> pumpForm(
   await tester.pumpAndSettle();
 }
 
-/// 额度脚本区默认折叠,展开并滚入视野。
-Future<void> expandScriptSection(WidgetTester tester) async {
-  final header = find.text('额度脚本');
-  await tester.ensureVisible(header);
-  await tester.tap(header);
-  await tester.pumpAndSettle();
-  await tester.ensureVisible(find.byKey(const ValueKey('quota-script-code')));
-  await tester.pumpAndSettle();
-}
-
 String fieldText(WidgetTester tester, String key) => tester
     .widget<TextFormField>(find.byKey(ValueKey(key)))
     .controller!
     .text;
 
-/// 三级级联从上至下逐级点选(厂商→计费模式→服务区域)。
+/// 级联从上至下逐级点选(厂商→计费模式→服务区域[→服务类型])。
+/// 服务类型级只对含真实类型(非 Standard 占位)的组渲染,不要给
+/// Standard 组传 plan(下拉不存在),只有多类型组才传 plan 做选择。
 Future<void> selectCascade(
   WidgetTester tester, {
   required String vendor,
   required String billing,
   required String region,
+  String? plan,
 }) async {
-  await tester.tap(find.byKey(const ValueKey('account-provider-vendor')));
-  await tester.pumpAndSettle();
-  await tester.tap(find.text(vendor).last);
-  await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const ValueKey('account-provider-billing')));
-  await tester.pumpAndSettle();
-  await tester.tap(find.text(billing).last);
-  await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const ValueKey('account-provider-region')));
-  await tester.pumpAndSettle();
-  await tester.tap(find.text(region).last);
-  await tester.pumpAndSettle();
+  Future<void> pick(String key, String option) async {
+    final field = find.byKey(ValueKey(key));
+    await tester.ensureVisible(field);
+    await tester.tap(field);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(option).last);
+    await tester.pumpAndSettle();
+  }
+
+  await pick('account-provider-vendor', vendor);
+  await pick('account-provider-billing', billing);
+  await pick('account-provider-region', region);
+  if (plan != null) {
+    await pick('account-provider-plan', plan);
+  }
 }
 
 void main() {
+  final accountKiro = Account.fromJson(const {
+    'name': 'kiro-1',
+    'provider_id': 'kiro',
+    'enabled': true,
+    'credential': {
+      'kind': 'kiro_refresh',
+      'refresh_token': '********',
+      'profile_arn': 'arn:profile:existing',
+      'region': 'eu-west-1',
+      'api_region': 'us-east-1',
+      'client_id': 'stored-client',
+      'client_secret': '********',
+    },
+  });
+
+  Directory useKiroTempHome() {
+    final home = Directory.systemTemp.createTempSync('msu-kiro-test');
+    debugKiroHomeOverride = home.path;
+    addTearDown(() {
+      debugKiroHomeOverride = null;
+      home.deleteSync(recursive: true);
+    });
+    return home;
+  }
+
+  File writeKiroCache(String name, Map<String, dynamic> json) {
+    final file = File('${kiroCacheDir()}${Platform.pathSeparator}$name');
+    file.parent.createSync(recursive: true);
+    file.writeAsStringSync(jsonEncode(json));
+    return file;
+  }
+
+  /// 在临时 home 的默认候选位置造 kiro-cli fixture 库(可写创建,
+  /// 导入路径必须只读)。kv 键值写入 auth_kv,state 键值写入 state 表。
+  File writeKiroCliDb(
+    Directory home,
+    Map<String, Map<String, dynamic>> kv, {
+    Map<String, Map<String, dynamic>> state = const {},
+  }) {
+    final file = File(
+        '${home.path}${Platform.pathSeparator}.local${Platform.pathSeparator}share'
+        '${Platform.pathSeparator}kiro-cli${Platform.pathSeparator}data.sqlite3');
+    file.parent.createSync(recursive: true);
+    final db = sqlite3.open(file.path);
+    db.execute('CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)');
+    db.execute('CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)');
+    for (final entry in kv.entries) {
+      db.execute('INSERT INTO auth_kv (key, value) VALUES (?, ?)',
+          [entry.key, jsonEncode(entry.value)]);
+    }
+    for (final entry in state.entries) {
+      db.execute('INSERT INTO state (key, value) VALUES (?, ?)',
+          [entry.key, jsonEncode(entry.value)]);
+    }
+    db.close();
+    return file;
+  }
+
+  Future<void> enterKiroField(WidgetTester tester, String key, String text) async {
+    final field = find.byKey(ValueKey(key));
+    await tester.ensureVisible(field);
+    await tester.enterText(field, text);
+  }
+
+  Future<void> clickKiroButton(WidgetTester tester, String key) async {
+    final button = find.byKey(ValueKey(key));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  }
+
+  test('Kiro account parses redacted fields with compatible defaults', () {
+    expect(accountKiro.credentialKind, 'kiro_refresh');
+    expect(accountKiro.maskedRefreshToken, '********');
+    expect(accountKiro.profileArn, 'arn:profile:existing');
+    expect(accountKiro.region, 'eu-west-1');
+    expect(accountKiro.apiRegion, 'us-east-1');
+    expect(accountKiro.clientId, 'stored-client');
+    expect(accountKiro.maskedClientSecret, '********');
+    final minimal = Account.fromJson({'name': 'minimal'});
+    expect(minimal.region, 'us-east-1');
+    expect(minimal.profileArn, isEmpty);
+    expect(minimal.clientId, isEmpty);
+    expect(minimal.maskedClientSecret, isEmpty);
+    expect(account.region, 'us-east-1');
+  });
+
+  test('Kiro parser supports Desktop and SSO camelCase credentials', () {
+    final desktop = parseKiroCredentialJson('{"refreshToken":" desktop-rt "}');
+    expect(desktop['kind'], 'kiro_refresh');
+    expect(desktop['refresh_token'], 'desktop-rt');
+    expect(desktop['profile_arn'], isEmpty);
+    expect(desktop['region'], 'us-east-1');
+    expect(desktop['client_id'], isEmpty);
+    final sso = parseKiroCredentialJson(jsonEncode({
+      'refreshToken': 'sso-rt',
+      'profileArn': 'arn:profile:new',
+      'region': 'eu-central-1',
+      'apiRegion': 'us-east-1',
+      'clientId': 'sso-client',
+      'clientSecret': 'sso-secret',
+      'accessToken': 'initial-access',
+      'expiresAt': '2030-01-01T02:00:00+02:00',
+    }));
+    expect(sso['profile_arn'], 'arn:profile:new');
+    expect(sso['region'], 'eu-central-1');
+    expect(sso['api_region'], 'us-east-1');
+    expect(sso['client_id'], 'sso-client');
+    expect(sso['client_secret'], 'sso-secret');
+    expect(sso['access_token'], 'initial-access');
+    expect(sso['expiry'], '2030-01-01T00:00:00.000Z');
+  });
+
+  test('Kiro parser rejects invalid JSON, missing refresh and incomplete SSO safely', () {
+    for (final text in [
+      'sensitive-invalid-json',
+      '[{"refreshToken":"sensitive-token"}]',
+      '{"accessToken":"sensitive-token"}',
+      '{"refreshToken":" "}',
+      '{"refreshToken":123}',
+      '{"refreshToken":"********"}',
+      '{"refreshToken":"bad token"}',
+      '{"refreshToken":"rt","clientId":"client"}',
+      '{"refreshToken":"rt","clientSecret":"sensitive-secret"}',
+      '{"refreshToken":"rt","expiresAt":"sensitive-date"}',
+      '{"refreshToken":"rt","profileArn":[]}',
+    ]) {
+      expect(() => parseKiroCredentialJson(text),
+          throwsA(isA<FormatException>().having(
+              (e) => e.toString(), 'sanitized error', isNot(contains('sensitive')))));
+    }
+  });
+
+  for (final sso in [false, true]) {
+    testWidgets('Kiro create submits ${sso ? 'SSO' : 'Desktop'} credential',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, client: recordingClient(captured));
+      await selectCascade(tester, vendor: 'Kiro', billing: '订阅', region: '全球');
+      expect(find.byKey(const ValueKey('account-api-key')), findsNothing);
+      expect(find.byKey(const ValueKey('account-account-id')), findsNothing);
+      expect(find.byKey(const ValueKey('oauth-autofill-cli')), findsNothing);
+      expect(find.byKey(const ValueKey('oauth-autofill-app')), findsNothing);
+      expect(fieldText(tester, 'account-auth-region'), 'us-east-1');
+      await enterKiroField(tester, 'account-name', 'kiro-new');
+      await enterKiroField(tester, 'account-refresh-token', ' rt-new ');
+      if (sso) {
+        await enterKiroField(tester, 'account-client-id', ' client-new ');
+        await enterKiroField(tester, 'account-client-secret', ' secret-new ');
+      }
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+      await tester.tap(find.widgetWithText(FilledButton, '创建'));
+      await tester.pumpAndSettle();
+      final body = jsonDecode(captured.single) as Map<String, dynamic>;
+      expect(body['provider_id'], 'kiro');
+      expect(body.containsKey('api_key'), isFalse);
+      expect(body['credential'], {
+        'kind': 'kiro_refresh',
+        'refresh_token': 'rt-new',
+        'profile_arn': '',
+        'region': 'us-east-1',
+        'api_region': '',
+        'client_id': sso ? 'client-new' : '',
+        'client_secret': sso ? 'secret-new' : '',
+      });
+    });
+  }
+
+  for (final missing in ['refresh', 'client-id', 'client-secret', 'masked-refresh']) {
+    testWidgets('Kiro create validates $missing', (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, copyFrom: accountKiro, client: recordingClient(captured));
+      await enterKiroField(tester, 'account-client-id', '');
+      if (missing != 'refresh') {
+        await enterKiroField(tester, 'account-refresh-token',
+            missing == 'masked-refresh' ? '********' : 'rt');
+      }
+      if (missing == 'client-id') {
+        await enterKiroField(tester, 'account-client-secret', 'secret');
+      } else if (missing == 'client-secret') {
+        await enterKiroField(tester, 'account-client-id', 'client');
+      }
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+      await tester.tap(find.widgetWithText(FilledButton, '创建'));
+      await tester.pumpAndSettle();
+      expect(captured, isEmpty);
+      expect(find.text(missing == 'refresh'
+          ? 'Refresh Token 不能为空'
+          : missing == 'masked-refresh'
+              ? '请填写有效凭据,不能使用脱敏星号'
+              : 'SSO Client ID 与 Client Secret 必须一起填写'), findsOneWidget);
+    });
+  }
+
+  testWidgets('Kiro edit secrets stay blank and pure-starred with independent eyes',
+      (tester) async {
+    await pumpForm(tester, editing: accountKiro);
+    expect(fieldText(tester, 'account-profile-arn'), 'arn:profile:existing');
+    expect(fieldText(tester, 'account-auth-region'), 'eu-west-1');
+    expect(fieldText(tester, 'account-api-region'), 'us-east-1');
+    expect(fieldText(tester, 'account-client-id'), 'stored-client');
+    for (final key in ['account-refresh-token', 'account-client-secret']) {
+      final finder = find.byKey(ValueKey(key));
+      final input = find.descendant(of: finder, matching: find.byType(TextField));
+      var field = tester.widget<TextField>(input);
+      expect(field.controller!.text, isEmpty);
+      expect(field.obscureText, isTrue);
+      expect(field.decoration!.hintText, '************');
+      await tester.ensureVisible(finder);
+      await tester.tap(find.descendant(of: finder, matching: find.byTooltip('显示')));
+      await tester.pump();
+      field = tester.widget<TextField>(input);
+      expect(field.obscureText, isFalse);
+      expect(field.decoration!.hintText, '************');
+      expect(field.controller!.text, isEmpty);
+    }
+  });
+
+  for (final change in ['none', 'region', 'profile', 'client', 'secret', 'refresh']) {
+    testWidgets('Kiro edit submits parameter changes and preserves blank secrets: $change',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
+      final changes = {
+        'region': ('account-auth-region', 'ap-southeast-1'),
+        'profile': ('account-profile-arn', 'arn:profile:changed'),
+        'client': ('account-client-id', 'changed-client'),
+        'secret': ('account-client-secret', 'changed-secret'),
+        'refresh': ('account-refresh-token', 'changed-refresh'),
+      };
+      if (changes.containsKey(change)) {
+        final (key, text) = changes[change]!;
+        await enterKiroField(tester, key, text);
+      }
+      if (change == 'client') {
+        await enterKiroField(tester, 'account-client-secret', 'new-client-secret');
+      }
+      await enterKiroField(tester, 'account-api-region', 'eu-central-1');
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      final body = jsonDecode(captured.single) as Map<String, dynamic>;
+      expect(body['credential'], {
+        'kind': 'kiro_refresh',
+        'refresh_token': change == 'refresh' ? 'changed-refresh' : '',
+        'profile_arn': change == 'profile' ? 'arn:profile:changed' : 'arn:profile:existing',
+        'region': change == 'region' ? 'ap-southeast-1' : 'eu-west-1',
+        'api_region': 'eu-central-1',
+        'client_id': change == 'client' ? 'changed-client' : 'stored-client',
+        'client_secret': change == 'secret'
+            ? 'changed-secret'
+            : change == 'client' ? 'new-client-secret' : '',
+      });
+      expect(body['credential'].toString(), isNot(contains('***')));
+    });
+  }
+
+  for (final clearClient in [false, true]) {
+    testWidgets('Kiro edit requires a new secret unless switching to Desktop: $clearClient',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
+      await enterKiroField(tester, 'account-client-id', clearClient ? '' : 'new-client');
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      if (clearClient) {
+        final credential = jsonDecode(captured.single)['credential'];
+        expect(credential['client_id'], isEmpty);
+        expect(credential['client_secret'], isEmpty);
+      } else {
+        expect(captured, isEmpty);
+        expect(find.text('SSO Client ID 与 Client Secret 必须一起填写'), findsOneWidget);
+      }
+    });
+  }
+
+  for (final field in ['account-refresh-token', 'account-auth-region',
+    'account-client-id', 'account-client-secret']) {
+    testWidgets('Kiro imported access token is discarded after changing $field',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
+      await enterKiroField(tester, 'kiro-credential-json', jsonEncode({
+        'refreshToken': 'import-refresh', 'clientId': 'import-client',
+        'clientSecret': 'import-secret', 'accessToken': 'import-access',
+        'expiresAt': '2030-01-01T00:00:00Z',
+      }));
+      await clickKiroButton(tester, 'kiro-import-json');
+      await enterKiroField(tester, field,
+          field == 'account-auth-region' ? 'eu-west-1' : 'changed');
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      final credential = jsonDecode(captured.single)['credential'] as Map;
+      expect(credential.containsKey('access_token'), isFalse);
+      expect(credential.containsKey('expiry'), isFalse);
+    });
+  }
+
+  test('Kiro local Desktop import reads only fixed cache and never writes', () {
+    final home = useKiroTempHome();
+    expect(kiroCacheDir(), [home.path, '.aws', 'sso', 'cache'].join(Platform.pathSeparator));
+    final file = writeKiroCache('kiro-auth-token.json', {'refreshToken': 'desktop-rt'});
+    final before = file.readAsStringSync();
+    writeKiroCache('unrelated.json', {'refreshToken': 'must-not-scan'});
+    final credential = loadKiroAppCredentials();
+    expect(credential['refresh_token'], 'desktop-rt');
+    expect(credential['region'], 'us-east-1');
+    expect(file.readAsStringSync(), before);
+    expect(debugCodexHomeOverride, isNull);
+    expect(debugBailianHomeOverride, isNull);
+  });
+
+  test('Kiro local SSO import matches hash registration with direct fields taking priority', () {
+    useKiroTempHome();
+    final token = writeKiroCache('kiro-auth-token.json', {
+      'refreshToken': 'sso-rt', 'clientIdHash': 'abc123', 'region': 'eu-west-1',
+    });
+    final registration = writeKiroCache('abc123.json', {
+      'clientId': 'registered-client', 'clientSecret': 'registered-secret',
+    });
+    writeKiroCache('other.json', {'clientId': 'wrong', 'clientSecret': 'wrong'});
+    final before = registration.readAsStringSync();
+    expect(loadKiroAppCredentials()['client_id'], 'registered-client');
+    expect(loadKiroAppCredentials()['client_secret'], 'registered-secret');
+    expect(loadKiroAppCredentials()['region'], 'eu-west-1');
+    token.writeAsStringSync(jsonEncode({
+      'refreshToken': 'sso-rt', 'clientIdHash': 'abc123',
+      'clientId': 'direct-client', 'clientSecret': 'direct-secret',
+    }));
+    expect(loadKiroAppCredentials()['client_id'], 'direct-client');
+    expect(loadKiroAppCredentials()['client_secret'], 'direct-secret');
+    expect(registration.readAsStringSync(), before);
+  });
+
+  test('Kiro local import rejects unsafe hashes without reading external files', () {
+    final home = useKiroTempHome();
+    final outside = File('${home.path}${Platform.pathSeparator}outside.json')
+      ..writeAsStringSync('{"clientId":"outside","clientSecret":"outside-secret"}');
+    for (final hash in <dynamic>[
+      '../../outside', r'..\..\outside', '/tmp/outside', r'C:\outside',
+      'abc/def', r'abc\def', '.', '', '%2e%2e', 12, 'a' * 129,
+    ]) {
+      final text = jsonEncode({'refreshToken': 'rt', 'clientIdHash': hash});
+      expect(() => importKiroCredentialJson(text), throwsA(isA<FormatException>()));
+      writeKiroCache('kiro-auth-token.json', {'refreshToken': 'rt', 'clientIdHash': hash});
+      expect(() => loadKiroAppCredentials(), throwsA(isA<FormatException>().having(
+          (e) => e.toString(), 'no external content', isNot(contains('outside-secret')))));
+    }
+    expect(outside.readAsStringSync(), contains('outside-secret'));
+  });
+
+  test('Kiro local import rejects symlink escaping the cache', () {
+    final home = useKiroTempHome();
+    final outside = File('${home.path}${Platform.pathSeparator}outside.json')
+      ..writeAsStringSync('{"clientId":"external","clientSecret":"external-secret"}');
+    writeKiroCache('kiro-auth-token.json', {'refreshToken': 'rt', 'clientIdHash': 'abc123'});
+    try {
+      Link('${kiroCacheDir()}${Platform.pathSeparator}abc123.json').createSync(outside.path);
+    } on FileSystemException {
+      markTestSkipped('当前系统不允许创建符号链接');
+      return;
+    }
+    expect(() => loadKiroAppCredentials(), throwsA(isA<FormatException>()));
+  });
+
+  test('Kiro local import fails closed on missing or invalid registration', () {
+    useKiroTempHome();
+    writeKiroCache('kiro-auth-token.json', {'refreshToken': 'rt', 'clientIdHash': 'abc123'});
+    expect(() => loadKiroAppCredentials(), throwsA(isA<FileSystemException>()));
+    writeKiroCache('abc123.json', {'clientId': 'client'});
+    expect(() => loadKiroAppCredentials(), throwsA(isA<FormatException>()));
+  });
+
+  testWidgets('Kiro App button imports temporary SSO cache and submits initial tokens',
+      (tester) async {
+    useKiroTempHome();
+    final captured = <String>[];
+    final file = writeKiroCache('kiro-auth-token.json', {
+      'refreshToken': 'local-refresh', 'clientIdHash': 'abc123',
+      'profileArn': 'arn:local:profile', 'region': 'eu-west-1',
+      'apiRegion': 'us-east-1', 'accessToken': 'local-access',
+      'expiresAt': '2030-01-01T00:00:00Z',
+    });
+    final before = file.readAsStringSync();
+    writeKiroCache('abc123.json', {'clientId': 'local-client', 'clientSecret': 'local-secret'});
+    await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
+    await clickKiroButton(tester, 'kiro-autofill-app');
+    expect(fieldText(tester, 'account-refresh-token'), 'local-refresh');
+    expect(fieldText(tester, 'account-profile-arn'), 'arn:local:profile');
+    expect(fieldText(tester, 'account-client-secret'), 'local-secret');
+    expect(file.readAsStringSync(), before);
+    expect(find.textContaining('local-access'), findsNothing);
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['credential']['access_token'], 'local-access');
+    expect(body['credential']['expiry'], '2030-01-01T00:00:00.000Z');
+    expect(body['credential']['client_id'], 'local-client');
+  });
+
+  testWidgets('Kiro JSON button maps fields and clears sensitive pasted JSON',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+    await selectCascade(tester, vendor: 'Kiro', billing: '订阅', region: '全球');
+    await enterKiroField(tester, 'account-name', 'kiro-import');
+    await enterKiroField(tester, 'kiro-credential-json', jsonEncode({
+      'refreshToken': 'json-refresh', 'profileArn': 'arn:json:profile',
+      'region': 'eu-west-1', 'apiRegion': 'eu-central-1',
+      'clientId': 'json-client', 'clientSecret': 'json-secret',
+      'accessToken': 'json-access', 'expiresAt': '2030-01-01T00:00:00Z',
+    }));
+    await clickKiroButton(tester, 'kiro-import-json');
+    expect(fieldText(tester, 'kiro-credential-json'), isEmpty);
+    expect(fieldText(tester, 'account-refresh-token'), 'json-refresh');
+    expect(fieldText(tester, 'account-profile-arn'), 'arn:json:profile');
+    expect(fieldText(tester, 'account-auth-region'), 'eu-west-1');
+    expect(fieldText(tester, 'account-api-region'), 'eu-central-1');
+    expect(fieldText(tester, 'account-client-id'), 'json-client');
+    expect(fieldText(tester, 'account-client-secret'), 'json-secret');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+    final credential = jsonDecode(captured.single)['credential'];
+    expect(credential['access_token'], 'json-access');
+    expect(credential['expiry'], '2030-01-01T00:00:00.000Z');
+  });
+
+  testWidgets('Kiro pasted SSO hash imports only matching cache registration',
+      (tester) async {
+    useKiroTempHome();
+    writeKiroCache('abc123.json', {
+      'clientId': 'registered-client', 'clientSecret': 'registered-secret',
+    });
+    // 没有 token 缓存:手动导入不得依赖或探测 App token 文件。
+    await pumpForm(tester, editing: accountKiro);
+    await enterKiroField(tester, 'kiro-credential-json', jsonEncode({
+      'refreshToken': 'pasted-refresh', 'clientIdHash': 'abc123',
+    }));
+    await clickKiroButton(tester, 'kiro-import-json');
+    expect(fieldText(tester, 'account-refresh-token'), 'pasted-refresh');
+    expect(fieldText(tester, 'account-client-id'), 'registered-client');
+    expect(fieldText(tester, 'account-client-secret'), 'registered-secret');
+    expect(fieldText(tester, 'kiro-credential-json'), isEmpty);
+  });
+
+  for (final text in ['sensitive-invalid-json', '{"accessToken":"sensitive-value"}']) {
+    testWidgets('Kiro failed manual import leaves existing fields untouched: $text',
+        (tester) async {
+      await pumpForm(tester, editing: accountKiro);
+      await enterKiroField(tester, 'account-refresh-token', 'keep-refresh');
+      await enterKiroField(tester, 'kiro-credential-json', text);
+      final button = find.byKey(const ValueKey('kiro-import-json'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(button);
+      await tester.pumpAndSettle();
+      await tester.tap(button);
+      await tester.pump();
+      expect(find.text(text.startsWith('{')
+          ? 'Kiro credential 缺少 Refresh Token'
+          : 'Kiro credential JSON 格式无效'), findsOneWidget);
+      expect(find.byWidgetPredicate((w) =>
+          w is Text && (w.data?.contains('sensitive-') ?? false)), findsNothing);
+      expect(fieldText(tester, 'account-refresh-token'), 'keep-refresh');
+      expect(fieldText(tester, 'account-profile-arn'), 'arn:profile:existing');
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+    });
+  }
+
+  testWidgets('Kiro missing App cache is sanitized and does not scan other files',
+      (tester) async {
+    final home = useKiroTempHome();
+    writeKiroCache('other-token.json', {'refreshToken': 'must-not-scan'});
+    await pumpForm(tester, editing: accountKiro);
+    final button = find.byKey(const ValueKey('kiro-autofill-app'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pump();
+    expect(find.text('无法读取 Kiro App 缓存,请先登录 Kiro App'), findsOneWidget);
+    expect(find.textContaining(home.path), findsNothing);
+    expect(fieldText(tester, 'account-refresh-token'), isEmpty);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  test('Kiro CLI import maps social token fields from sqlite', () {
+    final home = useKiroTempHome();
+    final file = writeKiroCliDb(home, {
+      'kirocli:social:token': {
+        'access_token': 'cli-access',
+        'refresh_token': 'cli-refresh',
+        'profile_arn': 'arn:aws:codewhisperer:us-east-1:123:profile/p1',
+        'region': 'us-east-1',
+        'expires_at': '2030-01-01T00:00:00.123456789Z',
+        'scopes': ['codewhisperer:conversations'],
+      },
+    });
+    final before = file.readAsBytesSync();
+    final credential = loadKiroCliCredentials();
+    expect(credential['kind'], 'kiro_refresh');
+    expect(credential['refresh_token'], 'cli-refresh');
+    expect(credential['access_token'], 'cli-access');
+    expect(credential['profile_arn'],
+        'arn:aws:codewhisperer:us-east-1:123:profile/p1');
+    expect(credential['region'], 'us-east-1');
+    expect(credential['expiry'], '2030-01-01T00:00:00.123456Z');
+    expect(credential['client_id'], isEmpty);
+    expect(credential['client_secret'], isEmpty);
+    expect(file.readAsBytesSync(), before);
+  });
+
+  test('Kiro CLI import fills OIDC registration and ARN fallbacks', () {
+    final home = useKiroTempHome();
+    writeKiroCliDb(
+      home,
+      {
+        'kirocli:odic:token': {
+          'access_token': 'oidc-access',
+          'refresh_token': 'oidc-refresh',
+          'expires_at': '2030-06-01T00:00:00Z',
+        },
+        'kirocli:odic:device-registration': {
+          'client_id': 'cli-client',
+          'client_secret': 'cli-secret',
+          'region': 'eu-west-1',
+        },
+      },
+      state: {
+        'api.codewhisperer.profile': {
+          'arn': 'arn:aws:codewhisperer:eu-central-1:123:profile/p2',
+        },
+      },
+    );
+    final credential = loadKiroCliCredentials();
+    expect(credential['refresh_token'], 'oidc-refresh');
+    expect(credential['client_id'], 'cli-client');
+    expect(credential['client_secret'], 'cli-secret');
+    expect(credential['region'], 'eu-west-1');
+    expect(credential['profile_arn'],
+        'arn:aws:codewhisperer:eu-central-1:123:profile/p2');
+    expect(credential['api_region'], 'eu-central-1');
+  });
+
+  test('Kiro CLI import prefers social token over OIDC token', () {
+    final home = useKiroTempHome();
+    writeKiroCliDb(home, {
+      'kirocli:social:token': {'refresh_token': 'social-refresh'},
+      'kirocli:odic:token': {'refresh_token': 'odic-refresh'},
+    });
+    expect(loadKiroCliCredentials()['refresh_token'], 'social-refresh');
+  });
+
+  test('Kiro CLI import fails closed on missing db or token', () {
+    final home = useKiroTempHome();
+    expect(() => loadKiroCliCredentials(), throwsA(isA<FormatException>()));
+    writeKiroCliDb(home, {'unrelated:key': {'refresh_token': 'no'}});
+    expect(() => loadKiroCliCredentials(), throwsA(isA<FormatException>()));
+  });
+
+  testWidgets('Kiro CLI button imports sqlite credentials and submits them',
+      (tester) async {
+    final home = useKiroTempHome();
+    writeKiroCliDb(home, {
+      'kirocli:social:token': {
+        'access_token': 'btn-access',
+        'refresh_token': 'btn-refresh',
+        'region': 'us-east-1',
+        'expires_at': '2030-01-01T00:00:00Z',
+      },
+    });
+    final captured = <String>[];
+    await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
+    await clickKiroButton(tester, 'kiro-autofill-cli');
+    expect(fieldText(tester, 'account-refresh-token'), 'btn-refresh');
+    expect(fieldText(tester, 'account-auth-region'), 'us-east-1');
+    expect(fieldText(tester, 'account-client-id'), isEmpty);
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['credential']['refresh_token'], 'btn-refresh');
+    expect(body['credential']['access_token'], 'btn-access');
+    expect(body['credential']['client_id'], isEmpty);
+    expect(body['credential']['client_secret'], isEmpty);
+  });
+
+  testWidgets('Kiro CLI button reports missing db without touching fields',
+      (tester) async {
+    useKiroTempHome();
+    await pumpForm(tester, editing: accountKiro);
+    final button = find.byKey(const ValueKey('kiro-autofill-cli'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pump();
+    expect(find.textContaining('未找到 kiro-cli 登录态数据库'), findsOneWidget);
+    expect(fieldText(tester, 'account-profile-arn'), 'arn:profile:existing');
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  test('Account parses masked console token and defaults missing token to empty',
+      () {
+    expect(accountBailian.maskedConsoleAccessToken, '********');
+    expect(account.maskedConsoleAccessToken, isEmpty);
+    expect(Account.fromJson({'name': 'minimal'}).maskedConsoleAccessToken,
+        isEmpty);
+    expect(providers.firstWhere((p) => p.id == 'bailian-cn/token-plan').quotaQueryable,
+        isTrue);
+  });
+
+  test('bailian parser selects console token only and follows active_config', () {
+    expect(
+        parseBailianConsoleToken(
+            '{"access_token":" console-token ","api_key":"do-not-import"}'),
+        'console-token');
+    expect(
+        parseBailianConsoleToken('{"active_config":"work",'
+            '"access_token":"default-token",'
+            '"work":{"access_token":"work-token","api_key":"wrong"}}'),
+        'work-token');
+    expect(
+        parseBailianConsoleToken('{"active_config":"default",'
+            '"access_token":"default-token"}'),
+        'default-token');
+    for (final text in [
+      '{"api_key":"secret-api-key"}',
+      '{"access_token":"  "}',
+      '{"access_token":123}',
+      '{"access_token":"********"}',
+      '{"access_token":"bad token"}',
+      '{"active_config":"missing","access_token":"not-active"}',
+      '{"profiles":{"default":{"access_token":"not-supported"}}}',
+      '[{"access_token":"wrong-shape"}]',
+      'secret-invalid-json',
+    ]) {
+      expect(() => parseBailianConsoleToken(text),
+          throwsA(isA<FormatException>().having(
+              (e) => e.message, 'sanitized error', isNot(contains('secret')))));
+    }
+  });
+
+  testWidgets('bailian optional console field is absent for other providers',
+      (tester) async {
+    for (final editing in [account, accountKimi, accountOAuth]) {
+      await pumpForm(tester, editing: editing);
+      expect(find.byKey(const ValueKey('account-console-access-token')),
+          findsNothing);
+      expect(find.byKey(const ValueKey('bailian-autofill-cli')), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('bailian edit leaves console token empty with pure-star hints',
+      (tester) async {
+    await pumpForm(tester, editing: accountBailian);
+    final finder = find.byKey(const ValueKey('account-console-access-token'));
+    final input = find.descendant(of: finder, matching: find.byType(TextField));
+    var field = tester.widget<TextField>(input);
+    expect(field.controller!.text, isEmpty);
+    expect(field.obscureText, isTrue);
+    expect(field.decoration!.hintText, '************');
+    expect(find.textContaining('仅用于查询百炼控制台额度,不影响推理'), findsOneWidget);
+    expect(find.textContaining('编辑时留空保留原值'), findsOneWidget);
+    expect(find.byKey(const ValueKey('bailian-autofill-cli')), findsOneWidget);
+    await tester.ensureVisible(finder);
+    await tester.tap(find.descendant(of: finder, matching: find.byTooltip('显示')));
+    await tester.pump();
+    field = tester.widget<TextField>(input);
+    expect(field.obscureText, isFalse);
+    expect(field.decoration!.hintText, '********',
+        reason: '后端只给纯星号,眼睛模式也不能回显真实 token');
+    expect(field.controller!.text, isEmpty);
+  });
+
+  for (final token in ['', ' console-create ']) {
+    testWidgets('bailian create payload has optional console token "$token"',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, client: recordingClient(captured));
+      await selectCascade(tester,
+          vendor: '百炼', billing: '订阅', region: '中国', plan: 'Token Plan');
+      await tester.enterText(find.byKey(const ValueKey('account-name')), 'bl-new');
+      await tester.enterText(
+          find.byKey(const ValueKey('account-api-key')), ' sk-create ');
+      await tester.enterText(
+          find.byKey(const ValueKey('account-console-access-token')), token);
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+      await tester.tap(find.widgetWithText(FilledButton, '创建'));
+      await tester.pumpAndSettle();
+      final body = jsonDecode(captured.single) as Map<String, dynamic>;
+      expect(body['provider_id'], 'bailian-cn/token-plan');
+      expect(body.containsKey('api_key'), isFalse);
+      expect(body['credential'], {
+        'kind': 'api_key',
+        'api_key': 'sk-create',
+        'console_access_token': token.trim(),
+      });
+    });
+  }
+
+  for (final token in ['', ' console-replacement ']) {
+    testWidgets('bailian edit payload preserves blank fields or replaces token "$token"',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester,
+          editing: accountBailian, client: recordingClient(captured));
+      await tester.enterText(
+          find.byKey(const ValueKey('account-console-access-token')), token);
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      final body = jsonDecode(captured.single) as Map<String, dynamic>;
+      expect(body['credential'], {
+        'kind': 'api_key',
+        'api_key': '',
+        'console_access_token': token.trim(),
+      }, reason: '编辑时留空按字段保留,不会把掩码提交给后端');
+    });
+  }
+
+  Directory useBailianTempHome() {
+    final dir = Directory.systemTemp.createTempSync('msu-bailian-test');
+    debugBailianHomeOverride = dir.path;
+    addTearDown(() {
+      debugBailianHomeOverride = null;
+      dir.deleteSync(recursive: true);
+    });
+    return dir;
+  }
+
+  testWidgets('bailian CLI autofill reads temporary config without importing API key',
+      (tester) async {
+    final home = useBailianTempHome();
+    expect(bailianCliConfigPath(),
+        '${home.path}${Platform.pathSeparator}.bailian${Platform.pathSeparator}config.json');
+    expect(debugCodexHomeOverride, isNull,
+        reason: '百炼测试覆写与 Codex 来源隔离');
+    final file = File(bailianCliConfigPath());
+    file.parent.createSync(recursive: true);
+    const content = '{"access_token":"cli-console", "api_key":"cli-secret-key"}';
+    file.writeAsStringSync(content);
+    await pumpForm(tester, editing: accountBailian);
+    await tester.enterText(find.byKey(const ValueKey('account-api-key')), 'manual-key');
+    final button = find.byKey(const ValueKey('bailian-autofill-cli'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pump();
+    expect(fieldText(tester, 'account-console-access-token'), 'cli-console');
+    expect(fieldText(tester, 'account-api-key'), 'manual-key');
+    expect(file.readAsStringSync(), content, reason: '自动填充只读,不修改 CLI 配置');
+    expect(find.text('已填入百炼 CLI 的额度查询 Token'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  for (final content in <String?>[
+    null,
+    '{"access_token":"secret-invalid-json"',
+    '{"api_key":"secret-api-key"}',
+    '{"access_token":" "}',
+  ]) {
+    testWidgets('bailian CLI error is fixed and sanitized for "$content"',
+        (tester) async {
+      final home = useBailianTempHome();
+      if (content != null) {
+        final file = File(bailianCliConfigPath());
+        file.parent.createSync(recursive: true);
+        file.writeAsStringSync(content);
+      }
+      await pumpForm(tester, editing: accountBailian);
+      await tester.enterText(
+          find.byKey(const ValueKey('account-console-access-token')), 'keep-manual');
+      final button = find.byKey(const ValueKey('bailian-autofill-cli'));
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pump();
+      expect(find.text(content == null
+          ? '无法读取百炼 CLI 配置'
+          : '百炼 CLI 配置无效或缺少额度查询 Token'), findsOneWidget);
+      expect(find.text('请先运行 bl auth login --console'), findsOneWidget);
+      expect(find.textContaining('secret-'), findsNothing);
+      expect(find.textContaining(home.path), findsNothing);
+      expect(fieldText(tester, 'account-console-access-token'), 'keep-manual');
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+    });
+  }
+
   testWidgets('copy prefills config but keeps create semantics', (tester) async {
     await pumpForm(tester, copyFrom: account);
 
@@ -279,6 +1127,7 @@ void main() {
     expect(find.textContaining('sk-d***efgh'), findsNothing,
         reason: '未点眼睛前掩码字符一个都不露');
 
+    await tester.ensureVisible(find.byTooltip('显示'));
     await tester.tap(find.byTooltip('显示'));
     await tester.pump();
     expect(find.textContaining('sk-d***efgh'), findsOneWidget);
@@ -305,6 +1154,50 @@ void main() {
     await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
     expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com',
         reason: '三级选定后自动带出该提供商的默认请求地址');
+  });
+
+  testWidgets('standard-only group hides plan level and still resolves',
+      (tester) async {
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
+    expect(find.byKey(const ValueKey('account-provider-plan')), findsNothing,
+        reason: 'Standard 是单一服务类型的占位标签,该级不渲染');
+    expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com',
+        reason: '隐藏不影响解析:三级选定即带出该提供商的默认地址');
+  });
+
+  testWidgets('multi-plan group resolves provider only after plan chosen',
+      (tester) async {
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: '百炼', billing: '订阅', region: '中国');
+    expect(find.byKey(const ValueKey('account-provider-plan')), findsOneWidget,
+        reason: '百炼订阅中国区分 Token/Coding Plan 两个服务类型,该级出现');
+    expect(fieldText(tester, 'account-base-url'), isEmpty,
+        reason: '服务类型未定前提供商不解析,地址留空');
+
+    await tester.tap(find.byKey(const ValueKey('account-provider-plan')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Coding Plan').last);
+    await tester.pumpAndSettle();
+    expect(fieldText(tester, 'account-base-url'),
+        'https://coding-plan.example.com/v1',
+        reason: '选定服务类型后带出该类型端点');
+  });
+
+  testWidgets('multi-plan create payload uses the chosen plan provider',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+    await selectCascade(tester,
+        vendor: '百炼', billing: '订阅', region: '中国', plan: 'Coding Plan');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'bl-coding');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-coding');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['provider_id'], 'bailian-cn/coding-plan');
   });
 
   testWidgets('lower cascade levels stay disabled until upper chosen',
@@ -381,7 +1274,7 @@ void main() {
 
     expect(captured, hasLength(1));
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['provider_id'], 'deepseek', reason: '三级级联最终解析回 provider id');
+    expect(body['provider_id'], 'deepseek/api', reason: '三级级联最终解析回 provider id');
     expect(body['base_url'], '',
         reason: '与提供商默认值相同→空覆盖,继续跟随提供商');
   });
@@ -421,24 +1314,15 @@ void main() {
     expect(find.text('需以 http:// 或 https:// 开头'), findsOneWidget);
   });
 
-  testWidgets('copy prefills quota script and create submits it',
+  testWidgets('copy prefills quota settings and create submits them',
       (tester) async {
     final captured = <String>[];
     await pumpForm(tester,
-        copyFrom: accountWithScript, client: recordingClient(captured));
+        copyFrom: accountWithQuota, client: recordingClient(captured));
 
-    // 启用中的脚本让分栏初始展开,代码与数值直接回显
-    expect(find.byKey(const ValueKey('quota-script-code')), findsOneWidget);
-    expect(fieldText(tester, 'quota-script-code'),
-        accountWithScript.quotaScript!.code);
-    expect(fieldText(tester, 'quota-script-timeout'), '15');
-    expect(fieldText(tester, 'quota-script-interval'), '5');
-    expect(fieldText(tester, 'quota-script-stop-interval'), '8');
-    expect(
-        tester
-            .widget<Switch>(find.byKey(const ValueKey('quota-script-enabled')))
-            .value,
-        isTrue);
+    // 已有配置让分栏初始展开,两个分钟间隔直接回显
+    expect(fieldText(tester, 'quota-interval'), '5');
+    expect(fieldText(tester, 'quota-stop-interval'), '8');
 
     await tester.ensureVisible(find.byKey(const ValueKey('account-name')));
     await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
@@ -448,148 +1332,91 @@ void main() {
     await tester.pumpAndSettle();
 
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    final script = body['quota_script'] as Map<String, dynamic>;
-    expect(script['enabled'], isTrue);
-    expect(script['code'], accountWithScript.quotaScript!.code);
-    expect(script['timeout_seconds'], 15);
-    expect(script['auto_interval_minutes'], 5);
-    expect(script['stop_interval_minutes'], 8,
-        reason: '停止查询间隔随脚本配置全量提交,0 走后端默认 5 分钟');
+    final settings = body['quota_settings'] as Map<String, dynamic>;
+    expect(settings, {
+      'auto_interval_minutes': 5,
+      'stop_interval_minutes': 8,
+    });
   });
 
-  testWidgets('stop interval: create defaults to 5, edit without script blank',
+  testWidgets('quota section keeps the switch plus the two minute fields',
       (tester) async {
-    await pumpForm(tester);
-    await expandScriptSection(tester);
-    expect(find.text('不活跃停止查询间隔(分钟)'), findsOneWidget);
-    expect(fieldText(tester, 'quota-script-stop-interval'), '5',
-        reason: '新建配置默认 5,与后端默认一致,让用户看见默认值');
+    await pumpForm(tester, editing: accountWithQuota);
+    expect(find.text('额度查询'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quota-enabled')), findsOneWidget);
+    expect(find.text('启用实时额度查询'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quota-interval')), findsOneWidget);
+    expect(find.byKey(const ValueKey('quota-stop-interval')), findsOneWidget);
+    for (final key in const [
+      'quota-script-enabled',
+      'quota-script-code',
+      'quota-script-timeout',
+      'quota-script-test',
+      'script-var-add',
+    ]) {
+      expect(find.byKey(ValueKey(key)), findsNothing, reason: '$key 已移除');
+    }
+    expect(find.text('启用脚本'), findsNothing);
+    expect(find.text('脚本代码'), findsNothing);
+    expect(find.text('变量'), findsNothing);
   });
 
-  testWidgets('stop interval: edit without script stays blank', (tester) async {
-    await pumpForm(tester, editing: account);
-    await expandScriptSection(tester);
-    expect(fieldText(tester, 'quota-script-stop-interval'), isEmpty,
-        reason: '已存配置为 0 时留空,保留"走后端默认"语义');
+  testWidgets('quota switch sits above the interval fields', (tester) async {
+    await pumpForm(tester, editing: accountWithQuota);
+    final switchY = tester
+        .getTopLeft(find.byKey(const ValueKey('quota-enabled')))
+        .dy;
+    for (final key in const ['quota-interval', 'quota-stop-interval']) {
+      expect(switchY,
+          lessThan(tester.getTopLeft(find.byKey(ValueKey(key))).dy),
+          reason: '开关必须在编辑框上方');
+    }
   });
 
-  testWidgets('variables: builtin rows shown and stored rows prefill sorted',
-      (tester) async {
-    final captured = <String>[];
-    await pumpForm(tester,
-        copyFrom: accountWithScript, client: recordingClient(captured));
-
-    expect(find.text('变量'), findsOneWidget);
-    expect(find.text('apiKey'), findsOneWidget);
-    expect(find.text('账号密钥 · 执行时自动注入'), findsOneWidget);
-    expect(find.text('baseUrl'), findsOneWidget);
-    expect(find.text('请求地址 · 执行时自动注入'), findsOneWidget);
-
-    expect(fieldText(tester, 'script-var-name-0'), 'session');
-    expect(fieldText(tester, 'script-var-value-0'), 's3cr3t');
-    expect(fieldText(tester, 'script-var-name-1'), 'tenant',
-        reason: '已存变量按名排序回显,与后端 map 迭代顺序无关');
-    expect(fieldText(tester, 'script-var-value-1'), 'acme');
-
-    await tester.ensureVisible(find.byKey(const ValueKey('account-name')));
-    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
-    await tester.enterText(
-        find.byKey(const ValueKey('account-api-key')), 'sk-test');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pumpAndSettle();
-
-    final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    final script = body['quota_script'] as Map<String, dynamic>;
-    expect(script['variables'], {'session': 's3cr3t', 'tenant': 'acme'},
-        reason: '已存变量随脚本配置全量提交');
-  });
-
-  testWidgets('variables: add row on create and blank-name row dropped',
-      (tester) async {
-    final captured = <String>[];
-    await pumpForm(tester, client: recordingClient(captured));
-    await expandScriptSection(tester);
-
-    expect(find.byKey(const ValueKey('script-var-name-0')), findsNothing,
-        reason: '无已存变量时只有内置两行,不出现可编辑行');
-
-    await tester.enterText(find.byKey(const ValueKey('quota-script-code')),
-        '({request:{url:"{{baseUrl}}/t/{{tenant}}"},extractor:function(r){return{used:r.u};}})');
-    await tester.tap(find.byKey(const ValueKey('script-var-add')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-        find.byKey(const ValueKey('script-var-name-0')), 'tenant');
-    await tester.enterText(
-        find.byKey(const ValueKey('script-var-value-0')), 'acme');
-    await tester.tap(find.byKey(const ValueKey('script-var-add')));
-    await tester.pumpAndSettle();
-
-    await tester.ensureVisible(
-        find.byKey(const ValueKey('account-provider-vendor')));
-    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
-    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
-    await tester.enterText(
-        find.byKey(const ValueKey('account-api-key')), 'sk-test');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pumpAndSettle();
-
-    final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    final script = body['quota_script'] as Map<String, dynamic>;
-    expect(script['variables'], {'tenant': 'acme'},
-        reason: '空名行不进载荷');
-  });
-
-  testWidgets('variables: delete row removes it from submit', (tester) async {
-    final captured = <String>[];
-    await pumpForm(tester,
-        copyFrom: accountWithScript, client: recordingClient(captured));
-
-    await tester.ensureVisible(find.byKey(const ValueKey('script-var-del-0')));
-    await tester.tap(find.byKey(const ValueKey('script-var-del-0')));
-    await tester.pumpAndSettle();
-    expect(fieldText(tester, 'script-var-name-0'), 'tenant',
-        reason: '删掉 session 行后 tenant 行顶到 0 位');
-
-    await tester.ensureVisible(find.byKey(const ValueKey('account-name')));
-    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
-    await tester.enterText(
-        find.byKey(const ValueKey('account-api-key')), 'sk-test');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pumpAndSettle();
-
-    final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    final script = body['quota_script'] as Map<String, dynamic>;
-    expect(script['variables'], {'tenant': 'acme'});
-  });
-
-  testWidgets('create without touching script section omits the key',
-      (tester) async {
-    final captured = <String>[];
-    await pumpForm(tester, client: recordingClient(captured));
-
-    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
-    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
-    await tester.enterText(
-        find.byKey(const ValueKey('account-api-key')), 'sk-test');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pumpAndSettle();
-
-    final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body.containsKey('quota_script'), isFalse,
-        reason: '没配脚本就不发该字段,服务端保持未配置');
-  });
-
-  testWidgets('edit clearing the script sends an explicit empty object',
+  testWidgets('turning the quota switch off submits enabled false',
       (tester) async {
     final captured = <String>[];
     await pumpForm(tester,
-        editing: accountWithScript, client: recordingClient(captured));
+        editing: accountWithQuota, client: recordingClient(captured));
 
-    // 初始展开(脚本启用中):关掉开关并清空代码=不要脚本了
-    await tester.ensureVisible(find.byKey(const ValueKey('quota-script-enabled')));
-    await tester.tap(find.byKey(const ValueKey('quota-script-enabled')));
+    await tester.ensureVisible(find.byKey(const ValueKey('quota-enabled')));
+    await tester.tap(find.byKey(const ValueKey('quota-enabled')));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('quota-script-code')), '');
+    expect(find.text('已关闭 · 该账号不查询额度'), findsOneWidget);
+
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['quota_settings'], {
+      'enabled': false,
+      'auto_interval_minutes': 5,
+      'stop_interval_minutes': 8,
+    });
+  });
+
+  testWidgets('editing a disabled account restores the switch off',
+      (tester) async {
+    await pumpForm(tester, editing: accountQuotaDisabled);
+
+    final sw = tester.widget<Switch>(find.byKey(const ValueKey('quota-enabled')));
+    expect(sw.value, isFalse);
+    for (final key in const ['quota-interval', 'quota-stop-interval']) {
+      final field =
+          tester.widget<TextFormField>(find.byKey(ValueKey(key)));
+      expect(field.enabled, isFalse, reason: '关掉查询后 $key 置灰');
+    }
+  });
+
+  testWidgets('re-enabling a disabled account drops the enabled field',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        editing: accountQuotaDisabled, client: recordingClient(captured));
+
+    await tester.ensureVisible(find.byKey(const ValueKey('quota-enabled')));
+    await tester.tap(find.byKey(const ValueKey('quota-enabled')));
     await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
@@ -597,79 +1424,66 @@ void main() {
     await tester.pumpAndSettle();
 
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['quota_script'], isA<Map<String, dynamic>>().having(
+    expect(body['quota_settings'],
+        {'auto_interval_minutes': 5, 'stop_interval_minutes': 0},
+        reason: '开启态不落 enabled 字段,与「未表态即开启」同形');
+  });
+
+  testWidgets('create submits the visible default quota settings',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+
+    await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'ds-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), 'sk-test');
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['quota_settings'], {
+      'auto_interval_minutes': 0,
+      'stop_interval_minutes': 5,
+    }, reason: '全新表单停止间隔预填 5(与后端默认一致),创建时显式提交');
+  });
+
+  testWidgets('edit clearing the intervals sends an explicit empty object',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        editing: accountWithQuota, client: recordingClient(captured));
+
+    // 初始展开(已有配置):清空两个间隔=不要自定义节奏了
+    await tester.enterText(find.byKey(const ValueKey('quota-interval')), '');
+    await tester.enterText(
+        find.byKey(const ValueKey('quota-stop-interval')), '');
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['quota_settings'], isA<Map<String, dynamic>>().having(
         (m) => m.isEmpty, 'isEmpty', isTrue),
         reason: '原来有配置时清空要显式发空对象,服务端才清除而不是保留');
   });
 
-  testWidgets('enabled script with empty code fails validation',
-      (tester) async {
+  testWidgets('interval out of range fails validation', (tester) async {
     final captured = <String>[];
     await pumpForm(tester,
-        editing: accountWithScript, client: recordingClient(captured));
+        editing: accountWithQuota, client: recordingClient(captured));
 
-    await tester.enterText(find.byKey(const ValueKey('quota-script-code')), '');
+    await tester.enterText(
+        find.byKey(const ValueKey('quota-interval')), '2000');
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();
 
     expect(captured, isEmpty, reason: '校验失败不发请求');
-    expect(find.text('启用脚本时代码不能为空'), findsOneWidget);
-  });
-
-  testWidgets('test button hits quota-test endpoint and shows result',
-      (tester) async {
-    String? hitPath;
-    String? hitBody;
-    final client = ApiClient(
-      baseUrl: 'http://127.0.0.1:8080',
-      adminKey: 'adm',
-      httpClient: MockClient((req) async {
-        hitPath = req.url.path;
-        hitBody = req.body;
-        return http.Response(
-            jsonEncode({
-              'ok': true,
-              'report': {
-                'account': 'ds-3',
-                'queryable': true,
-                'meters': [
-                  {
-                    'kind': 'balance',
-                    'unit': 'currency',
-                    'currency': 'USD',
-                    'remaining': 9.5,
-                  },
-                ],
-              },
-            }),
-            200,
-            headers: {'content-type': 'application/json'});
-      }),
-    );
-    await pumpForm(tester, editing: accountWithScript, client: client);
-
-    await tester.ensureVisible(find.byKey(const ValueKey('quota-script-test')));
-    await tester.tap(find.byKey(const ValueKey('quota-script-test')));
-    await tester.pumpAndSettle();
-
-    expect(hitPath, '/admin/accounts/ds-3/quota-test');
-    expect(
-        (jsonDecode(hitBody!) as Map<String, dynamic>)['code'],
-        accountWithScript.quotaScript!.code);
-    expect(find.textContaining('试跑成功'), findsOneWidget);
-  });
-
-  testWidgets('create mode disables the test button', (tester) async {
-    await pumpForm(tester);
-    await expandScriptSection(tester);
-
-    final button = tester.widget<OutlinedButton>(
-        find.widgetWithText(OutlinedButton, '试跑脚本'));
-    expect(button.onPressed, isNull,
-        reason: '试跑凭据取自已存账号,新建态不可试跑');
-    expect(find.text('保存账号后才能试跑'), findsOneWidget);
+    expect(find.text('需为 0-1440 的整数'), findsOneWidget);
   });
 
   // ── oauth_refresh(订阅登录态)表单分流 ──
@@ -705,7 +1519,7 @@ void main() {
 
     expect(captured, hasLength(1));
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['provider_id'], 'openai-codex');
+    expect(body['provider_id'], 'openai/codex');
     expect(body.containsKey('api_key'), isFalse,
         reason: 'oauth 形态不走 api_key 简写');
     final cred = body['credential'] as Map<String, dynamic>;
@@ -773,7 +1587,7 @@ void main() {
   testWidgets('oauth edit shows reauth banner when flagged', (tester) async {
     final flagged = Account.fromJson(const {
       'name': 'gpt-1',
-      'provider_id': 'openai-codex',
+      'provider_id': 'openai/codex',
       'credential': {
         'kind': 'oauth_refresh',
         'refresh_token': 'rt-a***z',

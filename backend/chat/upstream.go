@@ -15,6 +15,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -31,7 +32,7 @@ const respSnippet = 300
 // history 含本轮用户消息（调用方已追加）。不做流式：对话页整轮等待，
 // 换取四协议一套简单可靠的解析路径。返回上游 HTTP 状态码供用量统计记失败率。
 //
-// codex(openai-codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
+// codex(openai/codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
 // 这里把整段事件流读完后聚合回整轮（见 extractReplySSE），对外仍是非流式语义。
 // sessionKey 用于派生 codex 的 session_id/conversation_id 头（转发面同款，
 // 按账号+会话稳定），其余协议忽略。effort 是对话页选定的推理档（空=默认），
@@ -46,9 +47,7 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 	// (overrides > reasoning_level 映射 > 请求参数 > defaults)同一形态。
 	// applyEffort 先于 codex 整形(ShapeBody 看到 reasoning 会补 include)。
 	if effort != "" {
-		if err := applyEffort(target, body, effort); err != nil {
-			return "", usage.Usage{}, 0, err
-		}
+		applyEffort(target, body, effort)
 	}
 	body = mergeParams(body, rawObject(target.Overrides))
 	// codex 硬约束(store/stream/剥采样参数/instructions)与路径映射最后应用，
@@ -81,7 +80,7 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 		req.Header.Set("x-client-request-id", randomUUID())
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Transport: kiro.NewTransport(nil)}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", usage.Usage{}, 0, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err)
@@ -158,40 +157,12 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 }
 
 // applyEffort 把对话页选定的推理档写进请求体,与转发面 reasoning_level
-// 数字档共用同一份映射逻辑:模型配了映射脚本(effort_script)即由脚本
-// 接管写入位置,否则走协议内置映射(effort.Apply:responses=
-// reasoning.effort、chat_completions=reasoning_effort、anthropic=
-// output_config.effort 或 none 时 thinking disabled、gemini=
-// thinkingConfig.thinkingLevel)。
-func applyEffort(target resolve.ResolvedTarget, body map[string]any, value string) error {
-	if target.EffortScript == "" {
-		effort.Apply(target.Protocol, body, value)
-		return nil
-	}
-	// 对话页按值选档,反查档号喂脚本 ctx.level(声明按值唯一)。
-	level := ""
-	for _, e := range target.Efforts {
-		if e.Value == value {
-			level = e.Name
-			break
-		}
-	}
-	out, err := effort.RunScript(target.EffortScript, effort.ScriptContext{
-		Level:    level,
-		Protocol: target.Protocol,
-		Efforts:  target.Efforts,
-		Request:  body,
-	})
-	if err != nil {
-		return err
-	}
-	for k := range body {
-		delete(body, k)
-	}
-	for k, v := range out {
-		body[k] = v
-	}
-	return nil
+// 数字档共用同一份映射逻辑:按模型的写入格式(effort_format,空=协议
+// 内置,effort.Apply:responses=reasoning.effort、chat_completions=
+// reasoning_effort、anthropic=output_config.effort 或 none 时 thinking
+// disabled、gemini=thinkingConfig.thinkingLevel)格式化写入。
+func applyEffort(target resolve.ResolvedTarget, body map[string]any, value string) {
+	effort.ApplyFormat(target.EffortFormat, target.Protocol, body, value)
 }
 
 // messageList 生成 [{role, content}] 形态；content 由 perMessage 决定。

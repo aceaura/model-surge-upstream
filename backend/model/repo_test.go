@@ -39,7 +39,7 @@ func fixtures(t *testing.T) (*Repo, *account.Repo) {
 	accounts := account.NewRepo(s.Pool(), c)
 	if _, err := accounts.Create(context.Background(), account.Input{
 		Name:       "kimi-1",
-		ProviderID: "kimi",
+		ProviderID: "kimi/coding",
 		Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-kimi-secret"},
 		Enabled:    true,
 	}); err != nil {
@@ -161,7 +161,7 @@ func TestProtocolErrorListsSupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	spec, _ := provider.Get("kimi")
+	spec, _ := provider.Get("kimi/coding")
 	for _, p := range spec.Protocols {
 		if !contains(err.Error(), p) {
 			t.Errorf("error %q should list supported protocol %q", err, p)
@@ -322,7 +322,7 @@ func TestListFiltersByAccount(t *testing.T) {
 	ctx := context.Background()
 	if _, err := accounts.Create(ctx, account.Input{
 		Name:       "ds-1",
-		ProviderID: "deepseek",
+		ProviderID: "deepseek/api",
 		Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-ds-secret"},
 		Enabled:    true,
 	}); err != nil {
@@ -433,7 +433,7 @@ func TestGetBackfillsCache(t *testing.T) {
 
 	accounts := account.NewRepo(s.Pool(), c)
 	if _, err := accounts.Create(ctx, account.Input{
-		Name: "kimi-1", ProviderID: "kimi",
+		Name: "kimi-1", ProviderID: "kimi/coding",
 		Credential: credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-kimi-secret"},
 		Enabled:    true,
 	}); err != nil {

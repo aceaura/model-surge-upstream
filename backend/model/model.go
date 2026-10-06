@@ -25,10 +25,10 @@ type Model struct {
 	// supported_reasoning_levels），数组=管理员显式声明的 [{name,value}]
 	// 条目（空数组即不支持；value 是发上游的档位字符串，不限固定词表）。
 	Efforts json.RawMessage `json:"efforts"`
-	// EffortScript 档位映射脚本（{apply: function(ctx){...}} 对象字面量）：
-	// 空=走协议内置映射；非空即接管 effort 写入位置，读元数据与请求体、
-	// 返回完整新请求体。承接「协议外壳+自家字段」的厂商差异。
-	EffortScript string `json:"effort_script"`
+	// EffortFormat effort 写入格式(effort.FormatXxx 枚举):空=协议内置
+	// 映射(按出站协议选字段);非空=显式格式压过协议外形,承接
+	// 「协议外壳+自家字段」的厂商差异。
+	EffortFormat string `json:"effort_format"`
 	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
 	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
 	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。

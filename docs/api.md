@@ -125,7 +125,6 @@ Authorization: Bearer <密钥>
 | `invalid_json` | 400 | 请求体不是合法 JSON、含未知字段、defaults/overrides 不是 JSON 对象 |
 | `invalid_request` | 400 | 必填字段缺失、`base_url` 非法、`context_window` 为负等 |
 | `quota_unavailable` | 502 | 上游额度接口请求失败或返回非 2xx |
-| `effort_script_failed` | 502 | 模型档位映射脚本运行失败（求值/调用/超时），请求未发上游 |
 | `upstream_unavailable` | 502 | 上游自身接口（如模型列举）请求失败或返回非 2xx |
 | `storage_error` | 500 | PostgreSQL 故障；其他非领域错误的兜底 |
 
@@ -197,37 +196,35 @@ Authorization: Bearer <密钥>
 | `base_url` | string | 恒有 | 默认根地址；账号未覆盖 `base_url` 时使用 |
 | `protocols` | array of string | 恒有 | 支持的协议，取值见 2.8 `protocol`；创建模型时 `protocol` 只能取账号 provider 的此集合 |
 | `auth` | 枚举 | 恒有 | 认证头形态，见 2.8 `auth` |
-| `credential` | 枚举 | 恒有 | 凭据形态，见 2.8 `credential.kind`；`openai-codex` 为 `oauth_refresh`，其余为 `api_key` |
-| `quota` | object | 该 provider 声明了额度端点时 | 额度接口声明，子字段见下 |
-| `quota.path` | string | 同上 | 额度端点路径，拼接在生效 `base_url` 之后 |
-| `quota.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
-| `quota.kind` | 枚举 | 同上 | 主计量项形态，见 2.8 `MeterKind`；作为解析结果的兜底语义 |
-| `quota.unit` | 枚举 | 同上 | 主计量项单位，见 2.8 `MeterUnit` |
-| `quota.reset` | 枚举 | 同上 | 重置规律，见 2.8 `ResetRule` |
+| `credential` | 枚举 | 恒有 | 凭据形态，见 2.8 `credential.kind`；`openai/codex` 为 `oauth_refresh`，其余为 `api_key` |
+| `plan` | string | 非空时 | 服务类型名（原样下发不翻译），如 `Token Plan` / `Coding Plan`；厂商只有一种服务类型时统一为 `Standard`，订阅档位（如 ChatGPT Plus/Pro）不区分 |
+| `quota_queryable` | bool | 为 `true` 时 | 该 provider 有内置额度查询实现（Go 代码按供应商整合在 quota 包，覆盖范围见 3.6）；这是唯一的查询路径，账号级 JS 脚本通道已废除 |
 | `models` | object | 该 provider 声明了列举端点时 | 模型列举端点声明，子字段见下 |
 | `models.path` | string | 同上 | 列举端点路径 |
 | `models.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
 
-当前注册序（固定顺序，共 8 家）：
+当前注册序（固定顺序，共 10 家）。id 命名：厂商[-区域]/服务——Global 区域省略，CN 带 `-cn` 段，按量计费开放 API 一律标 `/api`，订阅服务标套餐 slug；`kiro` 无可命名套餐，保留裸 id：
 
-| id | base_url | protocols | auth | quota | models |
+| id | base_url | protocols | auth | quota_queryable | models |
 |---|---|---|---|---|---|
-| `anthropic` | `https://api.anthropic.com` | `anthropic` | `anthropic_key` | — | `/v1/models` |
-| `openai` | `https://api.openai.com` | `chat_completions`, `responses` | `bearer` | — | `/v1/models` |
-| `openai-codex` | `https://chatgpt.com/backend-api/codex` | `responses` | `bearer` | — | — |
-| `gemini` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
-| `kimi` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | — | `/v1/models` |
-| `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
-| `deepseek` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | `{path: "/user/balance", method: "GET", kind: "balance", unit: "currency", reset: "prepaid"}` | `/models` |
-| `bailian` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions`, `responses` | `bearer` | — | `GET /v1/models` |
+| `anthropic/api` | `https://api.anthropic.com` | `anthropic` | `anthropic_key` | — | `/v1/models` |
+| `openai/api` | `https://api.openai.com` | `chat_completions`, `responses` | `bearer` | — | `/v1/models` |
+| `gemini/api` | `https://generativelanguage.googleapis.com` | `gemini`, `chat_completions` | `bearer` | — | `/v1beta/models` |
+| `openai/codex` | `https://chatgpt.com/backend-api/codex` | `responses` | `bearer` | ✓ | `/models` |
+| `kimi/coding` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | ✓ | `/v1/models` |
+| `ark/api` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
+| `deepseek/api` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/models` |
+| `kiro` | `https://runtime.us-east-1.kiro.dev` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/ListAvailableModels` |
+| `bailian-cn/token-plan` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions`, `responses` | `bearer` | ✓ | `GET /v1/models` |
+| `bailian-cn/coding-plan` | `https://coding.dashscope.aliyuncs.com` | `chat_completions` | `bearer` | — | `GET /v1/models` |
 
-> `bailian` 是阿里云百炼 Token Plan 中国版（`subscription` / `CN` / `api_key`，使用套餐专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。真实探针已验证模型列举和 Responses 可用，声明 `GET /v1/models` 与两种 OpenAI 协议；额度查询能力尚未验证，不声明 Quota。
+> `bailian-cn/token-plan` / `bailian-cn/coding-plan` 是阿里云百炼订阅的两种套餐（均 `subscription` / `CN` / `api_key`，密钥不通用：Token Plan 用套餐密钥，Coding Plan 用 `sk-sp-` 专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。Token Plan 真实探针已验证模型列举和 Responses 可用；Coding Plan 探针实测 chat completions 与 `GET /v1/models` 存在、`responses` 恒 404 故未列入，其 Anthropic 兼容在 `/apps/anthropic` 独立路径、单 BaseURL 规格表达不了，不接入。Coding Plan 额度按请求数计（月 9 万次）且控制台无开放查询 API，不声明额度查询。Token Plan 额度查询独立使用百炼 CLI 控制台 `console_access_token`（不是推理 Key，也不需要新建 AccessKey），通过固定控制台主机的 `/cli/api.json` 聚合 usage、subscription、quota-config；按实际套餐返回 Credits，未知总额时返回百分比，缺失的用量窗口不补零。登录过期需重新执行 `bl auth login --console` 后导入。
 
-> 除 `deepseek` 外的提供商均未声明 `quota`。注意速率窗口维度不依赖 `quota` 声明的形态字段，只要额度端点通了就会从响应头一并读出（见 3.6）。
+> `kimi/coding` / `deepseek/api` / `kiro` / `bailian-cn/token-plan` / `openai/codex` 五家 `quota_queryable: true`。速率窗口维度不依赖内置实现的主链路，只要额度端点通了就会从响应头一并读出（见 3.6）。
 
-> `ark` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
+> `ark/api` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
-> `openai-codex` 是 ChatGPT 订阅（Plus/Pro 登录态，`credential` 为 `oauth_refresh`）：只走 `responses` 协议，转发面对该 provider 强制请求整形——`store=false`/`stream=true`、剥离 `max_output_tokens`/`temperature`/`top_p` 等上游不接受的采样参数、`instructions` 空缺时注入 codex 官方 prompt、路径 `/v1/responses`→`/responses`、`session_id` 由服务端按账号+`prompt_cache_key` 派生（客户端自带会话头作废）。上游 401 时作废旧 access_token、续期后原样重放一次。
+> `openai/codex` 是 ChatGPT 订阅（Plus/Pro 登录态，`credential` 为 `oauth_refresh`）：只走 `responses` 协议，转发面对该 provider 强制请求整形——`store=false`/`stream=true`、剥离 `max_output_tokens`/`temperature`/`top_p` 等上游不接受的采样参数、`instructions` 空缺时注入 codex 官方 prompt、路径 `/v1/responses`→`/responses`、`session_id` 由服务端按账号+`prompt_cache_key` 派生（客户端自带会话头作废）。上游 401 时作废旧 access_token、续期后原样重放一次。Plus/Pro 只是订阅档位、服务类型相同，不拆规格变体。
 
 ### 3.2 Account View（账号读取形态）
 
@@ -240,10 +237,15 @@ Authorization: Bearer <密钥>
 | `credential.kind` | 枚举 | 恒有 | `api_key` 或 `oauth_refresh` |
 | `credential.api_key` | string | `api_key` 形态 | **脱敏值**，规则：空串回空串；长度 ≤ 8 全掩为 `***`；否则前 4 位 + `***` + 后 4 位 |
 | `credential.refresh_token` | string | `oauth_refresh` 形态 | **脱敏值**，同 `api_key` 规则；完整 token 从不下发 |
+| `credential.console_access_token` | string | 已配置百炼控制台额度凭据时 | 仅回纯星号 `***`；保存时可传原值，编辑留空保留，仅用于额度查询 |
 | `credential.account_id` | string | `oauth_refresh` 形态 | 账号标识（auth.json 的 `tokens.account_id`），明文——它是标识不是秘密 |
 | `needs_reauth` | bool | 恒有 | `oauth_refresh` 账号的登录态是否终态失效（refresh_token 被吊销/复用）；`true` 时需重新粘贴凭据，更新账号即清除该标记 |
 | `base_url` | string | 恒有 | 端点覆盖；空串表示沿用 provider 默认 |
 | `headers` | map[string]string | 恒有 | 附加到上游请求的自定义头（原值，不脱敏）；空对象表示无 |
+| `quota_settings` | object | 开关已表态或两个间隔非全 0 时 | 账号级额度查询配置；查询本身恒由 provider 的 Go 内置实现完成（见 3.6），这里承载总开关与调度间隔 |
+| `quota_settings.enabled` | bool | 显式关闭时 | 实时额度查询总开关；**字段缺席等同开启**（老账号无此字段，默认行为不变）。`false` 时 `GET /admin/accounts/{name}/quota` 不打上游，直接回 `queryable:false` 空报告 |
+| `quota_settings.auto_interval_minutes` | int | 非 0 时 | 客户端自动刷新间隔；`0` 表示不自动刷。取值 0–1440 |
+| `quota_settings.stop_interval_minutes` | int | 非 0 时 | 账号无请求超过该间隔后自动刷新停打上游；`0` 走默认 5 分钟。取值 0–1440 |
 | `enabled` | bool | 恒有 | `false` 时其下所有模型在 resolve 中返回 `409 account_disabled` |
 | `created_at` | time | 恒有 | 创建时刻 |
 | `updated_at` | time | 恒有 | 最后更新时刻 |
@@ -259,7 +261,7 @@ Authorization: Bearer <密钥>
 | `context_window` | int | 恒有（管理面形态） | 上下文窗口 token 数声明；`0` 表示未声明 |
 | `defaults` | object | 恒有 | 缺省填充参数：调用方缺什么补什么；空对象表示无 |
 | `overrides` | object | 恒有 | 强制覆盖参数：无论调用方给什么都压盖；空对象表示无 |
-| `effort_script` | string | 恒有（管理面形态） | 档位映射脚本（`{ apply: function(ctx) {...} }` 对象字面量）：空串=走协议内置映射；非空即接管 effort 写入位置，`ctx` 带 `level`/`protocol`/`efforts`/`request`，返回完整新请求体；网关不做查表（`ctx` 不带映射值），上行值由脚本按 `level` 在 `efforts` 元数据里查出后自行写入 |
+| `effort_format` | string | 恒有（管理面形态） | effort 写入格式：空串=协议内置映射（按出站协议选字段：responses=`reasoning.effort`、chat_completions=顶层 `reasoning_effort`、anthropic=`output_config.effort`（none 改写 `thinking.type=disabled`）、gemini=`thinkingConfig.thinkingLevel` 大写）；非空=显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异。选档后网关先按档号在 `efforts` 元数据里查值（查不到不落字段，上游吃自家默认），再按此格式写入。合法取值：`chat_completions`（OpenAI Chat 协议格式，顶层 `reasoning_effort`，none 原样上发——OpenAI chat 值域含 none；百炼 qwen3.8 官方文档 none 映射 `enable_thinking=False` 即关闭思考）、`chat_completions_skip_none`（OpenAI Chat 协议格式的 none 变体，none 不落字段——kimi 官方端点思考恒开不可关，none 发了也静默忽略）、`responses`（OpenAI Responses 协议格式，嵌套 `reasoning.effort`）、`anthropic`（Anthropic 协议格式，`output_config.effort`）、`gemini`（Gemini 协议格式，`thinkingConfig.thinkingLevel` 大写） |
 | `enabled` | bool | 恒有 | 模型开关；`false` 时 resolve 返回 `409 model_disabled` |
 | `created_at` | time | 恒有 | |
 | `updated_at` | time | 恒有 | |
@@ -328,8 +330,17 @@ Authorization: Bearer <密钥>
 | `used` | number | 有值时 | 已用量。后付费形态往往只有此项 |
 | `reset` | 枚举 | 有值时 | 见 2.8 `ResetRule` |
 | `reset_at` | time | 有值时 | 下次重置的绝对时刻，上游给了才有。周期配额与速率窗口下这比静态的 `reset` 规律更有用 |
+| `extra` | string | 有值时 | 附带自由文本（套餐说明、到期日、订阅信息等），原样透传不作解析 |
 
-**数值来源**：响应体内的计量项，其 `kind`/`unit`/`reset` 以 provider 规格中的额度声明（见 3.1）兜底，上游响应自带更精确信息时以响应为准；速率窗口维度来自响应头 `x-ratelimit-{remaining,limit,reset}-{requests,tokens}`，重置时刻同时接受 RFC3339 与 Unix 秒两种写法。认不出的字段一律不猜——只报 `queryable: true` 而不产出计量项。
+**数值来源**：计量项只有一条路径——provider 声明 `quota_queryable: true` 时由 quota 包内按供应商整合的 Go 内置实现产出（账号级 JS 脚本通道已废除）：
+
+- `deepseek/api`：`GET {base}/user/balance` 余额（按币种一条，`prepaid`）+ 响应头速率窗口；
+- `kimi/coding`：`GET {base}/v1/usages` 的 5 小时/7 天窗口（`rolling`）；账号另配了网页刷新令牌时追加会员本月用量（`monthly`，增强维度失败不拖垮主报告）；
+- `kiro`：`POST https://q.{region}.amazonaws.com/` GetUsageLimits（`nextToken` 翻页），订阅配额 `monthly`，未过期赠额另出一条；
+- `bailian-cn/token-plan`：百炼控制台固定主机 `/cli/api.json` 聚合 usage/subscription/quota-config 三接口，5 小时/7 天（`rolling`）与本月（`monthly`）窗口，按套餐返回 Credits、未知总额时返回百分比；使用 `console_access_token`（非推理 Key）。
+- `openai/codex`：`GET https://chatgpt.com/backend-api/wham/usage` 的 `rate_limit.primary_window`/`secondary_window`（`rolling`，`used_percent` 即百分比、总量恒 100）。该端点不在 provider BaseURL 的 `/backend-api/codex` 子路径下，内置实现写绝对地址；订阅档位不同可能只回一个窗口，缺席的窗口不补零，两个都没有才算查不到。
+
+速率窗口维度亦可来自响应头 `x-ratelimit-{remaining,limit,reset}-{requests,tokens}`，重置时刻同时接受 RFC3339 与 Unix 秒两种写法。认不出的字段一律不猜——只报 `queryable: true` 而不产出计量项。
 
 额度报告只在进程内存缓存（带 TTL，默认 60s，`MSU_QUOTA_TTL`），不落库；账号更新或删除时缓存立即失效。查询上游使用与 resolve 相同的认证头（含账号自定义头）。
 
@@ -420,7 +431,7 @@ GET /admin/providers
 
 | 字段 | 类型 | 取值与含义 |
 |---|---|---|
-| `providers` | array of Provider | 元素结构见 3.1；按固定注册序排列，当前恒为 8 个元素 |
+| `providers` | array of Provider | 元素结构见 3.1；按固定注册序排列，当前恒为 10 个元素 |
 
 **错误**：无领域错误。
 
@@ -435,7 +446,7 @@ curl http://localhost:8080/admin/providers \
 {
   "providers": [
     {
-      "id": "anthropic",
+      "id": "anthropic/api",
       "display_name": "Anthropic",
       "website": "https://www.anthropic.com",
       "base_url": "https://api.anthropic.com",
@@ -448,7 +459,7 @@ curl http://localhost:8080/admin/providers \
 }
 ```
 
-> 上例仅展示首个元素；`quota` / `models` 未声明的 provider 相应字段缺省。
+> 上例仅展示首个元素；`quota_queryable` / `models` 未声明的 provider 相应字段缺省。
 
 ### 5.2 列举账号
 
@@ -500,7 +511,7 @@ POST /admin/accounts
 ```json
 {
   "name": "ds-1",
-  "provider_id": "deepseek",
+  "provider_id": "deepseek/api",
   "credential": {
     "kind": "api_key",
     "api_key": "sk-…"
@@ -537,7 +548,7 @@ POST /admin/accounts
 curl -X POST http://localhost:8080/admin/accounts \
   -H "Authorization: Bearer $MSU_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"ds-1","provider_id":"deepseek","api_key":"sk-…"}'
+  -d '{"name":"ds-1","provider_id":"deepseek/api","api_key":"sk-…"}'
 ```
 
 ### 5.4 查看账号
@@ -580,7 +591,7 @@ curl http://localhost:8080/admin/accounts/ds-1 \
 {
   "account": {
     "name": "ds-1",
-    "provider_id": "deepseek",
+    "provider_id": "deepseek/api",
     "credential": {"kind": "api_key", "api_key": "sk-1***last"},
     "base_url": "",
     "headers": {},
@@ -616,7 +627,7 @@ PUT /admin/accounts/{name}
 
 ```json
 {
-  "provider_id": "deepseek",
+  "provider_id": "deepseek/api",
   "credential": {
     "kind": "api_key",
     "api_key": "sk-…"
@@ -652,7 +663,7 @@ PUT /admin/accounts/{name}
 curl -X PUT http://localhost:8080/admin/accounts/ds-1 \
   -H "Authorization: Bearer $MSU_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"provider_id":"deepseek","base_url":"https://api.deepseek.com","headers":{},"enabled":false}'
+  -d '{"provider_id":"deepseek/api","base_url":"https://api.deepseek.com","headers":{},"enabled":false}'
 ```
 
 **示例**（仅轮换 API key，其余字段按当前值原样带回）：
@@ -661,7 +672,7 @@ curl -X PUT http://localhost:8080/admin/accounts/ds-1 \
 curl -X PUT http://localhost:8080/admin/accounts/ds-1 \
   -H "Authorization: Bearer $MSU_ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"provider_id":"deepseek","api_key":"sk-new-…","base_url":"https://api.deepseek.com","headers":{},"enabled":true}'
+  -d '{"provider_id":"deepseek/api","api_key":"sk-new-…","base_url":"https://api.deepseek.com","headers":{},"enabled":true}'
 ```
 
 ### 5.6 删除账号
@@ -759,15 +770,17 @@ curl http://localhost:8080/admin/accounts/ds-1/quota \
 }
 ```
 
-provider 未声明额度接口时（如除 deepseek 外的五家）：
+provider 未声明内置额度查询时（如 `anthropic/api` / `openai/api` / `gemini/api` / `ark/api` / `bailian-cn/coding-plan`）：
 
 ```json
-{ "account": "kimi-1", "queryable": false, "meters": [], "at": "2026-09-17T02:00:00Z" }
+{ "account": "ark-1", "queryable": false, "meters": [], "at": "2026-09-17T02:00:00Z" }
 ```
+
+账号把 `quota_settings.enabled` 显式置为 `false` 时同形返回——不打上游，provider 有没有内置实现都不再过问。
 
 ### 5.8 查询上游可用模型
 
-**使用场景**：向该账号所属上游查询其实际可用的模型清单，与本地配置（5.9）比对——发现上游新增了模型、或本地配置引用了已下线的模型。provider 未声明列举端点（如 `ark`，实测各路径恒 `401`）时返回 `queryable: false`。
+**使用场景**：向该账号所属上游查询其实际可用的模型清单，与本地配置（5.9）比对——发现上游新增了模型、或本地配置引用了已下线的模型。provider 未声明列举端点（如 `ark/api`，实测各路径恒 `401`）时返回 `queryable: false`。
 
 ```
 GET /admin/accounts/{name}/upstream-models
@@ -860,7 +873,7 @@ POST /admin/models
 | `context_window` | int | 否 | ≥ 0；缺省或 `0` = 未声明 | 上下文窗口 token 数 |
 | `defaults` | object | 否 | 须为 JSON 对象（数组/标量返回 `400 invalid_json`）；缺省或 `null` 落库为 `{}` | 缺省填充参数 |
 | `overrides` | object | 否 | 同 `defaults` | 强制覆盖参数 |
-| `effort_script` | string | 否 | 缺省或空串 = 无脚本（协议内置映射）；非空做语法预检，非法返回 `400` | 档位映射脚本，见 3.3 与 7.2 第 2 条 |
+| `effort_format` | string | 否 | 缺省或空串 = 协议内置映射；非空须为 3.3 列出的格式枚举之一，非法返回 `400` | effort 写入格式，见 3.3 与 7.2 第 2 条 |
 | `enabled` | bool | 否 | 缺省 `true` | 模型开关 |
 
 **请求体结构**：
@@ -965,7 +978,7 @@ PUT /admin/models/{id...}
 | `account` / `native_model` / `protocol` | **保留原值** |
 | `context_window` | 置 `0`（清除声明） |
 | `defaults` / `overrides` | 置 `{}`（清除） |
-| `effort_script` | **省略（`null`）保留原值**；显式空串 = 清除脚本回内置映射 |
+| `effort_format` | **省略（`null`）保留原值**；显式空串 = 回协议内置映射 |
 | `enabled` | 置 `true`（重新启用） |
 
 **请求体结构**（完整替换形态；`id` 不出现在请求体中）：
@@ -1127,7 +1140,9 @@ POST /admin/accounts/reorder
 **示例**：
 
 ```bash
-curl -X POST http://localhost:8080/admin/accounts/reorder   -H "Authorization: Bearer $MSU_ADMIN_KEY"   -d '{"names":["kimi-2","kimi-1","ds-1"]}'
+curl -X POST http://localhost:8080/admin/accounts/reorder \
+  -H "Authorization: Bearer $MSU_ADMIN_KEY" \
+  -d '{"names":["kimi-2","kimi-1","ds-1"]}'
 ```
 
 ### 5.17 模型重排序（拖拽排序）
@@ -1160,7 +1175,9 @@ POST /admin/models/reorder
 **示例**：
 
 ```bash
-curl -X POST http://localhost:8080/admin/models/reorder   -H "Authorization: Bearer $MSU_ADMIN_KEY"   -d '{"ids":["kimi-1/k2","ds-1/v4"]}'
+curl -X POST http://localhost:8080/admin/models/reorder \
+  -H "Authorization: Bearer $MSU_ADMIN_KEY" \
+  -d '{"ids":["kimi-1/k2","ds-1/v4"]}'
 ```
 
 ---
@@ -1200,7 +1217,7 @@ curl http://localhost:8080/v1/models \
     {
       "id": "ds-1/v4",
       "account": "ds-1",
-      "provider_id": "deepseek",
+      "provider_id": "deepseek/api",
       "protocol": "chat_completions",
       "native_model": "deepseek-v4.1-flash",
       "context_window": 1000000,
@@ -1257,7 +1274,7 @@ curl -X POST http://localhost:8080/v1/resolve \
 {
   "model_id": "ds-1/v4",
   "account": "ds-1",
-  "provider_id": "deepseek",
+  "provider_id": "deepseek/api",
   "protocol": "chat_completions",
   "base_url": "https://api.deepseek.com",
   "native_model": "deepseek-v4.1-flash",
@@ -1348,7 +1365,7 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 **转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
-2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）命中模型声明的档位时消费掉（不进上游），并给思考参数赋值。赋值落点两级：**模型配了映射脚本（`effort_script`）即由脚本接管**——脚本是 JS 对象字面量 `{ apply: function(ctx) {...} }`（额度脚本同款 goja 机制，2s 上限），`ctx` 带 `level`（档号）、`protocol`、`efforts`（元数据声明）与 `request`（当前请求体），返回完整新请求体，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关）；**网关不做查表**（`ctx` 不带映射值）——路由由脚本读元数据完成：按 `ctx.level` 在 `ctx.efforts` 里查 `value` 再写入目标位置（如 `for (var i = 0; i < ctx.efforts.length; i++) { if (ctx.efforts[i].name === ctx.level) { ctx.request.reasoning_effort = ctx.efforts[i].value; break; } }`），查不到就不落字段、上游吃自家默认。未传 `reasoning_level` 时脚本不执行；档号不在声明列表里（或形态不对）则原样透传不动体、脚本也不执行。脚本运行失败回 502（`effort_script_failed`）。**未配脚本走协议内置映射**（2026-10-04 逐协议核对官方 SDK/文档）：`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`（两协议值域均含 `none`=关闭思考）；`anthropic` 写 `output_config.effort`（官方值域 low/medium/high/xhigh/max），`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel`（枚举大写 MINIMAL/LOW/MEDIUM/HIGH），`none` 不动体（3.x 全系不可关思考、2.5 走 thinkingBudget 预算制，无通用映射）。赋值落在客户端参数层，优先级 `defaults < 映射 < overrides`——JSON 覆盖参数恒可压盖映射（含脚本）结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
+2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）由通用映射逻辑消费（该网关字段恒不发上游，未命中同样删除）并给思考参数赋值。映射规则固定三段：先取档号，再按档号在模型声明的 `efforts` 元数据里查上行值（未提供、形态不对或未命中声明则不落字段，上游吃自家默认），命中后按模型的写入格式（`effort_format`，见 3.3）把值格式化进请求体——空串=协议内置（`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`，两协议值域均含 `none`=关闭思考；`anthropic` 写 `output_config.effort`，`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel` 枚举大写，`none` 不动体），显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关，配 `chat_completions_skip_none`：none 删字段不落）。映射在 `defaults` 合并后、`overrides` 合并前施加：映射恒压 defaults 与客户端参数（skip_none 删字段后不会被 defaults 回填），JSON 覆盖参数恒可压盖映射结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
 3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
 4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
 5. 逐跳头（Connection 等）按 HTTP 规范不转发。
@@ -1378,7 +1395,7 @@ curl http://localhost:8080/admin/providers \
 # 2. 建账号
 curl -X POST http://localhost:8080/admin/accounts \
   -H "Authorization: Bearer admin-key" -H "Content-Type: application/json" \
-  -d '{"name":"ds-1","provider_id":"deepseek","api_key":"sk-…"}'
+  -d '{"name":"ds-1","provider_id":"deepseek/api","api_key":"sk-…"}'
 
 # 3. 建模型
 curl -X POST http://localhost:8080/admin/models \

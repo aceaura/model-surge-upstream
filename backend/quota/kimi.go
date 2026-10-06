@@ -76,7 +76,7 @@ func (c *kimiAccessCache) drop(accountName string) {
 // 计量(会员月总额度)。查询失败只记日志不拖垮主报告——5 小时/7 天窗来自
 // API key 链路,月度是增强项;令牌失效时主链路不应跟着黑屏。
 func (q *Quota) appendKimiMonthly(ctx context.Context, spec provider.Spec, acc account.Account, report *Report) {
-	if spec.ID != "kimi" || acc.Credential.WebRefreshToken == "" {
+	if spec.ID != "kimi/coding" || acc.Credential.WebRefreshToken == "" {
 		return
 	}
 	m, err := q.kimiMonthlyMeter(ctx, acc)
@@ -142,6 +142,7 @@ func kimiMonthlyMeterOf(payload map[string]any) *Meter {
 		Unit:  provider.UnitPercent,
 		Label: "本月",
 		Used:  &used,
+		Reset: provider.ResetMonthly,
 	}
 	if s, ok := anyOf(balance, "expireTime", "expire_time").(string); ok {
 		if t, ok := timeOf(s); ok {
@@ -222,4 +223,80 @@ func mapOf(m map[string]any, keys ...string) (map[string]any, bool) {
 		return v, true
 	}
 	return nil, false
+}
+
+// kimiUsagesMeters 查 For Coding 的 5 小时/7 天窗口:GET {base}/v1/usages,
+// API key 走 Bearer 认证(规格声明的 anthropic_key 形态只适用推理端点)。
+// 会员月总额度不在这条链上,由 appendKimiMonthly 另补。
+func kimiUsagesMeters(ctx context.Context, q *Quota, spec provider.Spec, acc account.Account) ([]Meter, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(acc.EffectiveBaseURL(spec), "/")+"/v1/usages", nil)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.QuotaUnavailable, "build quota request", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+acc.Credential.APIKey)
+
+	body, _, err := q.do(req)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, apperr.Wrap(apperr.QuotaUnavailable, "decode usages response", err)
+	}
+	out := []Meter{}
+	if limits, ok := payload["limits"].([]any); ok && len(limits) > 0 {
+		if first, ok := limits[0].(map[string]any); ok {
+			if detail, ok := first["detail"].(map[string]any); ok {
+				if m, ok := kimiWindowMeter("5小时", detail); ok {
+					out = append(out, m)
+				}
+			}
+		}
+	}
+	if usage, ok := payload["usage"].(map[string]any); ok {
+		if m, ok := kimiWindowMeter("7天", usage); ok {
+			out = append(out, m)
+		}
+	}
+	if len(out) > 0 {
+		return out, nil
+	}
+	// 与脚本版同一口径:响应里没有额度数据时带上游错误消息报不可用。
+	if e, ok := payload["error"].(map[string]any); ok {
+		if msg, ok := e["message"].(string); ok && msg != "" {
+			return nil, apperr.New(apperr.QuotaUnavailable, msg)
+		}
+	}
+	return nil, apperr.New(apperr.QuotaUnavailable, "kimi usages response carried no quota data")
+}
+
+// kimiWindowMeter 把一个窗口对象映射成计量项:未用量账号没有 used 字段,
+// 由 limit-remaining 推导;resetTime 即窗口重置时刻。
+func kimiWindowMeter(label string, d map[string]any) (Meter, bool) {
+	limit, ok := numberOf(d["limit"])
+	if !ok {
+		return Meter{}, false
+	}
+	used, ok := numberOf(d["used"])
+	if !ok {
+		remaining, rok := numberOf(d["remaining"])
+		if !rok {
+			return Meter{}, false
+		}
+		used = limit - remaining
+	}
+	m := Meter{
+		Kind:  provider.MeterUsage,
+		Unit:  provider.UnitPercent,
+		Label: label,
+		Used:  &used,
+		Total: &limit,
+		Reset: provider.ResetRolling,
+	}
+	if t, ok := timeOf(d["resetTime"]); ok {
+		m.ResetAt = &t
+	}
+	return m, true
 }

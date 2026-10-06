@@ -23,7 +23,7 @@ ApiClient fakeClient(Map<String, dynamic> testResult) => ApiClient(
             'accounts': [
               {
                 'name': 'ds-1',
-                'provider_id': 'deepseek',
+                'provider_id': 'deepseek/api',
                 'credential': {'api_key': 'sk-***'},
                 'base_url': 'https://api.deepseek.com',
                 'headers': <String, dynamic>{},
@@ -81,7 +81,7 @@ void main() {
               for (final n in serverOrder)
                 {
                   'name': n,
-                  'provider_id': 'deepseek',
+                  'provider_id': 'deepseek/api',
                   'credential': {'api_key': 'sk-***'},
                   'base_url': 'https://api.deepseek.com',
                   'headers': <String, dynamic>{},
@@ -190,7 +190,7 @@ void main() {
               for (final n in serverOrder)
                 {
                   'name': n,
-                  'provider_id': 'deepseek',
+                  'provider_id': 'deepseek/api',
                   'credential': {'api_key': 'sk-***'},
                   'base_url': 'https://api.deepseek.com',
                   'headers': <String, dynamic>{},
@@ -274,7 +274,7 @@ void main() {
 
     await tester.tap(btn);
     await tester.pumpAndSettle();
-    expect(find.textContaining('账号 ds-1 可达 · HTTP 200 · 123 ms'),
+    expect(find.textContaining('账号 ds-1 连通 · HTTP 200 · 123 ms'),
         findsOneWidget);
 
     // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。

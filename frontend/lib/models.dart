@@ -26,12 +26,16 @@ class EffortEntry {
   final String value;
 
   factory EffortEntry.fromJson(Map<String, dynamic> json) => EffortEntry(
-        name: json['name'] as String? ?? '',
-        value: json['value'] as String? ?? '',
-      );
+    name: json['name'] as String? ?? '',
+    value: json['value'] as String? ?? '',
+  );
 
   Map<String, dynamic> toJson() => {'name': name, 'value': value};
 }
+
+/// provider id 的厂商段:路径式 id(厂商[-区域]/服务)取首个 - 或 / 之前,
+/// 供 Logo 映射与厂商级表单特判用。
+String providerVendor(String id) => id.split(RegExp('[-/]')).first;
 
 class ProviderSpec {
   const ProviderSpec({
@@ -44,9 +48,7 @@ class ProviderSpec {
     required this.credential,
     required this.billing,
     required this.region,
-    required this.quotaKind,
-    required this.quotaUnit,
-    required this.quotaReset,
+    required this.plan,
     required this.quotaQueryable,
   });
 
@@ -63,104 +65,89 @@ class ProviderSpec {
 
   /// 计费模式的中文名,未识别值原样透传。
   String get billingLabel => switch (billing) {
-        'subscription' => '订阅',
-        'paygo' => '按量计费',
-        _ => billing,
-      };
+    'subscription' => '订阅',
+    'paygo' => '按量计费',
+    _ => billing,
+  };
 
   /// 服务区域:CN/Global 或厂商自定义分区,存储英文。
   final String region;
 
   /// 服务区域的中文名,未识别值原样透传。
   String get regionLabel => switch (region) {
-        'CN' => '中国',
-        'Global' => '全球',
-        _ => region,
-      };
+    'CN' => '中国',
+    'Global' => '全球',
+    _ => region,
+  };
 
-  /// 类型签:计费模式 · 服务区域(如 订阅 · 全球),分组卡片分节标题用。
-  String get typeLabel => '$billingLabel · $regionLabel';
+  /// 服务类型:同厂商同计费同区域下的服务类型区分(如百炼 Token/Coding
+  /// Plan)。'Standard' 是单一服务类型的占位标签,界面一律隐藏。
+  final String plan;
 
-  /// 后端只要带 quota 块即视为声明了额度接口;kind/unit 只是
-  /// 主计量项形态说明,老数据可能缺省,不能拿它们当可查询判据。
-  final String? quotaKind;
-  final String? quotaUnit;
-  final String? quotaReset;
+  /// 有值得展示的服务类型(Standard 占位与空值都不展示)。
+  bool get hasServiceType => plan.isNotEmpty && plan != 'Standard';
 
-  /// 提供商是否声明了额度查询接口(响应里有 quota 块)。
+  String get typeLabel => hasServiceType
+      ? '$billingLabel · $regionLabel · $plan'
+      : '$billingLabel · $regionLabel';
+
+  /// 提供商是否有内置额度查询(Go 实现按供应商整合在后端)。
   final bool quotaQueryable;
 
   factory ProviderSpec.fromJson(Map<String, dynamic> json) {
-    final quota = json['quota'] as Map<String, dynamic>?;
     return ProviderSpec(
       id: json['id'] as String,
       displayName: json['display_name'] as String? ?? '',
       website: json['website'] as String? ?? '',
       baseUrl: json['base_url'] as String? ?? '',
-      protocols:
-          (json['protocols'] as List<dynamic>? ?? const []).cast<String>(),
+      protocols: (json['protocols'] as List<dynamic>? ?? const [])
+          .cast<String>(),
       auth: json['auth'] as String? ?? '',
       credential: json['credential'] as String? ?? '',
       billing: json['billing'] as String? ?? '',
       region: json['region'] as String? ?? '',
-      quotaKind: quota?['kind'] as String?,
-      quotaUnit: quota?['unit'] as String?,
-      quotaReset: quota?['reset'] as String?,
-      quotaQueryable: quota != null,
+      plan: json['plan'] as String? ?? '',
+      quotaQueryable: json['quota_queryable'] as bool? ?? false,
     );
   }
 }
 
-/// 账号级额度查询脚本(仿 CC Switch usage_script):enabled+code 生效,
-/// 其余三项为 0 时走后端默认(超时 10s,不自动刷新,停刷间隔 5 分钟)。
-class QuotaScript {
-  const QuotaScript({
-    required this.enabled,
-    required this.code,
-    this.timeoutSeconds = 0,
+/// 账号级额度查询配置:查询本身走提供商 Go 内置实现,这里承载总开关与
+/// 两个调度间隔;间隔为 0 时走后端默认(不自动刷新,停刷间隔 5 分钟)。
+class QuotaSettings {
+  const QuotaSettings({
+    this.enabled,
     this.autoIntervalMinutes = 0,
     this.stopIntervalMinutes = 0,
-    this.variables = const {},
   });
 
-  final bool enabled;
-  final String code;
-  final int timeoutSeconds;
+  /// 实时额度查询总开关。null 表示未表态,按开启处理(老账号没这个字段)。
+  final bool? enabled;
+
   final int autoIntervalMinutes;
 
   /// 账号无请求超过该间隔后自动刷新停打上游,下一次请求到达恢复;
   /// 0 走后端默认 5 分钟。
   final int stopIntervalMinutes;
 
-  /// 脚本自定义占位符:代码里 {{名}} 在执行前替换为对应值;内置
-  /// apiKey/baseUrl/accessToken/accountId 由后端派生,不在此列。
-  final Map<String, String> variables;
+  /// 与后端 QuotaEnabled 同口径:未表态按开启。
+  bool get quotaEnabled => enabled ?? true;
 
-  /// 与后端 Active 同口径:启用且代码非空才真正接管额度查询。
-  bool get active => enabled && code.isNotEmpty;
+  /// 与后端 Empty 同口径:开关未表态且两间隔均为 0 与未配置同义。
+  bool get empty =>
+      enabled == null && autoIntervalMinutes == 0 && stopIntervalMinutes == 0;
 
-  factory QuotaScript.fromJson(Map<String, dynamic> json) => QuotaScript(
-        enabled: json['enabled'] as bool? ?? false,
-        code: json['code'] as String? ?? '',
-        timeoutSeconds: (json['timeout_seconds'] as num?)?.toInt() ?? 0,
-        autoIntervalMinutes:
-            (json['auto_interval_minutes'] as num?)?.toInt() ?? 0,
-        stopIntervalMinutes:
-            (json['stop_interval_minutes'] as num?)?.toInt() ?? 0,
-        variables: (json['variables'] as Map?)?.map(
-              (k, v) => MapEntry('$k', '$v'),
-            ) ??
-            const {},
-      );
+  factory QuotaSettings.fromJson(Map<String, dynamic> json) => QuotaSettings(
+    enabled: json['enabled'] as bool?,
+    autoIntervalMinutes: (json['auto_interval_minutes'] as num?)?.toInt() ?? 0,
+    stopIntervalMinutes: (json['stop_interval_minutes'] as num?)?.toInt() ?? 0,
+  );
 
   Map<String, dynamic> toJson() => {
-        'enabled': enabled,
-        'code': code,
-        'timeout_seconds': timeoutSeconds,
-        'auto_interval_minutes': autoIntervalMinutes,
-        'stop_interval_minutes': stopIntervalMinutes,
-        'variables': variables,
-      };
+    'enabled': ?enabled,
+    'auto_interval_minutes': autoIntervalMinutes,
+    'stop_interval_minutes': stopIntervalMinutes,
+  };
 }
 
 class Account {
@@ -171,12 +158,18 @@ class Account {
     required this.baseUrl,
     required this.headers,
     required this.enabled,
-    this.quotaScript,
+    this.quotaSettings,
     this.credentialKind = 'api_key',
     this.maskedRefreshToken = '',
     this.accountId = '',
     this.needsReauth = false,
     this.maskedWebRefreshToken = '',
+    this.maskedConsoleAccessToken = '',
+    this.profileArn = '',
+    this.region = 'us-east-1',
+    this.apiRegion = '',
+    this.clientId = '',
+    this.maskedClientSecret = '',
   });
 
   final String name;
@@ -188,13 +181,13 @@ class Account {
   final Map<String, String> headers;
   final bool enabled;
 
-  /// 额度脚本配置;null 表示未配置(服务端空脚本不回传)。
-  final QuotaScript? quotaScript;
+  /// 额度查询节奏配置;null 表示未配置(服务端空配置不回传)。
+  final QuotaSettings? quotaSettings;
 
-  /// 凭据形态:api_key / oauth_refresh(订阅登录态)。
+  /// 凭据形态:api_key / oauth_refresh / kiro_refresh(订阅登录态)。
   final String credentialKind;
 
-  /// oauth_refresh 形态:服务端脱敏的 refresh_token,仅供显示。
+  /// 服务端脱敏的 refresh_token,仅供显示。
   final String maskedRefreshToken;
 
   /// oauth_refresh 形态:账号标识(auth.json 的 tokens.account_id),明文。
@@ -207,10 +200,22 @@ class Account {
   /// 空串表示未配置,额度查询不出「本月」计量。
   final String maskedWebRefreshToken;
 
+  /// 百炼控制台额度查询 token(服务端仅回纯星号);不参与推理鉴权。
+  final String maskedConsoleAccessToken;
+
+  /// Kiro 登录态:Profile 可由 Desktop 刷新回填;认证区与推理区分离。
+  final String profileArn;
+  final String region;
+  final String apiRegion;
+  final String clientId;
+
+  /// 可选 SSO secret,服务端仅回纯星号。
+  final String maskedClientSecret;
+
   factory Account.fromJson(Map<String, dynamic> json) {
     final credential = json['credential'] as Map<String, dynamic>? ?? const {};
     final headers = json['headers'] as Map<String, dynamic>? ?? const {};
-    final script = json['quota_script'] as Map<String, dynamic>?;
+    final settings = json['quota_settings'] as Map<String, dynamic>?;
     return Account(
       name: json['name'] as String,
       providerId: json['provider_id'] as String? ?? '',
@@ -218,12 +223,19 @@ class Account {
       baseUrl: json['base_url'] as String? ?? '',
       headers: headers.map((k, v) => MapEntry(k, '$v')),
       enabled: json['enabled'] as bool? ?? false,
-      quotaScript: script == null ? null : QuotaScript.fromJson(script),
+      quotaSettings: settings == null ? null : QuotaSettings.fromJson(settings),
       credentialKind: credential['kind'] as String? ?? 'api_key',
       maskedRefreshToken: credential['refresh_token'] as String? ?? '',
       accountId: credential['account_id'] as String? ?? '',
       needsReauth: json['needs_reauth'] as bool? ?? false,
       maskedWebRefreshToken: credential['web_refresh_token'] as String? ?? '',
+      maskedConsoleAccessToken:
+          credential['console_access_token'] as String? ?? '',
+      profileArn: credential['profile_arn'] as String? ?? '',
+      region: credential['region'] as String? ?? 'us-east-1',
+      apiRegion: credential['api_region'] as String? ?? '',
+      clientId: credential['client_id'] as String? ?? '',
+      maskedClientSecret: credential['client_secret'] as String? ?? '',
     );
   }
 }
@@ -241,7 +253,7 @@ class UpstreamModel {
     required this.enabled,
     this.efforts,
     this.effortsEffective = const [],
-    this.effortScript = '',
+    this.effortFormat = '',
   });
 
   final String id;
@@ -265,30 +277,28 @@ class UpstreamModel {
   /// 服务端算好的有效支持列表(存量自动模式=上游声明),空列表=不支持。
   final List<EffortEntry> effortsEffective;
 
-  /// 档位映射脚本({apply: function(ctx){...}} 对象字面量):空=走协议
-  /// 内置映射;非空即接管 effort 写入位置,承接「协议外壳+自家字段」
-  /// 的厂商差异(如 kimi 顶层 reasoning_effort)。
-  final String effortScript;
+  /// effort 写入格式:空=协议内置映射;非空=显式格式压过协议外形,
+  /// 承接「协议外壳+自家字段」的厂商差异(如 kimi 顶层 reasoning_effort)。
+  final String effortFormat;
 
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
-        id: json['id'] as String,
-        account: json['account'] as String? ?? '',
-        nativeModel: json['native_model'] as String? ?? '',
-        protocol: json['protocol'] as String? ?? '',
-        contextWindow: json['context_window'] as int? ?? 0,
-        defaults: json['defaults'] as Map<String, dynamic>? ?? const {},
-        overrides: json['overrides'] as Map<String, dynamic>? ?? const {},
-        compact: json['compact'] as Map<String, dynamic>? ?? const {},
-        enabled: json['enabled'] as bool? ?? false,
-        efforts: (json['efforts'] as List<dynamic>?)
-            ?.map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        effortsEffective:
-            (json['efforts_effective'] as List<dynamic>? ?? const [])
-                .map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
-                .toList(),
-        effortScript: json['effort_script'] as String? ?? '',
-      );
+    id: json['id'] as String,
+    account: json['account'] as String? ?? '',
+    nativeModel: json['native_model'] as String? ?? '',
+    protocol: json['protocol'] as String? ?? '',
+    contextWindow: json['context_window'] as int? ?? 0,
+    defaults: json['defaults'] as Map<String, dynamic>? ?? const {},
+    overrides: json['overrides'] as Map<String, dynamic>? ?? const {},
+    compact: json['compact'] as Map<String, dynamic>? ?? const {},
+    enabled: json['enabled'] as bool? ?? false,
+    efforts: (json['efforts'] as List<dynamic>?)
+        ?.map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    effortsEffective: (json['efforts_effective'] as List<dynamic>? ?? const [])
+        .map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    effortFormat: json['effort_format'] as String? ?? '',
+  );
 }
 
 /// 一条计量项。上游额度语义不止一种：预付费看余量，后付费只有已用量，
@@ -321,17 +331,17 @@ class QuotaMeter {
   final String? extra;
 
   factory QuotaMeter.fromJson(Map<String, dynamic> json) => QuotaMeter(
-        kind: json['kind'] as String? ?? '',
-        unit: json['unit'] as String? ?? '',
-        label: json['label'] as String?,
-        currency: json['currency'] as String?,
-        remaining: (json['remaining'] as num?)?.toDouble(),
-        total: (json['total'] as num?)?.toDouble(),
-        used: (json['used'] as num?)?.toDouble(),
-        reset: json['reset'] as String?,
-        resetAt: DateTime.tryParse(json['reset_at'] as String? ?? ''),
-        extra: json['extra'] as String?,
-      );
+    kind: json['kind'] as String? ?? '',
+    unit: json['unit'] as String? ?? '',
+    label: json['label'] as String?,
+    currency: json['currency'] as String?,
+    remaining: (json['remaining'] as num?)?.toDouble(),
+    total: (json['total'] as num?)?.toDouble(),
+    used: (json['used'] as num?)?.toDouble(),
+    reset: json['reset'] as String?,
+    resetAt: DateTime.tryParse(json['reset_at'] as String? ?? ''),
+    extra: json['extra'] as String?,
+  );
 
   static const _kindNames = {
     'balance': '余额',
@@ -386,14 +396,14 @@ class QuotaReport {
   final DateTime? at;
 
   factory QuotaReport.fromJson(Map<String, dynamic> json) => QuotaReport(
-        account: json['account'] as String? ?? '',
-        queryable: json['queryable'] as bool? ?? false,
-        meters: (json['meters'] as List<dynamic>? ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(QuotaMeter.fromJson)
-            .toList(growable: false),
-        at: DateTime.tryParse(json['at'] as String? ?? ''),
-      );
+    account: json['account'] as String? ?? '',
+    queryable: json['queryable'] as bool? ?? false,
+    meters: (json['meters'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(QuotaMeter.fromJson)
+        .toList(growable: false),
+    at: DateTime.tryParse(json['at'] as String? ?? ''),
+  );
 }
 
 /// 代理转发面配置。与账号凭据不同，apiKey 从管理面读到的是真实值——
@@ -412,10 +422,10 @@ class ProxySettings {
   final bool lanOpen;
 
   factory ProxySettings.fromJson(Map<String, dynamic> json) => ProxySettings(
-        apiKey: json['api_key'] as String? ?? '',
-        port: json['port'] as int? ?? 12344,
-        lanOpen: json['lan_open'] as bool? ?? false,
-      );
+    apiKey: json['api_key'] as String? ?? '',
+    port: json['port'] as int? ?? 12344,
+    lanOpen: json['lan_open'] as bool? ?? false,
+  );
 }
 
 /// 进程日志条目。seq 单调递增，客户端用它做增量轮询 cursor。
@@ -437,12 +447,12 @@ class LogEntry {
   final String msg;
 
   factory LogEntry.fromJson(Map<String, dynamic> json) => LogEntry(
-        seq: json['seq'] as int? ?? 0,
-        at: DateTime.tryParse(json['at'] as String? ?? '') ?? DateTime.now(),
-        level: json['level'] as String? ?? 'info',
-        source: json['source'] as String? ?? '',
-        msg: json['msg'] as String? ?? '',
-      );
+    seq: json['seq'] as int? ?? 0,
+    at: DateTime.tryParse(json['at'] as String? ?? '') ?? DateTime.now(),
+    level: json['level'] as String? ?? 'info',
+    source: json['source'] as String? ?? '',
+    msg: json['msg'] as String? ?? '',
+  );
 }
 
 /// 一次对话。modelId 是最近一次发送所用模型，供选择器回显。
@@ -460,13 +470,13 @@ class ChatSession {
   final DateTime updatedAt;
 
   factory ChatSession.fromJson(Map<String, dynamic> json) => ChatSession(
-        id: json['id'] as String? ?? '',
-        title: json['title'] as String? ?? '',
-        modelId: json['model_id'] as String? ?? '',
-        updatedAt:
-            DateTime.tryParse(json['updated_at'] as String? ?? '') ??
-                DateTime.now(),
-      );
+    id: json['id'] as String? ?? '',
+    title: json['title'] as String? ?? '',
+    modelId: json['model_id'] as String? ?? '',
+    updatedAt:
+        DateTime.tryParse(json['updated_at'] as String? ?? '') ??
+        DateTime.now(),
+  );
 }
 
 /// 消息内嵌的一张图片：mime 限 png/jpeg/webp/gif，
@@ -478,9 +488,9 @@ class ChatAttachment {
   final String data;
 
   factory ChatAttachment.fromJson(Map<String, dynamic> json) => ChatAttachment(
-        mime: json['mime'] as String? ?? '',
-        data: json['data'] as String? ?? '',
-      );
+    mime: json['mime'] as String? ?? '',
+    data: json['data'] as String? ?? '',
+  );
 
   Map<String, dynamic> toJson() => {'mime': mime, 'data': data};
 }
@@ -502,16 +512,16 @@ class ChatMessage {
   final DateTime createdAt;
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
-        id: json['id'] as int? ?? 0,
-        role: json['role'] as String? ?? '',
-        content: json['content'] as String? ?? '',
-        attachments: (json['attachments'] as List<dynamic>? ?? const [])
-            .map((e) => ChatAttachment.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        createdAt:
-            DateTime.tryParse(json['created_at'] as String? ?? '') ??
-                DateTime.now(),
-      );
+    id: json['id'] as int? ?? 0,
+    role: json['role'] as String? ?? '',
+    content: json['content'] as String? ?? '',
+    attachments: (json['attachments'] as List<dynamic>? ?? const [])
+        .map((e) => ChatAttachment.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    createdAt:
+        DateTime.tryParse(json['created_at'] as String? ?? '') ??
+        DateTime.now(),
+  );
 }
 
 /// 一组用量聚合值。input 是服务端归一后的净输入（已扣缓存）。
@@ -542,15 +552,15 @@ class UsageTotals {
       (j[k] as num?)?.toInt() ?? 0;
 
   factory UsageTotals.fromJson(Map<String, dynamic> json) => UsageTotals(
-        requests: _i(json, 'requests'),
-        success: _i(json, 'success'),
-        input: _i(json, 'input_tokens'),
-        output: _i(json, 'output_tokens'),
-        cacheRead: _i(json, 'cache_read_tokens'),
-        cacheWrite: _i(json, 'cache_write_tokens'),
-        realTotal: _i(json, 'real_total_tokens'),
-        hitRate: (json['cache_hit_rate'] as num?)?.toDouble() ?? 0,
-      );
+    requests: _i(json, 'requests'),
+    success: _i(json, 'success'),
+    input: _i(json, 'input_tokens'),
+    output: _i(json, 'output_tokens'),
+    cacheRead: _i(json, 'cache_read_tokens'),
+    cacheWrite: _i(json, 'cache_write_tokens'),
+    realTotal: _i(json, 'real_total_tokens'),
+    hitRate: (json['cache_hit_rate'] as num?)?.toDouble() ?? 0,
+  );
 }
 
 /// 趋势图的一个时间桶（按小时或按天）。
@@ -561,10 +571,10 @@ class UsageBucket {
   final UsageTotals totals;
 
   factory UsageBucket.fromJson(Map<String, dynamic> json) => UsageBucket(
-        bucket: DateTime.tryParse(json['bucket'] as String? ?? '') ??
-            DateTime.now(),
-        totals: UsageTotals.fromJson(json),
-      );
+    bucket:
+        DateTime.tryParse(json['bucket'] as String? ?? '') ?? DateTime.now(),
+    totals: UsageTotals.fromJson(json),
+  );
 }
 
 /// 按模型或按账号的一行聚合。
@@ -575,9 +585,9 @@ class UsageGroup {
   final UsageTotals totals;
 
   factory UsageGroup.fromJson(Map<String, dynamic> json) => UsageGroup(
-        key: json['key'] as String? ?? '',
-        totals: UsageTotals.fromJson(json),
-      );
+    key: json['key'] as String? ?? '',
+    totals: UsageTotals.fromJson(json),
+  );
 }
 
 /// 用量明细行：一次上游请求的四桶与状态。
@@ -619,30 +629,30 @@ class UsageLogRow {
   final DateTime createdAt;
 
   factory UsageLogRow.fromJson(Map<String, dynamic> json) => UsageLogRow(
-        id: json['id'] as int? ?? 0,
-        source: json['source'] as String? ?? '',
-        protocol: json['protocol'] as String? ?? '',
-        modelId: json['model_id'] as String? ?? '',
-        account: json['account'] as String? ?? '',
-        nativeModel: json['native_model'] as String? ?? '',
-        input: (json['input_tokens'] as num?)?.toInt() ?? 0,
-        output: (json['output_tokens'] as num?)?.toInt() ?? 0,
-        cacheRead: (json['cache_read_tokens'] as num?)?.toInt() ?? 0,
-        cacheWrite: (json['cache_write_tokens'] as num?)?.toInt() ?? 0,
-        statusCode: json['status_code'] as int? ?? 0,
-        isStreaming: json['is_streaming'] as bool? ?? false,
-        latencyMs: (json['latency_ms'] as num?)?.toInt(),
-        durationMs: (json['duration_ms'] as num?)?.toInt(),
-        errorMessage: json['error_message'] as String? ?? '',
-        createdAt:
-            DateTime.tryParse(json['created_at'] as String? ?? '') ??
-                DateTime.now(),
-      );
+    id: json['id'] as int? ?? 0,
+    source: json['source'] as String? ?? '',
+    protocol: json['protocol'] as String? ?? '',
+    modelId: json['model_id'] as String? ?? '',
+    account: json['account'] as String? ?? '',
+    nativeModel: json['native_model'] as String? ?? '',
+    input: (json['input_tokens'] as num?)?.toInt() ?? 0,
+    output: (json['output_tokens'] as num?)?.toInt() ?? 0,
+    cacheRead: (json['cache_read_tokens'] as num?)?.toInt() ?? 0,
+    cacheWrite: (json['cache_write_tokens'] as num?)?.toInt() ?? 0,
+    statusCode: json['status_code'] as int? ?? 0,
+    isStreaming: json['is_streaming'] as bool? ?? false,
+    latencyMs: (json['latency_ms'] as num?)?.toInt(),
+    durationMs: (json['duration_ms'] as num?)?.toInt(),
+    errorMessage: json['error_message'] as String? ?? '',
+    createdAt:
+        DateTime.tryParse(json['created_at'] as String? ?? '') ??
+        DateTime.now(),
+  );
 }
 
-/// 模型/账号连通性检测共用的结果结构。ok 口径由检测级别决定:模型级仅
-/// 上游回 2xx 为真;账号级拿到任意 HTTP 响应即为真(statusCode 仍带回供
-/// 展示,可达 ≠ 凭据正确)。网络级失败时 statusCode 为 0,原因在 error。
+/// 模型/账号连通性检测共用的结果结构。两级都用模型级判据:上游回 2xx
+/// 才为真。只有账号下没有模型时,服务端才退回根地址可达性探测(那时拿到
+/// 任意 HTTP 响应即为真)。网络级失败时 statusCode 为 0,原因在 error。
 class ModelTestResult {
   const ModelTestResult({
     required this.ok,

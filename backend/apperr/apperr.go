@@ -18,9 +18,6 @@ const (
 	InvalidJSON       Code = "invalid_json"
 	InvalidRequest    Code = "invalid_request"
 	QuotaUnavailable  Code = "quota_unavailable"
-	// EffortScriptFailed 表示模型档位映射脚本运行失败(求值/调用/超时),
-	// 属配置侧问题但与额度脚本同例:对数据面调用方回 502。
-	EffortScriptFailed Code = "effort_script_failed"
 	// UpstreamUnavailable 表示调用上游自身接口（如模型列举）失败。
 	UpstreamUnavailable Code = "upstream_unavailable"
 	StorageError        Code = "storage_error"
