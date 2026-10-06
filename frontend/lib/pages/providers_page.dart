@@ -199,7 +199,7 @@ class _VendorCard extends StatelessWidget {
                 children: [
                   _TypeChip(spec: group.specs[i]),
                   const Spacer(),
-                  ProviderTag(group.specs[i].id),
+                  ProviderTag(providerVendor(group.specs[i].id)),
                 ],
               ),
               const SizedBox(height: 8),

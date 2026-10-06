@@ -286,10 +286,11 @@ class _AccountsPageState extends State<AccountsPage> {
         // 拖拽过的列表按用户手动序渲染(乐观序,失败会回落)
         final accounts = _ordered(raw);
         final t = context.tokens;
-        // 摘要带:按提供商统计账号数;搜索按名称/提供商/地址过滤
+        // 摘要带:按厂商(点式 id 首段)统计账号数;搜索按名称/提供商/地址过滤
         final counts = <String, int>{};
         for (final a in accounts) {
-          counts[a.providerId] = (counts[a.providerId] ?? 0) + 1;
+          final vendor = providerVendor(a.providerId);
+          counts[vendor] = (counts[vendor] ?? 0) + 1;
         }
         final q = _query.toLowerCase();
         final visible = q.isEmpty
@@ -419,7 +420,7 @@ class _AccountsPageState extends State<AccountsPage> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        ProviderTag(a.providerId),
+                        ProviderTag(providerVendor(a.providerId)),
                       ],
                     ),
                     const SizedBox(height: 4),
