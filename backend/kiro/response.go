@@ -53,6 +53,7 @@ type responseState struct {
 	hasContextPct                 bool
 	parser                        *thinkingParser
 	fullText                      strings.Builder
+	fullThinking                  strings.Builder
 	fullTextOverflow              bool
 	outputRunes, collectedBytes   int
 	inputTokens, outputTokens     int
@@ -143,15 +144,17 @@ func (s *responseState) emitBlock(kind, text string, fake bool) error {
 	}
 	s.meaningful = true
 	s.outputRunes += utf8.RuneCountInString(text)
-	// streaming_core.py:483-486: bracket 工具扫描覆盖正文+思考。
+	// streaming_core.py:483-486: bracket 工具扫描覆盖正文+思考;截断恢复
+	// 哈希只取正文(streaming_anthropic.py:701 传 full_content 不含思考),
+	// 因此思考单独累积,不能与正文混入同一缓冲。
 	if (kind == "text" || kind == "thinking") && !s.fullTextOverflow {
-		if s.fullText.Len()+len(text) > maxBracketScanBytes {
+		if s.fullText.Len()+s.fullThinking.Len()+len(text) > maxBracketScanBytes {
 			s.fullTextOverflow = true
 			s.fullText.Reset()
+			s.fullThinking.Reset()
+		} else if kind == "thinking" {
+			s.fullThinking.WriteString(text)
 		} else {
-			if kind == "thinking" {
-				s.fullText.WriteString(" ")
-			}
 			s.fullText.WriteString(text)
 		}
 	}
@@ -451,7 +454,7 @@ func (s *responseState) finalize() error {
 	// Some models answer with [Called name with args: {...}] text instead of
 	// native tool events; those become real tool blocks after the text.
 	if !s.fullTextOverflow {
-		for _, call := range parseBracketToolCalls(s.fullText.String()) {
+		for _, call := range parseBracketToolCalls(s.fullText.String() + s.fullThinking.String()) {
 			if err := s.emitBracketTool(call); err != nil {
 				return err
 			}

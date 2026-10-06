@@ -3,6 +3,7 @@ package kiro
 import (
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Fake reasoning (KiroaaS converters_core.py + thinking_parser.py): for models
@@ -164,7 +165,7 @@ func (p *thinkingParser) feed(content string) (string, string) {
 func (p *thinkingParser) preContent(content string) (string, string) {
 	p.initial.WriteString(content)
 	buffer := p.initial.String()
-	stripped := strings.TrimLeft(buffer, " \t\r\n")
+	stripped := strings.TrimLeftFunc(buffer, unicode.IsSpace) // lstrip()
 	for _, tag := range fakeReasoningOpenTags {
 		if strings.HasPrefix(stripped, tag) {
 			p.state = 1
@@ -210,7 +211,7 @@ func (p *thinkingParser) processThinking() (string, string) {
 		after := buffer[idx+len(p.closeTag):]
 		p.state = 2
 		p.thinking.Reset()
-		return thinking, strings.TrimLeft(after, " \t\r\n")
+		return thinking, strings.TrimLeftFunc(after, unicode.IsSpace) // lstrip()
 	}
 	if len(buffer) > p.maxTagLength {
 		send := buffer[:len(buffer)-p.maxTagLength]

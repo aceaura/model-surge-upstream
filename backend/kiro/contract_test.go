@@ -317,7 +317,7 @@ func TestToolResultImagesAndHistoricalNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(jsonText(payload), `"toolUses"`) || strings.Contains(jsonText(payload), `"toolResults"`) || !strings.Contains(jsonText(payload), "Previous tool call") {
+	if strings.Contains(jsonText(payload), `"toolUses"`) || strings.Contains(jsonText(payload), `"toolResults"`) || !strings.Contains(jsonText(payload), "[Tool: ") {
 		t.Fatal(payload)
 	}
 	// Trailing assistant text goes to history; current message remains a user.

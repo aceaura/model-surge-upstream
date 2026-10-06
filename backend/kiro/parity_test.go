@@ -393,7 +393,7 @@ func TestToolPairingRepair(t *testing.T) {
 		}}
 		payload, _ := convert(t, root, "anthropic")
 		raw := jsonText(payload)
-		if strings.Contains(raw, `"toolResults"`) || !strings.Contains(raw, "[Previous tool result]") || !strings.Contains(raw, "orphan data") {
+		if strings.Contains(raw, `"toolResults"`) || !strings.Contains(raw, "[Tool Result (lost)]") || !strings.Contains(raw, "orphan data") {
 			t.Fatal(payload)
 		}
 	})

@@ -283,7 +283,8 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		if len(messages) > 0 && messages[len(messages)-1].role == mergeRole {
 			last := &messages[len(messages)-1]
-			last.text = joinText(last.text, msg.text)
+			// converters_core.py:1231: 同角色合并用单个 "\n" 无条件连接。
+			last.text = last.text + "\n" + msg.text
 			last.images = append(last.images, msg.images...)
 			last.uses = append(last.uses, msg.uses...)
 			last.results = append(last.results, msg.results...)
@@ -337,29 +338,24 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if historyAsText {
 		for i := range messages {
 			m := &messages[i]
-			for _, u := range m.uses {
-				m.text = joinText(m.text, "[Previous tool call] "+jsonText(u))
-			}
-			for _, r := range m.results {
-				m.text = joinText(m.text, "[Previous tool result] "+jsonText(r))
-			}
+			m.text = joinText(m.text, toolCallsToText(m.uses))
+			m.text = joinText(m.text, toolResultsToText(m.results))
 			m.uses = nil
 			m.results = nil
 		}
 	} else {
 		// Kiro 400s the whole request on unpaired tool context, so the
 		// reference repairs instead of rejecting: orphan tool results (no
-		// preceding assistant) become text; every assistant toolUse without a
-		// result gets a synthetic placeholder (repair_unpaired_tool_uses).
-		// Results with unknown/duplicate ids pass through for the upstream.
+		// preceding assistant with toolUses) become text; every assistant
+		// toolUse without a result gets a synthetic placeholder
+		// (repair_unpaired_tool_uses). Results with unknown/duplicate ids
+		// pass through for the upstream.
 		for i := range messages {
 			m := &messages[i]
-			if len(m.results) == 0 || (i > 0 && messages[i-1].role == "assistant") {
+			if len(m.results) == 0 || (i > 0 && messages[i-1].role == "assistant" && len(messages[i-1].uses) > 0) {
 				continue
 			}
-			for _, r := range m.results {
-				m.text = joinText(m.text, "[Previous tool result] "+jsonText(r))
-			}
+			m.text = joinText(m.text, toolResultsToText(m.results))
 			m.results = nil
 		}
 		for i := range messages {
@@ -460,6 +456,41 @@ func joinText(a, b string) string {
 	return a + "\n\n" + b
 }
 
+// converters_core.py:977-979/1021-1023 的逐字标记格式:工具上下文转文本时
+// id 为空省略括号段,空结果占位 "(empty result)",多个之间 "\n\n" 分隔。
+func toolCallsToText(uses []any) string {
+	parts := []string{}
+	for _, u := range uses {
+		o := obj(u)
+		name, args := str(o["name"]), jsonText(o["input"])
+		if id := str(o["toolUseId"]); id != "" {
+			parts = append(parts, "[Tool: "+name+" ("+id+")]\n"+args)
+		} else {
+			parts = append(parts, "[Tool: "+name+"]\n"+args)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+func toolResultsToText(results []any) string {
+	parts := []string{}
+	for _, r := range results {
+		o := obj(r)
+		content := ""
+		for _, c := range list(o["content"]) {
+			content += str(obj(c)["text"])
+		}
+		if content == "" {
+			content = "(empty result)"
+		}
+		if id := str(o["toolUseId"]); id != "" {
+			parts = append(parts, "[Tool Result ("+id+")]\n"+content)
+		} else {
+			parts = append(parts, "[Tool Result]\n"+content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // injectTruncationNotices applies one-time recovery state to this request:
 // a user tool_result whose call was truncated gets the [API Limitation]
 // notice prepended, and an assistant message matching a truncated generation
@@ -538,8 +569,10 @@ func parseMessage(m object, protocol string) (message, error) {
 			case "thinking", "redacted_thinking": // Native history has no reasoning channel.
 			case "tool_reference": // Claude Code 延迟工具标记(models_anthropic.py:128),Kiro 无对应物,忽略。
 			case "image", "image_url":
+				// converters_anthropic.py:297-319: 图片只为 user 角色提取,
+				// assistant 等角色的图片块静默忽略。
 				if result.role != "user" {
-					return result, fmt.Errorf("images are only supported in user turns")
+					continue
 				}
 				image, err := parseImage(b)
 				if err != nil {

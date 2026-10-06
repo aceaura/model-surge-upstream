@@ -419,7 +419,7 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 					t.Errorf("system/history=%v", first)
 				}
 				if obj(obj(history[2])["userInputMessage"])["content"] != "developer instruction" ||
-					obj(obj(history[4])["userInputMessage"])["content"] != "first\n\nsecond" {
+					obj(obj(history[4])["userInputMessage"])["content"] != "first\nsecond" {
 					t.Errorf("normalized history=%v", history)
 				}
 				uses := list(obj(obj(history[5])["assistantResponseMessage"])["toolUses"])
