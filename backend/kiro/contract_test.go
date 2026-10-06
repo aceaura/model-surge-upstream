@@ -327,7 +327,8 @@ func TestToolResultImagesAndHistoricalNormalization(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = obj(payload["conversationState"])
-	if len(list(state["history"])) != 2 || obj(obj(state["currentMessage"])["userInputMessage"])["content"] != thinkingTagsPrefix(thinkingConfig{})+"(empty placeholder)" {
+	// converters_core.py:1815-1819: 末条是 assistant 时占位 user 不注入 thinking tags。
+	if len(list(state["history"])) != 2 || obj(obj(state["currentMessage"])["userInputMessage"])["content"] != "(empty placeholder)" {
 		t.Fatal(state)
 	}
 }
@@ -423,8 +424,14 @@ func TestToolFragmentAssemblyAndDuplicates(t *testing.T) {
 	}
 	conflicting := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": "id", "input": object{"x": 1}, "stop": true}), frame("toolUseEvent", object{"name": "lookup", "toolUseId": "id", "input": object{"x": 2}, "stop": true}), endFrame())
 	other := stub(t, conflicting, nil)
-	if _, _, err := do(t, other.URL, "openai", false); err == nil {
-		t.Fatal("conflicting duplicate tool accepted")
+	// parsers.py:174-189: 同 id 冲突保留先发出者(等长不替换),重复帧静默丢弃。
+	_, data, err = do(t, other.URL, "openai", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := list(obj(obj(list(parseResult(t, data)["choices"])[0])["message"])["tool_calls"])
+	if len(calls) != 1 || str(obj(obj(calls[0])["function"])["arguments"]) != `{"x":1}` {
+		t.Fatalf("calls=%v", calls)
 	}
 }
 

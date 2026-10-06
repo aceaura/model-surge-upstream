@@ -423,9 +423,14 @@ func TestToolPairingRepair(t *testing.T) {
 			object{"role": "user", "content": "hello"},
 		}}
 		payload, _ := convert(t, root, "openai")
+		// converters_core.py:1728-1740: 合并先于归一化,function 不与 user
+		// 合并;归一为 user 后插合成 assistant,"old" 进 history 而非末条。
 		content := currentContent(t, payload)
-		if !strings.Contains(content, "old") || !strings.Contains(content, "hello") {
+		if !strings.Contains(content, "hello") || strings.Contains(content, "old") {
 			t.Fatalf("content=%q", content)
+		}
+		if !strings.Contains(jsonText(obj(payload["conversationState"])["history"]), "old") {
+			t.Fatalf("history lost old: %v", payload)
 		}
 	})
 }

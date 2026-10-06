@@ -259,7 +259,8 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		m := obj(v)
 		role := str(m["role"])
 		// converters_openai.py:169-173: 只有 system 进系统提示;developer 等
-		// 其他角色经 normalize_message_roles 归一为 user 消息。
+		// 未知角色按 user 解析,但归一化在合并之后(converters_core.py:1728-1740:
+		// merge → 首条 user → normalize → alternating)。
 		if role == "system" {
 			s, e := textOnly(m["content"])
 			if e != nil {
@@ -268,22 +269,26 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			system = joinText(system, s)
 			continue
 		}
-		if role != "user" && role != "assistant" && !(protocol == "openai" && role == "tool") {
-			// normalize_message_roles: unknown roles become user turns.
-			role = "user"
+		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")
+		if !parseable {
 			m["role"] = "user"
 		}
 		msg, e := parseMessage(m, protocol)
 		if e != nil {
 			return fail(e)
 		}
-		if len(messages) > 0 && messages[len(messages)-1].role == msg.role {
+		mergeRole := msg.role
+		if !parseable {
+			mergeRole = role // 原始角色参与合并分组,归一化前不与 user 合并
+		}
+		if len(messages) > 0 && messages[len(messages)-1].role == mergeRole {
 			last := &messages[len(messages)-1]
 			last.text = joinText(last.text, msg.text)
 			last.images = append(last.images, msg.images...)
 			last.uses = append(last.uses, msg.uses...)
 			last.results = append(last.results, msg.results...)
 		} else {
+			msg.role = mergeRole
 			messages = append(messages, msg)
 		}
 	}
@@ -293,8 +298,28 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if messages[0].role != "user" {
 		messages = append([]message{{role: "user", text: "(empty placeholder)"}}, messages...)
 	}
+	// normalize_message_roles + ensure_alternating_roles: 未知角色归一为 user
+	// 后,相邻 user 之间插合成 assistant 占位(Kiro 要求角色交错)。
+	for i := range messages {
+		if messages[i].role != "user" && messages[i].role != "assistant" {
+			messages[i].role = "user"
+		}
+	}
+	alternating := make([]message, 0, len(messages)+2)
+	for i, m := range messages {
+		if i > 0 && m.role == "user" && alternating[len(alternating)-1].role == "user" {
+			alternating = append(alternating, message{role: "assistant", text: "(empty placeholder)"})
+		}
+		alternating = append(alternating, m)
+	}
+	messages = alternating
+	trailingAssistant := false
 	if messages[len(messages)-1].role == "assistant" {
+		// converters_core.py:1772-1778: 末条 assistant 进 history 时 toolUses
+		// 静默丢弃,current 换成占位 user。
+		messages[len(messages)-1].uses = nil
 		messages = append(messages, message{role: "user", text: "(empty placeholder)"})
+		trailingAssistant = true
 	}
 	// Truncation recovery (truncation_state.py): a previous response that was
 	// cut mid-stream earns a one-time synthetic notice in this request.
@@ -381,7 +406,9 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	}
 	system += truncationSystemAddition
 	messages[0].text = joinText(system, messages[0].text)
-	if current := &messages[len(messages)-1]; current.role == "user" && !cfg.disabled && !suppressTags {
+	// converters_core.py:1815-1819: tags 只注入原本的末条 user;末条是
+	// assistant 时占位 user 不注入。
+	if current := &messages[len(messages)-1]; current.role == "user" && !trailingAssistant && !cfg.disabled && !suppressTags {
 		if current.text == "" {
 			current.text = "(empty placeholder)"
 		}

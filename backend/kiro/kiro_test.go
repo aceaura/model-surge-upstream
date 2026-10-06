@@ -409,19 +409,24 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 				}
 				state := obj(p["conversationState"])
 				history := list(state["history"])
-				if len(history) != 4 {
+				// converters_core.py:1728-1740: 合并→首条user→归一→交错,
+				// developer 归一为 user 后与相邻 user 之间插合成 assistant 占位。
+				if len(history) != 8 {
 					t.Fatalf("history=%v", history)
 				}
 				first := obj(obj(history[0])["userInputMessage"])
-				// developer 归一为 user 消息(converters_openai.py:169-173),不再并入 system。
-				if first["content"] != "system instruction"+truncationSystemAddition+"\n\ndeveloper instruction\n\nfirst\n\nsecond" {
+				if first["content"] != "system instruction"+truncationSystemAddition+"\n\n(empty placeholder)" {
 					t.Errorf("system/history=%v", first)
 				}
-				uses := list(obj(obj(history[1])["assistantResponseMessage"])["toolUses"])
+				if obj(obj(history[2])["userInputMessage"])["content"] != "developer instruction" ||
+					obj(obj(history[4])["userInputMessage"])["content"] != "first\n\nsecond" {
+					t.Errorf("normalized history=%v", history)
+				}
+				uses := list(obj(obj(history[5])["assistantResponseMessage"])["toolUses"])
 				if len(uses) != 1 || obj(uses[0])["toolUseId"] != "history_1" || number(obj(obj(uses[0])["input"])["x"]) != 42 {
 					t.Errorf("toolUses=%v", uses)
 				}
-				results := list(obj(obj(obj(history[2])["userInputMessage"])["userInputMessageContext"])["toolResults"])
+				results := list(obj(obj(obj(history[6])["userInputMessage"])["userInputMessageContext"])["toolResults"])
 				if len(results) != 1 || obj(results[0])["toolUseId"] != "history_1" {
 					t.Errorf("toolResults=%v", results)
 				}
@@ -586,12 +591,10 @@ func TestFailuresAreNotSuccessfulCompletions(t *testing.T) {
 	corrupted := frame("assistantResponseEvent", object{"content": "bad"})
 	corrupted[len(corrupted)-1] ^= 1
 	cases := map[string][]byte{
-		"exception":       exceptionFrame(),
-		"crc":             corrupted,
-		"truncated":       frame("assistantResponseEvent", object{"content": "x"})[:20],
-		"invalid-json":    frameWithHeaders(append(stringHeader(":message-type", "event"), stringHeader(":event-type", "assistantResponseEvent")...), []byte(`{"content":`)),
-		"orphan-tool":     joinedFrames(frame("toolUseEvent", object{"input": "{}", "stop": true}), endFrame()),
-		"disallowed-tool": joinedFrames(frame("toolUseEvent", object{"name": "other", "input": object{}, "stop": true}), endFrame()),
+		"exception":    exceptionFrame(),
+		"crc":          corrupted,
+		"truncated":    frame("assistantResponseEvent", object{"content": "x"})[:20],
+		"invalid-json": frameWithHeaders(append(stringHeader(":message-type", "event"), stringHeader(":event-type", "assistantResponseEvent")...), []byte(`{"content":`)),
 	}
 	for name, wire := range cases {
 		for _, protocol := range []string{"anthropic", "openai"} {
@@ -641,6 +644,33 @@ func TestImageLeniency(t *testing.T) {
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
+}
+
+func TestLenientToolFrames(t *testing.T) {
+	// parsers.py:408-427: 孤儿碎片/stop 帧静默忽略;未声明的工具调用在无
+	// 严格 tool_choice 时照常透传(parsers.py 无白名单校验)。
+	cases := map[string][]byte{
+		"orphan-tool":     joinedFrames(frame("toolUseEvent", object{"input": "{}", "stop": true}), endFrame()),
+		"disallowed-tool": joinedFrames(frame("toolUseEvent", object{"name": "other", "input": object{}, "stop": true}), endFrame()),
+	}
+	for name, wire := range cases {
+		for _, protocol := range []string{"anthropic", "openai"} {
+			server := stub(t, wire, nil)
+			_, data, err := do(t, server.URL, protocol, false)
+			if err != nil {
+				t.Fatalf("%s/%s: %v", name, protocol, err)
+			}
+			m := parseResult(t, data)
+			if name == "disallowed-tool" {
+				if protocol == "anthropic" && len(list(m["content"])) != 1 {
+					t.Fatalf("%s/%s: %v", name, protocol, m)
+				}
+				if protocol == "openai" && len(list(obj(obj(list(m["choices"])[0])["message"])["tool_calls"])) != 1 {
+					t.Fatalf("%s/%s: %v", name, protocol, m)
+				}
+			}
+		}
+	}
 }
 
 func TestEmptyStreamReturns200(t *testing.T) {

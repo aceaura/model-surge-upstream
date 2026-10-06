@@ -126,10 +126,15 @@ func parseBracketToolCalls(text string) []object {
 		start := pos + idx + len("[called")
 		rest := text[start:]
 		restLower := lower[start:]
-		// \s+(\w+)\s+with\s+args:\s*
+		// parsers.py:115 正则 \[Called\s+(\w+)\s+with\s+args:\s* 的\s+全是
+		// 强制词边界:粘连形式(如 withargs:)不匹配。
 		i := 0
 		for i < len(rest) && isSpace(rest[i]) {
 			i++
+		}
+		if i == 0 {
+			pos = start
+			continue
 		}
 		nameStart := i
 		for i < len(rest) && isWord(rest[i]) {
@@ -140,18 +145,20 @@ func parseBracketToolCalls(text string) []object {
 			pos = start
 			continue
 		}
+		ws := i
 		for i < len(rest) && isSpace(rest[i]) {
 			i++
 		}
-		if !strings.HasPrefix(restLower[i:], "with") {
+		if i == ws || !strings.HasPrefix(restLower[i:], "with") {
 			pos = start
 			continue
 		}
 		i += len("with")
+		ws = i
 		for i < len(rest) && isSpace(rest[i]) {
 			i++
 		}
-		if !strings.HasPrefix(restLower[i:], "args:") {
+		if i == ws || !strings.HasPrefix(restLower[i:], "args:") {
 			pos = start
 			continue
 		}

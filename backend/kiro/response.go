@@ -143,11 +143,15 @@ func (s *responseState) emitBlock(kind, text string, fake bool) error {
 	}
 	s.meaningful = true
 	s.outputRunes += utf8.RuneCountInString(text)
-	if kind == "text" && !s.fullTextOverflow {
+	// streaming_core.py:483-486: bracket 工具扫描覆盖正文+思考。
+	if (kind == "text" || kind == "thinking") && !s.fullTextOverflow {
 		if s.fullText.Len()+len(text) > maxBracketScanBytes {
 			s.fullTextOverflow = true
 			s.fullText.Reset()
 		} else {
+			if kind == "thinking" {
+				s.fullText.WriteString(" ")
+			}
 			s.fullText.WriteString(text)
 		}
 	}
@@ -213,10 +217,9 @@ func (s *responseState) finishTool() error {
 	}
 	canonical := jsonText(input)
 	digest := sha256.Sum256([]byte(t.name + "\x00" + canonical))
-	if prev, ok := s.seenTools[t.id]; ok {
-		if prev != digest {
-			return fmt.Errorf("kiro: tool id %q repeated with conflicting arguments", t.id)
-		}
+	if _, ok := s.seenTools[t.id]; ok {
+		// parsers.py:168-189 同 id 冲突保留参数更完整者;流式已发出先前者
+		// 无法回收,重复帧静默丢弃(不报错)。
 		s.tool = nil
 		return nil
 	}
@@ -231,7 +234,7 @@ func (s *responseState) finishTool() error {
 		if s.options.policyMode != "" {
 			return &toolViolation{msg: "response returned disallowed tool '" + t.name + "'"}
 		}
-		return fmt.Errorf("kiro: upstream returned disallowed tool %q", t.name)
+		// parsers.py 无工具白名单校验:未声明的工具调用照常透传。
 	}
 	if s.options.policyMode == "named" && t.name != s.options.policyTool {
 		s.tool = nil
@@ -282,10 +285,12 @@ func (s *responseState) toolEvent(d object) error {
 		}
 		s.tool = &pendingTool{id: id, name: name}
 	} else if s.tool == nil {
-		return fmt.Errorf("kiro: tool fragment without tool start")
+		// parsers.py:408-427: 无开启工具的碎片帧静默忽略。
+		return nil
 	}
 	if id != "" && id != s.tool.id {
-		return fmt.Errorf("kiro: interleaved tool fragments are not supported")
+		// Python 单 current_tool_call 模型不追踪碎片 id,归属当前工具。
+		id = s.tool.id
 	}
 	if v, exists := d["input"]; exists {
 		piece := ""
@@ -298,7 +303,7 @@ func (s *responseState) toolEvent(d object) error {
 			}
 		case nil:
 		default:
-			return fmt.Errorf("kiro: invalid tool input fragment")
+			piece = fmt.Sprint(x) // parsers.py: str(input_data)
 		}
 		if s.tool.args.Len()+len(piece) > maxToolBytes {
 			return fmt.Errorf("kiro: tool arguments exceed %d bytes", maxToolBytes)
@@ -400,7 +405,7 @@ func (s *responseState) accept(e wireEvent) error {
 	}
 	if stop, _ := d["stop"].(bool); stop {
 		if s.tool == nil {
-			return fmt.Errorf("kiro: tool stop without tool start")
+			return nil // parsers.py:421-427: 无开启工具的 stop 帧静默忽略
 		}
 		return s.finishTool()
 	}
