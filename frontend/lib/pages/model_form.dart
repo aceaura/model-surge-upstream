@@ -305,12 +305,6 @@ class _ModelFormState extends State<ModelForm> {
                 value: _account,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
                 options: [for (final a in widget.accounts) a.name],
-                labelOf: (name) {
-                  final a = widget.accounts
-                      .where((a) => a.name == name)
-                      .firstOrNull;
-                  return a == null ? name : '$name (${providerVendor(a.providerId)})';
-                },
                 onChanged: _onAccountChanged,
               ),
             ),
