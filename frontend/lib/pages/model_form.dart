@@ -507,15 +507,13 @@ class _ModelFormState extends State<ModelForm> {
   static const _effortFormats = [
     '',
     'chat_completions',
-    'chat_completions_skip_none',
     'responses',
     'anthropic',
     'gemini',
   ];
 
   static String _effortFormatLabel(String f) => switch (f) {
-    'chat_completions' => 'OpenAI Chat 协议格式（顶层 reasoning_effort，none 原样上发）',
-    'chat_completions_skip_none' => 'OpenAI Chat 协议格式（none 不落字段）',
+    'chat_completions' => 'OpenAI Chat 协议格式（顶层 reasoning_effort）',
     'responses' => 'OpenAI Responses 协议格式（嵌套 reasoning.effort）',
     'anthropic' => 'Anthropic 协议格式（output_config.effort）',
     'gemini' => 'Gemini 协议格式（thinkingConfig.thinkingLevel 大写）',
@@ -544,7 +542,7 @@ class _ModelFormState extends State<ModelForm> {
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
-                  child: Text('允许关闭思考（0 档）', style: TextStyle(fontSize: 12.5)),
+                  child: Text('包含 0 档（关闭思考）', style: TextStyle(fontSize: 12.5)),
                 ),
               ],
             ),
