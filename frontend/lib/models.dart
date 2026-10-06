@@ -37,6 +37,9 @@ class EffortEntry {
 /// 供 Logo 映射与厂商级表单特判用。
 String providerVendor(String id) => id.split('.').first;
 
+/// 服务类型下拉显示名:'Standard' 占位标签译作"标准",真实类型名原样。
+String planDisplayLabel(String plan) => plan == 'Standard' ? '标准' : plan;
+
 class ProviderSpec {
   const ProviderSpec({
     required this.id,
@@ -81,7 +84,8 @@ class ProviderSpec {
   };
 
   /// 服务类型:同厂商同计费同区域下的服务类型区分(如百炼 Token/Coding
-  /// Plan)。'Standard' 是单一服务类型的占位标签,界面一律隐藏。
+  /// Plan)。'Standard' 是单一服务类型的占位标签;账号表单级联照常渲染
+  /// (自动落定),提供商页分组不重复展示。
   final String plan;
 
   /// 有值得展示的服务类型(Standard 占位与空值都不展示)。

@@ -646,8 +646,8 @@ class _AccountFormState extends State<AccountForm> {
   }
 
   // ── 提供商级联:厂商→计费模式→服务区域→服务类型,选项由清单动态推导,
-  // 上级未选下级禁用,换上级重置下级;服务类型级只在组内含真实类型
-  // (非 Standard 占位)时渲染,单 Standard 组隐藏且自动落定 ──
+  // 上级未选下级禁用,换上级重置下级;服务类型级对所有组渲染,单选项组
+  // (含 Standard 占位)自动落定且禁用,多类型组放开选择 ──
 
   List<String> get _vendorOptions =>
       {for (final p in widget.providers) p.displayName}.toList();
@@ -717,7 +717,8 @@ class _AccountFormState extends State<AccountForm> {
 
   Widget _planDropdown() {
     final options = _planOptions;
-    // 单服务类型组无需选择:值自动落定、下拉禁用;多类型组才放开选择。
+    // 单服务类型组(含 Standard 占位)无需选择:值自动落定、下拉禁用;
+    // 多类型组才放开选择。该级对所有组渲染,四级级联形态保持完整。
     final single = options.length == 1;
     return StyledDropdownFormField(
       key: const ValueKey('account-provider-plan'),
@@ -725,6 +726,7 @@ class _AccountFormState extends State<AccountForm> {
       enabled: _region != null && !single,
       decoration: const InputDecoration(border: OutlineInputBorder()),
       options: options,
+      labelOf: planDisplayLabel,
       onChanged: (v) => setState(() {
         _plan = v;
         _resolveProvider();
@@ -789,10 +791,10 @@ class _AccountFormState extends State<AccountForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 账号名/厂商/计费模式/服务区域一行一个,账号名居首;
+          // 账号名/厂商/计费模式/服务区域/服务类型一行一个,账号名居首;
           // 编辑态账号名是资源键不可改,灰框禁用展示;
           // 计费模式/服务区域/服务类型是级联下级,从上至下依次解锁;
-          // 服务类型级对纯 Standard 组隐藏(Standard 只是占位标签)
+          // 服务类型级对所有组渲染:Standard 单选项自动落定、禁用展示
           LabeledField(
             label: '账号名',
             child: TextFormField(
@@ -813,12 +815,8 @@ class _AccountFormState extends State<AccountForm> {
           LabeledField(label: '计费模式', child: _billingDropdown()),
           const SizedBox(height: 20),
           LabeledField(label: '服务区域', child: _regionDropdown()),
-          // 服务类型级只在有真实类型区分时渲染:全 Standard 组无类型可选,
-          // 隐藏该级而不是摆一个禁用的"Standard"占位置。
-          if (_planOptions.any((o) => o != 'Standard')) ...[
-            const SizedBox(height: 20),
-            LabeledField(label: '服务类型', child: _planDropdown()),
-          ],
+          const SizedBox(height: 20),
+          LabeledField(label: '服务类型', child: _planDropdown()),
           const SizedBox(height: 20),
           LabeledField(
             label: '请求地址',

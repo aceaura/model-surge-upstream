@@ -9,6 +9,7 @@ import 'package:msu_admin/api_client.dart';
 import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/account_form.dart';
 import 'package:msu_admin/theme.dart';
+import 'package:msu_admin/ui/styled_dropdown.dart';
 import 'package:sqlite3/sqlite3.dart' hide Row;
 
 final providers = [
@@ -227,9 +228,9 @@ String fieldText(WidgetTester tester, String key) => tester
     .controller!
     .text;
 
-/// 级联从上至下逐级点选(厂商→计费模式→服务区域[→服务类型])。
-/// 服务类型级只对含真实类型(非 Standard 占位)的组渲染,不要给
-/// Standard 组传 plan(下拉不存在),只有多类型组才传 plan 做选择。
+/// 级联从上至下逐级点选(厂商→计费模式→服务区域→服务类型)。
+/// 服务类型级对所有组渲染:Standard 单选项组自动落定且禁用,不传 plan;
+/// 只有多类型组才传 plan 做选择。
 Future<void> selectCascade(
   WidgetTester tester, {
   required String vendor,
@@ -1156,14 +1157,22 @@ void main() {
         reason: '三级选定后自动带出该提供商的默认请求地址');
   });
 
-  testWidgets('standard-only group hides plan level and still resolves',
+  testWidgets('standard-only group shows disabled plan level auto-settled',
       (tester) async {
     await pumpForm(tester);
     await selectCascade(tester, vendor: 'DeepSeek', billing: '按量计费', region: '全球');
-    expect(find.byKey(const ValueKey('account-provider-plan')), findsNothing,
-        reason: 'Standard 是单一服务类型的占位标签,该级不渲染');
+    final plan = find.byKey(const ValueKey('account-provider-plan'));
+    expect(plan, findsOneWidget,
+        reason: '服务类型级对所有组渲染,Standard 组也不例外');
+    expect(
+        tester.widget<StyledDropdown>(
+            find.descendant(of: plan, matching: find.byType(StyledDropdown))).enabled,
+        isFalse,
+        reason: '单选项组无需选择:自动落定、下拉禁用');
+    expect(find.text('标准'), findsWidgets,
+        reason: 'Standard 占位标签显示为"标准"');
     expect(fieldText(tester, 'account-base-url'), 'https://api.deepseek.com',
-        reason: '隐藏不影响解析:三级选定即带出该提供商的默认地址');
+        reason: '自动落定不影响解析:三级选定即带出该提供商的默认地址');
   });
 
   testWidgets('multi-plan group resolves provider only after plan chosen',
