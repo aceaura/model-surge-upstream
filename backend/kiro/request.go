@@ -1,7 +1,6 @@
 package kiro
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -259,7 +258,9 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	for _, v := range list(root["messages"]) {
 		m := obj(v)
 		role := str(m["role"])
-		if role == "system" || role == "developer" {
+		// converters_openai.py:169-173: 只有 system 进系统提示;developer 等
+		// 其他角色经 normalize_message_roles 归一为 user 消息。
+		if role == "system" {
 			s, e := textOnly(m["content"])
 			if e != nil {
 				return fail(e)
@@ -352,7 +353,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 					next.results = append(next.results, toolResult(id,
 						"[gateway: tool result was not delivered by the client; "+
 							"the tool likely produced an image or other media that was "+
-							"moved into an adjacent user message.]", false))
+							"moved into an adjacent user message.]"))
 				}
 			}
 		}
@@ -363,6 +364,13 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	fields, e := effortFields(cfg, obj(root["thinking"]), model)
 	if e != nil {
 		return fail(e)
+	}
+	// effort_schema.py:171-175: 首 token 超时按钳制后的生效档位计算,
+	// 不用请求原值。
+	for _, key := range []string{"output_config", "reasoning"} {
+		if eff := str(obj(fields[key])["effort"]); eff != "" {
+			opts.effort = eff
+		}
 	}
 	// Native effort/adaptive thinking wins; fake-reasoning tags are injected
 	// only when no native channel is in play (NATIVE_EFFORT_SUPPRESS_TAGS).
@@ -485,7 +493,7 @@ func parseMessage(m object, protocol string) (message, error) {
 		if id == "" {
 			return result, fmt.Errorf("tool_call_id is required")
 		}
-		result.results = append(result.results, toolResult(id, text, false))
+		result.results = append(result.results, toolResult(id, text))
 		return result, nil
 	}
 	if s, ok := m["content"].(string); ok {
@@ -510,7 +518,9 @@ func parseMessage(m object, protocol string) (message, error) {
 				if err != nil {
 					return result, err
 				}
-				result.images = append(result.images, image)
+				if image != nil {
+					result.images = append(result.images, image)
+				}
 			case "tool_use":
 				if protocol != "anthropic" || result.role != "assistant" {
 					return result, fmt.Errorf("tool_use must be in an assistant turn")
@@ -533,8 +543,7 @@ func parseMessage(m object, protocol string) (message, error) {
 				if id == "" {
 					return result, fmt.Errorf("tool_use_id is required")
 				}
-				isError, _ := b["is_error"].(bool)
-				result.results = append(result.results, toolResult(id, text, isError))
+				result.results = append(result.results, toolResult(id, text))
 			default:
 				return result, fmt.Errorf("unsupported content block %q", str(b["type"]))
 			}
@@ -580,7 +589,9 @@ func resultContent(v any) (string, []any, error) {
 			if err != nil {
 				return "", nil, err
 			}
-			images = append(images, image)
+			if image != nil {
+				images = append(images, image)
+			}
 		case "tool_reference": // converters_core.py:269-270: 跳过。
 			continue
 		default:
@@ -605,45 +616,44 @@ func toolUse(id, name string, input any) (object, error) {
 	}
 	return object{"toolUseId": id, "name": name, "input": input}, nil
 }
-func toolResult(id, text string, isError bool) object {
+
+// converters_core.py:819/845: status 恒 "success",is_error 不入上行负载,
+// 失败信息只经 content 文本传达给模型。
+func toolResult(id, text string) object {
 	if text == "" {
 		text = "(empty result)"
 	}
-	status := "success"
-	if isError {
-		status = "error"
-	}
-	return object{"toolUseId": id, "status": status, "content": []any{object{"text": text}}}
+	return object{"toolUseId": id, "status": "success", "content": []any{object{"text": text}}}
 }
+
+// parseImage 对齐 converters_core.py 的宽松策略:URL 图片与空 data 跳过
+// (返回 nil),data URL 前缀解析失败保留原始 data;媒体类型与 base64
+// 合法性不在边界拒绝,交由上游判定。
 func parseImage(b object) (object, error) {
 	var media, data string
 	if str(b["type"]) == "image" {
 		src := obj(b["source"])
 		if str(src["type"]) != "base64" {
-			return nil, fmt.Errorf("external image URLs are not supported (no downloads)")
+			return nil, nil
 		}
 		media, data = str(src["media_type"]), str(src["data"])
 	} else {
 		data = str(obj(b["image_url"])["url"])
+		if !strings.HasPrefix(data, "data:") {
+			return nil, nil
+		}
 	}
 	if strings.HasPrefix(data, "data:") {
-		prefix, rest, ok := strings.Cut(data, ",")
-		if !ok || !strings.HasSuffix(prefix, ";base64") {
-			return nil, fmt.Errorf("image must be a base64 data URL")
+		if prefix, rest, ok := strings.Cut(data, ","); ok {
+			media = strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64")
+			data = rest
 		}
-		media = strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64")
-		data = rest
-	} else if str(b["type"]) == "image_url" {
-		return nil, fmt.Errorf("external image URLs are not supported (no downloads)")
 	}
-	switch media {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
-	default:
-		return nil, fmt.Errorf("unsupported image media type %q", media)
+	if data == "" {
+		return nil, nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(data)
-	if err != nil || len(decoded) == 0 {
-		return nil, fmt.Errorf("invalid or empty image base64")
+	if media == "" {
+		media = "image/jpeg"
 	}
 	return object{"format": strings.TrimPrefix(media, "image/"), "source": object{"bytes": data}}, nil
 }

@@ -281,6 +281,27 @@ func TestValidationErrorsClassified(t *testing.T) {
 	}
 }
 
+func TestEnhanceKiroError(t *testing.T) {
+	// kiro_errors.py enhance_kiro_error 的已知 reason 映射与兜底。
+	cases := []struct{ body, want string }{
+		{`{"message":"Input is too long.","reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD"}`,
+			"Model context limit reached. Conversation size exceeds model capacity."},
+		{`{"message":"quota","reason":"MONTHLY_REQUEST_COUNT"}`,
+			"Monthly request limit exceeded. Account has reached its monthly quota."},
+		{`{"message":"bad model","reason":"INVALID_MODEL_ID"}`,
+			"Invalid model ID or insufficient subscription level to use it."},
+		{`{"message":"Something went wrong.","reason":"WEIRD"}`, "Something went wrong. (reason: WEIRD)"},
+		{`{"message":"plain"}`, "plain"},
+		{`not json`, "not json"},
+		{`{"reason":"X"}`, "Unknown error (reason: X)"},
+	}
+	for _, tc := range cases {
+		if got := enhanceKiroError([]byte(tc.body)); got != tc.want {
+			t.Errorf("%s → %q, want %q", tc.body, got, tc.want)
+		}
+	}
+}
+
 func TestCountTokens(t *testing.T) {
 	// routes_anthropic.py count_tokens_endpoint: 纯本地估算,不打上游;
 	// max_tokens 在此端点不要求(AnthropicCountTokensRequest 无此字段)。

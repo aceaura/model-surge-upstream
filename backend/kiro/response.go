@@ -346,15 +346,16 @@ func (s *responseState) accept(e wireEvent) error {
 	d := e.data
 	// Terminal metering events are emitted at the end in the observed protocol;
 	// clean EOF alone is insufficient evidence of a completed generation.
-	if _, ok := d["usage"]; ok {
-		s.terminal = true
-		// parsers.py: 数值型 usage 是 credits 计量,原样透传为 credits_used。
-		if n, ok := d["usage"].(json.Number); ok {
-			if f, err := n.Float64(); err == nil {
+	if v, ok := d["usage"]; ok {
+		// streaming_anthropic.py:544/streaming_openai.py:271: 数值型 usage 是
+		// credits 计量,0/None 跳过;usage 事件不作完成标记,正常结束只认
+		// contextUsagePercentage/stopReason/绝对 token 等信号。
+		if n, ok := v.(json.Number); ok {
+			if f, err := n.Float64(); err == nil && f != 0 {
 				s.credits, s.hasCredits = f, true
 			}
 		} else {
-			s.updateUsage(obj(d["usage"]))
+			s.updateUsage(obj(v))
 		}
 	}
 	if v, ok := d["contextUsagePercentage"]; ok {
@@ -419,7 +420,8 @@ func (s *responseState) accept(e wireEvent) error {
 	}
 	if signature := str(d["signature"]); signature != "" {
 		if s.blockType != "thinking" {
-			return fmt.Errorf("kiro: thinking signature without thinking block")
+			// streaming_anthropic.py:329-344: 无开启思考块的签名帧静默忽略。
+			return nil
 		}
 		if s.options.protocol == "anthropic" {
 			s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "signature_delta", "signature": signature}})
@@ -465,7 +467,7 @@ func (s *responseState) finalize() error {
 			s.stopSequence = ""
 			saveContentTruncation(s.fullText.String())
 		default:
-			return fmt.Errorf("kiro: upstream stream ended without completion/usage marker")
+			// streaming_openai.py:787: 空流仍回 200(空 content、usage 归零)。
 		}
 	}
 	switch s.stopReason {
@@ -475,9 +477,6 @@ func (s *responseState) finalize() error {
 	}
 	if (s.stopReason == "tool_use" || s.stopReason == "toolUse" || s.stopReason == "tool_calls") && s.toolCount == 0 {
 		return fmt.Errorf("kiro: upstream signaled tool use without a tool call")
-	}
-	if !s.meaningful {
-		return fmt.Errorf("kiro: upstream returned an empty generation")
 	}
 	s.closeBlock()
 	return nil

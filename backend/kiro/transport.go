@@ -308,6 +308,31 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		out.Header = resp.Header.Clone()
 		out.Request = req
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			// routes_anthropic.py:622-670 / routes_openai.py:584: 上游错误体
+			// 重写为客户端协议形状,已知 reason 换友好文案;读不出明文时原样透传。
+			if ce := resp.Header.Get("Content-Encoding"); ce == "" || ce == "identity" || resp.Uncompressed {
+				data, _ := io.ReadAll(io.LimitReader(rawBody, 1<<20))
+				rawBody.Close()
+				cancel()
+				msg := enhanceKiroError(data)
+				var shape object
+				if options.protocol == "openai" {
+					shape = object{"error": object{"message": msg, "type": "kiro_api_error", "code": resp.StatusCode}}
+				} else {
+					shape = object{"type": "error", "error": object{"type": "api_error", "message": msg}}
+				}
+				encoded, merr := json.Marshal(shape)
+				if merr == nil {
+					out.Body = io.NopCloser(bytes.NewReader(encoded))
+					out.ContentLength = int64(len(encoded))
+					out.Header.Set("Content-Type", "application/json")
+					out.Header.Del("Content-Encoding")
+					return &out, nil
+				}
+				out.Body = io.NopCloser(bytes.NewReader(data))
+				out.ContentLength = int64(len(data))
+				return &out, nil
+			}
 			out.Body = ownedBody(rawBody, ctx, cancel)
 			return &out, nil // Preserve real upstream HTTP errors, never wrap as completions.
 		}
@@ -422,6 +447,45 @@ type prependBody struct {
 }
 
 var errFirstTokenTimeout = errors.New("kiro: first token timeout")
+
+// enhanceKiroError 对齐 kiro_errors.py enhance_kiro_error:已知 reason 换
+// 友好文案,未知错误保留原始 message 并附 reason;非 JSON 体用原文。
+func enhanceKiroError(data []byte) string {
+	var payload struct {
+		Message *string `json:"message"`
+		Reason  *string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		if text := strings.TrimSpace(string(data)); text != "" {
+			return text
+		}
+		return "Unknown error"
+	}
+	original := "Unknown error"
+	if payload.Message != nil {
+		original = *payload.Message
+	}
+	reason := "UNKNOWN"
+	if payload.Reason != nil {
+		reason = *payload.Reason
+	}
+	switch reason {
+	case "CONTENT_LENGTH_EXCEEDS_THRESHOLD":
+		return "Model context limit reached. Conversation size exceeds model capacity."
+	case "MONTHLY_REQUEST_COUNT":
+		return "Monthly request limit exceeded. Account has reached its monthly quota."
+	case "INVALID_MODEL_ID":
+		return "Invalid model ID or insufficient subscription level to use it."
+	}
+	if original == "Improperly formed request." && (reason == "UNKNOWN" || reason == "null") {
+		return "Kiro API rejected the request. If problem persists, open issue with info and attached debug logs at: " +
+			"https://github.com/jwadow/kiro-gateway/issues"
+	}
+	if payload.Reason != nil && reason != "UNKNOWN" {
+		return original + " (reason: " + reason + ")"
+	}
+	return original
+}
 
 // streamStallTimeout 对齐 http_client.py STREAMING_READ_TIMEOUT=300:流中段
 // 单次读停滞超时即关闭 body 报错,防挂死连接占住会话。测试替换以缩短等待。

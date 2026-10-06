@@ -72,12 +72,14 @@ func extractThinking(root object) thinkingConfig {
 	if str(thinking["type"]) == "adaptive" {
 		cfg.adaptive = true
 	}
-	effort := str(root["reasoning_effort"])
+	// converters_anthropic.py:420-462 优先级:disabled → budget_tokens →
+	// adaptive → output_config.effort → reasoning_effort。
+	effort := str(obj(root["output_config"])["effort"])
 	if effort == "" {
-		effort = str(obj(root["reasoning"])["effort"])
+		effort = str(root["reasoning_effort"])
 	}
 	if effort == "" {
-		effort = str(obj(root["output_config"])["effort"])
+		effort = str(obj(root["reasoning"])["effort"])
 	}
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	if effort == "minimal" {
@@ -90,10 +92,12 @@ func extractThinking(root object) thinkingConfig {
 		cfg.disabled = true
 		return cfg
 	}
-	cfg.effort = effort
 	if n, ok := absoluteTokens(thinking["budget_tokens"]); ok && n > 0 {
+		// budget_tokens 压过 effort:Python 命中预算即返回,不再看 effort。
 		cfg.budget = n
+		return cfg
 	}
+	cfg.effort = effort
 	return cfg
 }
 

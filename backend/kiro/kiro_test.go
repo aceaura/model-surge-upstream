@@ -413,7 +413,8 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 					t.Fatalf("history=%v", history)
 				}
 				first := obj(obj(history[0])["userInputMessage"])
-				if first["content"] != "system instruction\n\ndeveloper instruction"+truncationSystemAddition+"\n\nfirst\n\nsecond" {
+				// developer 归一为 user 消息(converters_openai.py:169-173),不再并入 system。
+				if first["content"] != "system instruction"+truncationSystemAddition+"\n\ndeveloper instruction\n\nfirst\n\nsecond" {
 					t.Errorf("system/history=%v", first)
 				}
 				uses := list(obj(obj(history[1])["assistantResponseMessage"])["toolUses"])
@@ -424,8 +425,13 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 				if len(results) != 1 || obj(results[0])["toolUseId"] != "history_1" {
 					t.Errorf("toolResults=%v", results)
 				}
-				if protocol == "anthropic" && obj(results[0])["status"] != "error" {
-					t.Errorf("error result lost: %v", results)
+				// converters_core.py:819/845: status 恒 success,失败只经文本传达。
+				wantText := "lookup result"
+				if protocol == "anthropic" {
+					wantText = "failed lookup"
+				}
+				if obj(results[0])["status"] != "success" || str(obj(list(obj(results[0])["content"])[0])["text"]) != wantText {
+					t.Errorf("tool result mangled: %v", results)
 				}
 				current := obj(obj(state["currentMessage"])["userInputMessage"])
 				if current["modelId"] != "claude-sonnet-4.6" || current["content"] != "new question" {
@@ -583,7 +589,6 @@ func TestFailuresAreNotSuccessfulCompletions(t *testing.T) {
 		"exception":       exceptionFrame(),
 		"crc":             corrupted,
 		"truncated":       frame("assistantResponseEvent", object{"content": "x"})[:20],
-		"empty":           endFrame(),
 		"invalid-json":    frameWithHeaders(append(stringHeader(":message-type", "event"), stringHeader(":event-type", "assistantResponseEvent")...), []byte(`{"content":`)),
 		"orphan-tool":     joinedFrames(frame("toolUseEvent", object{"input": "{}", "stop": true}), endFrame()),
 		"disallowed-tool": joinedFrames(frame("toolUseEvent", object{"name": "other", "input": object{}, "stop": true}), endFrame()),
@@ -604,6 +609,56 @@ func TestFailuresAreNotSuccessfulCompletions(t *testing.T) {
 						t.Fatalf("missing stream error event: %s (%v)", data, err)
 					}
 				})
+			}
+		}
+	}
+}
+
+func TestImageLeniency(t *testing.T) {
+	// converters_core.py:390-392/750-770: URL 图片、空 data、坏 data URL 跳过
+	// 或原样放行,请求不在边界被拒。
+	blocks := []any{
+		object{"type": "text", "text": "look"},
+		object{"type": "image", "source": object{"type": "url", "url": "https://example.invalid/x.png"}},
+		object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": ""}},
+		object{"type": "image_url", "image_url": object{"url": "https://example.invalid/y.png"}},
+		object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}},
+	}
+	root := object{"model": "claude-sonnet-4-6", "max_tokens": 64, "messages": []any{object{"role": "user", "content": blocks}}}
+	server := stub(t, joinedFrames(frame("assistantResponseEvent", object{"content": "ok"}), endFrame()), func(_ *http.Request, p object) {
+		images := list(obj(obj(obj(p["conversationState"])["currentMessage"])["userInputMessage"])["images"])
+		if len(images) != 1 || obj(images[0])["format"] != "png" {
+			t.Errorf("images=%v", images)
+		}
+	})
+	req, _ := http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(root)))
+	for k, v := range Headers("native-token", "") {
+		req.Header.Set(k, v)
+	}
+	resp, err := NewTransport(nil).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+}
+
+func TestEmptyStreamReturns200(t *testing.T) {
+	// streaming_openai.py:787: 空流(无内容、无终止标记)仍回 200,
+	// 空 content + 正常结束,不再是错误。
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			server := stub(t, endFrame(), nil)
+			_, data, err := do(t, server.URL, protocol, stream)
+			if err != nil {
+				t.Fatalf("%s stream=%v: %v", protocol, stream, err)
+			}
+			if protocol == "anthropic" {
+				if !strings.Contains(string(data), `"stop_reason":"end_turn"`) {
+					t.Fatalf("%s stream=%v: %s", protocol, stream, data)
+				}
+			} else if !strings.Contains(string(data), `"finish_reason":"stop"`) {
+				t.Fatalf("%s stream=%v: %s", protocol, stream, data)
 			}
 		}
 	}
@@ -661,21 +716,29 @@ func TestTransparentNonKiroAndDefaultBase(t *testing.T) {
 func TestHTTPErrorsPreservedAndBodiesClosed(t *testing.T) {
 	defer func(backoff func(int) time.Duration) { retryBackoff = backoff }(retryBackoff)
 	retryBackoff = func(int) time.Duration { return 0 }
-	for _, stream := range []bool{false, true} {
-		attempts := 0
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			attempts++
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(429)
-			io.WriteString(w, `{"message":"throttled"}`)
-		}))
-		_, data, err := do(t, server.URL, "anthropic", stream)
-		server.Close()
-		if err != nil || string(data) != `{"message":"throttled"}` {
-			t.Fatalf("%s %v", data, err)
-		}
-		if attempts != maxRetryAttempts {
-			t.Fatalf("attempts=%d, want %d", attempts, maxRetryAttempts)
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			attempts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(429)
+				io.WriteString(w, `{"message":"throttled"}`)
+			}))
+			_, data, err := do(t, server.URL, protocol, stream)
+			server.Close()
+			// routes_anthropic.py:622-670/routes_openai.py:584: 状态码保留,
+			// 错误体重写为客户端协议形状。
+			want := `{"error":{"message":"throttled","type":"api_error"},"type":"error"}`
+			if protocol == "openai" {
+				want = `{"error":{"code":429,"message":"throttled","type":"kiro_api_error"}}`
+			}
+			if err != nil || string(data) != want {
+				t.Fatalf("%s: %s %v", protocol, data, err)
+			}
+			if attempts != maxRetryAttempts {
+				t.Fatalf("attempts=%d, want %d", attempts, maxRetryAttempts)
+			}
 		}
 	}
 }
