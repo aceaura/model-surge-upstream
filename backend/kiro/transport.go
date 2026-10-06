@@ -173,13 +173,15 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	if protocol == "count_tokens" {
 		// routes_anthropic.py count_tokens_endpoint: 纯本地估算,不打上游;
-		// Claude Code 靠它决定何时触发会话压缩。复用消息请求的输入估算
-		// (含 system/tools/图片),返回 {"input_tokens": n}。
+		// Claude Code 靠它决定何时触发会话压缩。基于原始请求
+		// (messages/tools/system),三部分分别乘 1.15 校正
+		// (tokenizer.py:208-209/251-252/291-292),返回 {"input_tokens": n}。
 		_, options, err := convertRequest(raw, "anthropic", req.Header.Get(HeaderProfileARN))
 		if err != nil {
 			return nil, apperr.Wrap(apperr.InvalidRequest, "kiro", err)
 		}
-		data, err := json.Marshal(object{"input_tokens": options.inputEstimate})
+		p := options.estimateParts
+		data, err := json.Marshal(object{"input_tokens": p[0]*115/100 + p[1]*115/100 + p[2]*115/100})
 		if err != nil {
 			return nil, err
 		}
@@ -365,8 +367,10 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if options.policyMode == "" {
 			body := ownedBody(rawBody, ctx, cancel)
 			if options.stream {
+				// routes_anthropic.py:532-535: 流式响应显式 keep-alive。
 				out.Header.Set("Content-Type", "text/event-stream")
 				out.Header.Set("Cache-Control", "no-cache")
+				out.Header.Set("Connection", "keep-alive")
 				out.Body = newStreamBody(body, state, req.Context())
 			} else {
 				defer body.Close()
@@ -413,7 +417,26 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if violation != nil {
 			if recovery > 0 {
 				cancel()
-				return nil, violation
+				// routes_openai.py:414-423 / routes_anthropic.py:479-488:
+				// 恢复重试仍违规,502 + 协议错误体;消息带
+				// "tool_choice_not_satisfied: " 前缀(streaming_core.py:126-130)。
+				msg := "tool_choice_not_satisfied: " + violation.msg
+				var shape object
+				if options.protocol == "openai" {
+					shape = object{"error": object{"message": msg, "type": "tool_choice_not_satisfied", "code": "tool_choice_not_satisfied"}}
+				} else {
+					shape = object{"type": "error", "error": object{"type": "tool_choice_not_satisfied", "message": msg}}
+				}
+				encoded, merr := json.Marshal(shape)
+				if merr != nil {
+					return nil, merr
+				}
+				out.StatusCode = 502
+				out.Status = "502 Bad Gateway"
+				out.Header = http.Header{"Content-Type": {"application/json"}}
+				out.Body = io.NopCloser(bytes.NewReader(encoded))
+				out.ContentLength = int64(len(encoded))
+				return &out, nil
 			}
 			encoded, err = recoveryDirective(payload, options, violation)
 			if err != nil {
@@ -429,6 +452,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			out.Header.Set("Content-Type", "text/event-stream")
 			out.Header.Set("Cache-Control", "no-cache")
+			out.Header.Set("Connection", "keep-alive")
 			out.Body = io.NopCloser(bytes.NewReader(captured.Bytes()))
 		} else {
 			data, err := json.Marshal(state.response())

@@ -961,7 +961,9 @@ func (s *responseState) response() object {
 	if reasoning.Len() > 0 {
 		message["reasoning_content"] = reasoning.String()
 	}
-	return object{"id": s.id, "object": "chat.completion", "created": s.created, "model": s.options.model, "choices": []any{object{"index": 0, "message": message, "finish_reason": openai}}, "usage": s.openAIUsage()}
+	// streaming_openai.py:794: 非流式 created 取收集完成后的 format 时刻;
+	// 流式 chunk 用流开始时刻(s.created,streaming_openai.py:119)。
+	return object{"id": s.id, "object": "chat.completion", "created": time.Now().Unix(), "model": s.options.model, "choices": []any{object{"index": 0, "message": message, "finish_reason": openai}}, "usage": s.openAIUsage()}
 }
 
 func onceCloser(body io.Closer) func() error {

@@ -469,9 +469,24 @@ func TestToolChoiceRecoveryExhausted(t *testing.T) {
 	var calls atomic.Int32
 	server := seqStub(t, [][]byte{textOnly}, func(n int, _ object) { calls.Store(int32(n) + 1) })
 	r := strictRequest(t, server.URL, "openai", false, "required")
-	_, err := NewTransport(nil).RoundTrip(r)
-	if err == nil || !strings.Contains(err.Error(), "required returned no tools") {
-		t.Fatalf("err=%v", err)
+	// routes_openai.py:414-423: 恢复重试仍违规返回 502 + 协议错误体,
+	// 消息带 "tool_choice_not_satisfied: " 前缀(streaming_core.py:126-130)。
+	resp, err := NewTransport(nil).RoundTrip(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 502 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, data)
+	}
+	e := obj(parseResult(t, data)["error"])
+	if e["type"] != "tool_choice_not_satisfied" || e["code"] != "tool_choice_not_satisfied" ||
+		str(e["message"]) != "tool_choice_not_satisfied: tool_choice required returned no tools" {
+		t.Fatalf("body=%s", data)
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("calls=%d", calls.Load())

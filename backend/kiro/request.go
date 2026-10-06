@@ -38,10 +38,13 @@ type requestOptions struct {
 	protocol, model string
 	stream          bool
 	inputEstimate   int
-	allowedTools    map[string]bool
-	forbidTools     bool
-	fakeReasoning   bool
-	effort          string
+	// estimateParts 是 inputEstimate 的 messages/tools/system 分解,
+	// count_tokens 端点对各部分分别乘 1.15 校正(tokenizer.py:208-209)。
+	estimateParts [3]int
+	allowedTools  map[string]bool
+	forbidTools   bool
+	fakeReasoning bool
+	effort        string
 	// 严格 tool_choice(streaming_core.py validate_tool_choice_result):
 	// policyMode 非空时整体缓冲校验,违规注入恢复指令重试一次。
 	policyMode      string
@@ -103,6 +106,156 @@ func estimateText(s string, claude bool) int {
 		n = n * 115 / 100
 	}
 	return n
+}
+
+// pyDumps 是 json.dumps(ensure_ascii=False) 的估算用近似:带空格分隔符、
+// 非 ASCII 原文。键序不影响长度。
+func pyDumps(v any) string {
+	s, _ := normalizeOrderedJSON(jsonText(v), false)
+	return s
+}
+
+// estimateOriginalTokens 复刻 tokenizer.py estimate_request_tokens:基于原
+// 始请求(messages/tools/system 未转换),返回三部分分解。openai 兜底不
+// 含 system(streaming_openai.py:322-326)。
+func estimateOriginalTokens(root object, protocol string) [3]int {
+	parts := [3]int{estimateOriginalMessages(list(root["messages"])), estimateOriginalTools(list(root["tools"])), 0}
+	if protocol != "openai" {
+		parts[2] = estimateOriginalSystem(root["system"])
+	}
+	return parts
+}
+
+// tokenizer.py:110-210 count_message_tokens:每消息 +4、末尾 +3,块级分流
+// (text/image=100/tool_use/tool_result/未知块 json.dumps/裸项 str())。
+func estimateOriginalMessages(msgs []any) int {
+	total := 0
+	for _, v := range msgs {
+		m := obj(v)
+		total += 4
+		total += estimateText(str(m["role"]), false)
+		switch c := m["content"].(type) {
+		case string:
+			total += estimateText(c, false)
+		case []any:
+			for _, item := range c {
+				b := obj(item)
+				if b == nil {
+					total += estimateText(pythonicString(item), false)
+					continue
+				}
+				switch str(b["type"]) {
+				case "text":
+					total += estimateText(str(b["text"]), false)
+				case "image", "image_url":
+					total += 100
+				case "tool_use":
+					total += estimateText(str(b["id"]), false)
+					total += estimateText(str(b["name"]), false)
+					total += estimateText(pyDumps(b["input"]), false)
+				case "tool_result":
+					total += estimateText(str(b["tool_use_id"]), false)
+					if ie := b["is_error"]; ie != nil {
+						total += estimateText(pythonicString(ie), false)
+					}
+					switch rc := b["content"].(type) {
+					case string:
+						total += estimateText(rc, false)
+					case []any:
+						for _, rb := range rc {
+							rbd := obj(rb)
+							if rbd == nil {
+								total += estimateText(pythonicString(rb), false)
+								continue
+							}
+							// tokenizer.py:170-179: 内层只计 text 与图片,
+							// 其余 dict 块忽略。
+							switch str(rbd["type"]) {
+							case "text":
+								total += estimateText(str(rbd["text"]), false)
+							case "image", "image_url":
+								total += 100
+							}
+						}
+					case nil:
+					default:
+						total += estimateText(pythonicString(rc), false)
+					}
+				default:
+					total += estimateText(pyDumps(b), false)
+				}
+			}
+		}
+		for _, tv := range list(m["tool_calls"]) {
+			tc := obj(tv)
+			total += 4
+			f := obj(tc["function"])
+			total += estimateText(str(f["name"]), false)
+			// tokenizer.py:198: arguments 按原文计;非字符串(无 pydantic
+			// 校验)按 json.dumps 近似。
+			switch a := f["arguments"].(type) {
+			case string:
+				total += estimateText(a, false)
+			case nil:
+			default:
+				total += estimateText(pyDumps(a), false)
+			}
+		}
+		total += estimateText(str(m["tool_call_id"]), false)
+	}
+	return total + 3
+}
+
+// tokenizer.py:213-253 count_tools_tokens:每工具 +4,兼容 openai 包裹与
+// anthropic 扁平两种形态,input_schema/parameters 取 json.dumps。
+func estimateOriginalTools(tools []any) int {
+	total := 0
+	for _, tv := range tools {
+		t := obj(tv)
+		total += 4
+		payload := t
+		if str(t["type"]) == "function" {
+			if f := obj(t["function"]); f != nil {
+				payload = f
+			}
+		}
+		total += estimateText(str(payload["name"]), false)
+		total += estimateText(str(payload["description"]), false)
+		params := payload["input_schema"]
+		if params == nil {
+			params = payload["parameters"]
+		}
+		if params != nil {
+			total += estimateText(pyDumps(params), false)
+		}
+	}
+	return total
+}
+
+// tokenizer.py:256-293 count_system_tokens:字符串 / 块列表(含
+// cache_control)/ 其他标量 str()。
+func estimateOriginalSystem(sys any) int {
+	total := 0
+	switch s := sys.(type) {
+	case string:
+		total += estimateText(s, false)
+	case []any:
+		for _, item := range s {
+			b := obj(item)
+			if b == nil {
+				total += estimateText(pythonicString(item), false)
+				continue
+			}
+			total += estimateText(str(b["text"]), false)
+			if cc := b["cache_control"]; cc != nil {
+				total += estimateText(pyDumps(cc), false)
+			}
+		}
+	case nil:
+	default:
+		total += estimateText(pythonicString(s), false)
+	}
+	return total
 }
 
 func convertRequest(raw []byte, protocol, profile string) (object, requestOptions, error) {
@@ -384,21 +537,12 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			last.images = append(last.images, msg.images...)
 			continue
 		}
-		mergeRole := msg.role
 		if !parseable {
-			mergeRole = role // 原始角色参与合并分组,归一化前不与 user 合并
+			// 原始角色保留给 merge 分组:归一化在 merge 之后
+			// (converters_core.py:1728-1740),此前不与 user 合并。
+			msg.role = role
 		}
-		if len(messages) > 0 && messages[len(messages)-1].role == mergeRole {
-			last := &messages[len(messages)-1]
-			// converters_core.py:1231: 同角色合并用单个 "\n" 无条件连接。
-			last.text = last.text + "\n" + msg.text
-			last.images = append(last.images, msg.images...)
-			last.uses = append(last.uses, msg.uses...)
-			last.results = append(last.results, msg.results...)
-		} else {
-			msg.role = mergeRole
-			messages = append(messages, msg)
-		}
+		messages = append(messages, msg)
 		lastWasTool = protocol == "openai" && role == "tool"
 	}
 	if len(systemMsgs) > 0 {
@@ -409,9 +553,52 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	}
 	// Truncation recovery (truncation_state.py): a previous response that was
 	// cut mid-stream earns a one-time synthetic notice in this request.
-	// routes_anthropic.py:230-254 在原始消息上注入,随后走 merge 等整条
-	// 流水线;在此注入并再合并一次相邻同角色,保持等价。
+	// routes_anthropic.py:230-254 在原始消息上注入,随后走整条流水线
+	// (strip/孤儿判定 → merge → 首条 user → normalize → alternating →
+	// repair),与参考实现同序。
 	messages = injectTruncationNotices(messages)
+	// converters_core.py:1712-1725: 工具内容剥离与孤儿 results 文本化在
+	// merge(1728)之前逐消息判定——带 results 的 user 前驱是无 results 的
+	// user 时按孤儿文本化,不会被 merge 后的相邻关系救回。
+	// "已声明"按过滤后实际上行的工具集判定(tool_choice=named 只留被选
+	// 工具,未选工具的历史调用同样降级为文本)。
+	declared := map[string]bool{}
+	for _, t := range tools {
+		declared[str(obj(obj(t)["toolSpecification"])["name"])] = true
+	}
+	historyAsText := len(tools) == 0
+	for _, m := range messages {
+		for _, u := range m.uses {
+			if !declared[str(obj(u)["name"])] {
+				historyAsText = true
+			}
+		}
+	}
+	if historyAsText {
+		// strip_all_tool_content(converters_core.py:1032-1113): 全部工具
+		// 内容转文本,原正文 → tool_calls → tool_results 顺序 "\n\n" 连接。
+		for i := range messages {
+			m := &messages[i]
+			m.text = joinText(m.text, toolCallsToText(m.uses))
+			m.text = joinText(m.text, toolResultsToText(m.results))
+			m.uses = nil
+			m.results = nil
+		}
+	} else {
+		// ensure_assistant_before_tool_results(converters_core.py:1116-1189):
+		// 前驱(原始顺序)不是带 toolUses 的 assistant 时,孤儿 results
+		// 文本化——无法合成合法 assistant(工具名未知)。
+		for i := range messages {
+			m := &messages[i]
+			if len(m.results) == 0 || (i > 0 && messages[i-1].role == "assistant" && len(messages[i-1].uses) > 0) {
+				continue
+			}
+			m.text = joinText(m.text, toolResultsToText(m.results))
+			m.results = nil
+		}
+	}
+	// merge_adjacent_messages(converters_core.py:1192-1274): 同角色相邻
+	// 合并,文本用单个 "\n" 无条件连接;未归一角色按原始角色分组。
 	merged := make([]message, 0, len(messages))
 	for _, m := range messages {
 		if len(merged) > 0 && merged[len(merged)-1].role == m.role {
@@ -443,45 +630,12 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		alternating = append(alternating, m)
 	}
 	messages = alternating
-	// Historical tools without usable definitions are retained as text, not
-	// silently discarded or sent as invalid native tool context.
-	// converters_core.py:1712-1719: "已声明"按过滤后实际上行的工具集判定
-	// (tool_choice=named 只留被选工具,未选工具的历史调用同样降级为文本)。
-	declared := map[string]bool{}
-	for _, t := range tools {
-		declared[str(obj(obj(t)["toolSpecification"])["name"])] = true
-	}
-	historyAsText := len(tools) == 0
-	for _, m := range messages {
-		for _, u := range m.uses {
-			if !declared[str(obj(u)["name"])] {
-				historyAsText = true
-			}
-		}
-	}
-	if historyAsText {
-		for i := range messages {
-			m := &messages[i]
-			m.text = joinText(m.text, toolCallsToText(m.uses))
-			m.text = joinText(m.text, toolResultsToText(m.results))
-			m.uses = nil
-			m.results = nil
-		}
-	} else {
+	if !historyAsText {
 		// Kiro 400s the whole request on unpaired tool context, so the
-		// reference repairs instead of rejecting: orphan tool results (no
-		// preceding assistant with toolUses) become text; every assistant
-		// toolUse without a result gets a synthetic placeholder
-		// (repair_unpaired_tool_uses). Results with unknown/duplicate ids
-		// pass through for the upstream.
-		for i := range messages {
-			m := &messages[i]
-			if len(m.results) == 0 || (i > 0 && messages[i-1].role == "assistant" && len(messages[i-1].uses) > 0) {
-				continue
-			}
-			m.text = joinText(m.text, toolResultsToText(m.results))
-			m.results = nil
-		}
+		// reference repairs instead of rejecting: every assistant toolUse
+		// without a result gets a synthetic placeholder
+		// (repair_unpaired_tool_uses, converters_core.py:1745). Results with
+		// unknown/duplicate ids pass through for the upstream.
 		for i := range messages {
 			m := &messages[i]
 			if len(m.uses) == 0 {
@@ -579,26 +733,18 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		opts.fakeReasoning = true
 	}
 	var history []any
-	total := 3
 	for i, m := range messages {
-		total += 4 + estimateText(m.role, false) + estimateText(m.text, false) + 100*len(m.images)
-		for _, u := range m.uses {
-			total += 4 + estimateText(jsonText(stripArgsText(u)), false)
-		}
-		for _, r := range m.results {
-			total += estimateText(jsonText(r), false)
-		}
 		if i < len(messages)-1 {
 			history = append(history, nativeMessage(m, model, nil))
 		}
 	}
-	for _, t := range tools {
-		total += 4 + estimateText(jsonText(t), false)
-	}
-	if strings.HasPrefix(model, "claude") {
-		total = total * 115 / 100
-	}
-	opts.inputEstimate = total
+	// tokenizer.py estimate_request_tokens: 输入估算基于原始请求
+	// (messages/tools/system 未转换,不含注入段与合成占位),usage 兜底
+	// 不乘校正系数(streaming_anthropic.py:178-183、
+	// streaming_openai.py:322-326);count_tokens 端点在 transport 侧对
+	// 三部分分别乘 1.15(routes_anthropic.py:1124、tokenizer.py:208-209)。
+	opts.estimateParts = estimateOriginalTokens(root, protocol)
+	opts.inputEstimate = opts.estimateParts[0] + opts.estimateParts[1] + opts.estimateParts[2]
 	state := object{"chatTriggerType": "MANUAL", "conversationId": newID(), "currentMessage": nativeMessage(messages[len(messages)-1], model, tools)}
 	if len(history) > 0 {
 		state["history"] = history

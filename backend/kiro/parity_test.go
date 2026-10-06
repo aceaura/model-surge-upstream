@@ -450,6 +450,38 @@ func TestToolPairingRepair(t *testing.T) {
 			t.Fatalf("history lost old: %v", payload)
 		}
 	})
+	t.Run("orphan judged before merge", func(t *testing.T) {
+		// converters_core.py:1723-1728: ensure_assistant_before_tool_results
+		// 在 merge 之前——带 results 的 user 前驱是无 results 的 user,按
+		// 孤儿文本化,不会被 merge 后的 assistant 相邻关系救回。
+		root := object{"model": "claude-sonnet-4.6", "tools": toolDefinition("anthropic"), "messages": []any{
+			object{"role": "assistant", "content": []any{object{"type": "tool_use", "id": "call", "name": "lookup", "input": object{}}}},
+			object{"role": "user", "content": "mid"},
+			object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "lost", "content": "orphan data"}}},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		raw := jsonText(payload)
+		// 孤儿 results 变文本;assistant 的 toolUse 由 repair 补占位接住。
+		if !strings.Contains(raw, "[Tool Result (lost)]") || !strings.Contains(raw, "orphan data") ||
+			!strings.Contains(raw, "[gateway: tool result was not delivered by the client") {
+			t.Fatal(payload)
+		}
+	})
+	t.Run("strip before merge keeps per-message order", func(t *testing.T) {
+		// converters_core.py:1718-1728: strip_all_tool_content 在 merge 之前,
+		// 相邻 assistant 各自文本化后再以 "\n" 合并,工具文本穿插在各自
+		// 正文后,而不是合并正文之后统一追加。
+		root := object{"model": "claude-sonnet-4.6", "messages": []any{
+			object{"role": "assistant", "content": "a1", "tool_calls": []any{object{"id": "i1", "type": "function", "function": object{"name": "f", "arguments": "{}"}}}},
+			object{"role": "assistant", "content": "a2", "tool_calls": []any{object{"id": "i2", "type": "function", "function": object{"name": "f", "arguments": "{}"}}}},
+			object{"role": "user", "content": "go"},
+		}}
+		payload, _ := convert(t, root, "openai")
+		want := "a1\n\n[Tool: f (i1)]\n{}\na2\n\n[Tool: f (i2)]\n{}"
+		if !strings.Contains(jsonText(obj(payload["conversationState"])["history"]), jsonText(want)[1:len(jsonText(want))-1]) {
+			t.Fatalf("history=%v", obj(payload["conversationState"])["history"])
+		}
+	})
 }
 
 func TestContentTruncationRecovery(t *testing.T) {
