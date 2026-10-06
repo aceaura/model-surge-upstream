@@ -55,14 +55,14 @@ func TestToolsOnlyResponseAndExplicitStopSequence(t *testing.T) {
 		if protocol == "openai" {
 			choice := obj(list(root["choices"])[0])
 			message := obj(choice["message"])
-			if choice["finish_reason"] != "tool_calls" || message["content"] != nil || len(list(message["tool_calls"])) != 1 {
+			if choice["finish_reason"] != "tool_calls" || message["content"] != "" || len(list(message["tool_calls"])) != 1 {
 				t.Fatal(root)
 			}
 		} else if root["stop_reason"] != "tool_use" || len(list(root["content"])) != 1 {
 			t.Fatal(root)
 		}
 	}
-	stop := stub(t, joinedFrames(frame("assistantResponseEvent", object{"content": "answer"}), frame("messageStopEvent", object{"stopReason": "stop_sequence", "stopSequence": "END"})), nil)
+	stop := stub(t, joinedFrames(frame("assistantResponseEvent", object{"content": "answer"}), frame("messageStopEvent", object{"stopReason": "stop_sequence", "stopSequence": "END"}), frame("usageEvent", object{"contextUsagePercentage": 42})), nil)
 	_, data, err := do(t, stop.URL, "anthropic", false)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestToolsOnlyResponseAndExplicitStopSequence(t *testing.T) {
 	if root["stop_reason"] != "stop_sequence" || root["stop_sequence"] != "END" {
 		t.Fatal(root)
 	}
-	invalid := stub(t, joinedFrames(frame("assistantResponseEvent", object{"content": "not a tool"}), frame("messageStopEvent", object{"stopReason": "tool_use"})), nil)
+	invalid := stub(t, joinedFrames(frame("assistantResponseEvent", object{"content": "not a tool"}), frame("messageStopEvent", object{"stopReason": "tool_use"}), frame("usageEvent", object{"contextUsagePercentage": 42})), nil)
 	if _, _, err := do(t, invalid.URL, "anthropic", false); err == nil {
 		t.Fatal("tool stop reason without tool call accepted")
 	}
@@ -107,7 +107,7 @@ func TestStopReasonCaseNormalization(t *testing.T) {
 					if tc.tool {
 						content = frame("toolUseEvent", object{"name": "lookup", "toolUseId": "only", "input": object{}, "stop": true})
 					}
-					server := stub(t, joinedFrames(content, frame("messageStopEvent", object{"stopReason": tc.reason, "stopSequence": "END"})), nil)
+					server := stub(t, joinedFrames(content, frame("messageStopEvent", object{"stopReason": tc.reason, "stopSequence": "END"}), frame("usageEvent", object{"contextUsagePercentage": 42})), nil)
 					_, data, err := do(t, server.URL, protocol, stream)
 					if err != nil {
 						t.Fatal(err)

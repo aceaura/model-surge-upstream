@@ -61,6 +61,8 @@ type responseState struct {
 	cacheRead, cacheCreation      int
 	cacheReadAbs, cacheCreateAbs  bool
 	terminal, meaningful          bool
+	sentRole                      bool
+	streamTools                   []any
 	stopReason                    string
 	stopSequence                  string
 	emit                          func(string, object)
@@ -89,9 +91,9 @@ func (s *responseState) chunk(delta object, finish any) object {
 func (s *responseState) start() {
 	if s.options.protocol == "anthropic" {
 		s.send("message_start", object{"type": "message_start", "message": object{"id": s.id, "type": "message", "role": "assistant", "model": s.options.model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": s.anthropicUsage()}})
-	} else {
-		s.send("", s.chunk(object{"role": "assistant", "content": ""}, nil))
 	}
+	// streaming_openai.py:140-142: openai 不发空 role 首帧,role 附在首个
+	// 真实 content/reasoning delta 上。
 }
 func (s *responseState) closeBlock() {
 	if s.blockType == "" {
@@ -190,7 +192,12 @@ func (s *responseState) emitBlock(kind, text string, fake bool) error {
 		if kind == "thinking" {
 			field = "reasoning_content"
 		}
-		s.send("", s.chunk(object{field: text}, nil))
+		delta := object{field: text}
+		if !s.sentRole {
+			delta["role"] = "assistant"
+			s.sentRole = true
+		}
+		s.send("", s.chunk(delta, nil))
 	}
 	if !s.options.stream {
 		s.textBuffer.WriteString(text)
@@ -263,8 +270,9 @@ func (s *responseState) finishTool() error {
 	if s.options.protocol == "anthropic" {
 		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": canonical}})
 	} else {
-		s.send("", s.chunk(object{"tool_calls": []any{object{"index": s.toolCount, "id": t.id, "type": "function", "function": object{"name": t.name, "arguments": ""}}}}, nil))
-		s.send("", s.chunk(object{"tool_calls": []any{object{"index": s.toolCount, "function": object{"arguments": canonical}}}}, nil))
+		// streaming_openai.py:267-368: openai 流不逐工具发帧,全部收集后
+		// 在收尾前聚合成单个 tool_calls chunk 发出。
+		s.streamTools = append(s.streamTools, object{"index": s.toolCount, "id": t.id, "type": "function", "function": object{"name": t.name, "arguments": canonical}})
 	}
 	if !s.options.stream {
 		block["input"] = input
@@ -356,15 +364,21 @@ func (s *responseState) accept(e wireEvent) error {
 	// Terminal metering events are emitted at the end in the observed protocol;
 	// clean EOF alone is insufficient evidence of a completed generation.
 	if v, ok := d["usage"]; ok {
-		// streaming_anthropic.py:544/streaming_openai.py:271: 数值型 usage 是
-		// credits 计量,0/None 跳过;usage 事件不作完成标记,正常结束只认
-		// contextUsagePercentage/stopReason/绝对 token 等信号。
+		// streaming_openai.py:270-279: openai 路径把任意真值 usage(credits
+		// 计量或绝对 token 字典)当作完成信号;streaming_anthropic.py:543-547
+		// 的 anthropic 路径只认 contextUsagePercentage,usage 帧仅取缓存字段。
 		if n, ok := v.(json.Number); ok {
 			if f, err := n.Float64(); err == nil && f != 0 {
 				s.credits, s.hasCredits = f, true
+				if s.options.protocol == "openai" {
+					s.terminal = true
+				}
 			}
 		} else {
 			s.updateUsage(obj(v))
+			if s.options.protocol == "openai" && len(obj(v)) > 0 {
+				s.terminal = true
+			}
 		}
 	}
 	if v, ok := d["contextUsagePercentage"]; ok {
@@ -380,11 +394,13 @@ func (s *responseState) accept(e wireEvent) error {
 		for _, key := range []string{"tokenUsage", "usage", "metrics"} {
 			s.updateUsage(obj(d[key]))
 		}
-		if s.inputAbsolute || s.outputAbsolute {
+		if s.options.protocol == "openai" && (s.inputAbsolute || s.outputAbsolute) {
 			s.terminal = true
 		}
 	}
 	if reason := str(d["stopReason"]); reason != "" {
+		// stopReason 只用于收尾原因映射;两条 Python 流式路径都不把它当
+		// 完成信号,缺 contextUsagePercentage(openai 另认 usage)即判截断。
 		s.stopReason = strings.ToLower(reason)
 		switch s.stopReason {
 		case "tooluse":
@@ -393,10 +409,6 @@ func (s *responseState) accept(e wireEvent) error {
 			s.stopReason = "max_tokens"
 		}
 		s.stopSequence = str(d["stopSequence"])
-		s.terminal = true
-	}
-	if e.kind == "messageStopEvent" || e.kind == "completionEvent" {
-		s.terminal = true
 	}
 	if _, ok := d["followupPrompt"]; ok {
 		return nil
@@ -533,8 +545,7 @@ func (s *responseState) emitBracketTool(call object) error {
 	if s.options.protocol == "anthropic" {
 		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": canonical}})
 	} else {
-		s.send("", s.chunk(object{"tool_calls": []any{object{"index": s.toolCount, "id": id, "type": "function", "function": object{"name": name, "arguments": ""}}}}, nil))
-		s.send("", s.chunk(object{"tool_calls": []any{object{"index": s.toolCount, "function": object{"arguments": canonical}}}}, nil))
+		s.streamTools = append(s.streamTools, object{"index": s.toolCount, "id": id, "type": "function", "function": object{"name": name, "arguments": canonical}})
 	}
 	if !s.options.stream {
 		block["input"] = input
@@ -681,9 +692,14 @@ func (s *responseState) finishStream() {
 		s.send("message_delta", object{"type": "message_delta", "delta": object{"stop_reason": anthropic, "stop_sequence": s.sequenceValue()}, "usage": s.anthropicUsage()})
 		s.send("message_stop", object{"type": "message_stop"})
 	} else {
-		s.send("", s.chunk(object{}, openai))
-		// streaming_openai.py:396-411: 收尾 usage 块恒发,不看 stream_options。
-		s.send("", object{"id": s.id, "object": "chat.completion.chunk", "created": s.created, "model": s.options.model, "choices": []any{}, "usage": s.openAIUsage()})
+		if len(s.streamTools) > 0 {
+			s.send("", s.chunk(object{"tool_calls": s.streamTools}, nil))
+		}
+		// streaming_openai.py:396-411: finish_reason 与 usage 同一收尾帧,
+		// 恒发,不看 stream_options。
+		final := s.chunk(object{}, openai)
+		final["usage"] = s.openAIUsage()
+		s.send("", final)
 	}
 }
 func (s *responseState) response() object {
@@ -704,10 +720,8 @@ func (s *responseState) response() object {
 			calls = append(calls, object{"id": b["id"], "type": "function", "function": object{"name": b["name"], "arguments": jsonText(b["input"])}})
 		}
 	}
+	// streaming_openai.py:763: content 恒为字符串,工具调用场景不回 null。
 	message := object{"role": "assistant", "content": content.String()}
-	if content.Len() == 0 && len(calls) > 0 {
-		message["content"] = nil
-	}
 	if len(calls) > 0 {
 		message["tool_calls"] = calls
 	}

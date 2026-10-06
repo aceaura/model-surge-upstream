@@ -130,9 +130,8 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 	}
 	// streaming_openai.py: 收尾 usage 块恒发,stream_options.include_usage 忽略。
-	if n, ok := root["n"]; ok && jsonText(n) != "1" {
-		return fail(fmt.Errorf("multiple completions are not supported"))
-	}
+	// models_openai.py:160: n 字段被接受但从不读取(n≠1 静默返回单条),
+	// 不在边界拒绝。
 	// converters_anthropic.py:106-116: 顶层 system 的多个文本块 "\n" 连接。
 	// 该字段只属 anthropic 协议;openai 模型无此字段,参考实现直接忽略。
 	system := ""
@@ -362,14 +361,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		alternating = append(alternating, m)
 	}
 	messages = alternating
-	trailingAssistant := false
-	if messages[len(messages)-1].role == "assistant" {
-		// converters_core.py:1772-1778: 末条 assistant 进 history 时 toolUses
-		// 静默丢弃,current 换成占位 user。
-		messages[len(messages)-1].uses = nil
-		messages = append(messages, message{role: "user", text: "(empty placeholder)"})
-		trailingAssistant = true
-	}
 	// Historical tools without usable definitions are retained as text, not
 	// silently discarded or sent as invalid native tool context.
 	historyAsText := len(tools) == 0
@@ -405,8 +396,26 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		for i := range messages {
 			m := &messages[i]
-			if len(m.uses) == 0 || i+1 >= len(messages) {
+			if len(m.uses) == 0 {
 				continue
+			}
+			if i+1 >= len(messages) {
+				// converters_core.py:1406-1409: assistant 后无 user 消息时
+				// 插入合成 user 承载占位 toolResults——末条 assistant 的
+				// toolUses 因此保留在 history,而不是被 trailing 处理丢弃。
+				synthetic := message{role: "user"}
+				for _, u := range m.uses {
+					if id := str(obj(u)["toolUseId"]); id != "" {
+						synthetic.results = append(synthetic.results, toolResult(id,
+							"[gateway: tool result was not delivered by the client; "+
+								"the tool likely produced an image or other media that was "+
+								"moved into an adjacent user message.]"))
+					}
+				}
+				if len(synthetic.results) > 0 {
+					messages = append(messages, synthetic)
+				}
+				break
 			}
 			next := &messages[i+1]
 			seen := map[string]bool{}
@@ -423,6 +432,15 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				}
 			}
 		}
+	}
+	trailingAssistant := false
+	if messages[len(messages)-1].role == "assistant" {
+		// converters_core.py:1772-1778: 末条 assistant 进 history 时 toolUses
+		// 静默丢弃,current 换成占位 user。带 toolUses 的末条 assistant
+		// 已被上面的 repair 用合成 user 接住,走不到这里。
+		messages[len(messages)-1].uses = nil
+		messages = append(messages, message{role: "user", text: "(empty placeholder)"})
+		trailingAssistant = true
 	}
 	cfg := extractThinking(root, protocol)
 	opts.effort = cfg.effort
@@ -441,20 +459,28 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// Native effort/adaptive thinking wins; fake-reasoning tags are injected
 	// only when no native channel is in play (NATIVE_EFFORT_SUPPRESS_TAGS).
 	suppressTags := len(fields) > 0 || cfg.adaptive
-	system += directive
-	if len(toolDocs) > 0 {
-		doc := "\n\n---\n# Tool Documentation\nThe following tools have detailed documentation that couldn't fit in the tool definition.\n\n" + strings.Join(toolDocs, "\n\n---\n\n")
+	// 参考实现的系统段拼接模式:已有内容直接追加,空系统则 strip 该段
+	// (converters_anthropic.py:510、converters_core.py:1702-1712)。
+	appendSystem := func(add string) {
 		if system == "" {
-			system = strings.TrimSpace(doc)
+			system = strings.TrimSpace(add)
 		} else {
-			system += doc
+			system += add
 		}
 	}
-	if !suppressTags {
-		system += thinkingSystemAddition
+	appendSystem(directive)
+	if len(toolDocs) > 0 {
+		appendSystem("\n\n---\n# Tool Documentation\nThe following tools have detailed documentation that couldn't fit in the tool definition.\n\n" + strings.Join(toolDocs, "\n\n---\n\n"))
 	}
-	system += truncationSystemAddition
-	messages[0].text = joinText(system, messages[0].text)
+	if !suppressTags {
+		appendSystem(thinkingSystemAddition)
+	}
+	appendSystem(truncationSystemAddition)
+	// converters_core.py:1754-1758: 系统提示无条件 "\n\n" 前缀进首条
+	// user(空正文也会留下尾部 "\n\n")。
+	if system != "" {
+		messages[0].text = system + "\n\n" + messages[0].text
+	}
 	// converters_core.py:1815-1819: tags 只注入原本的末条 user;末条是
 	// assistant 时占位 user 不注入。
 	if current := &messages[len(messages)-1]; current.role == "user" && !trailingAssistant && !cfg.disabled && !suppressTags {

@@ -433,7 +433,7 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 					if len(history) != 4 {
 						t.Fatalf("history=%v", history)
 					}
-					if obj(obj(history[0])["userInputMessage"])["content"] != truncationSystemAddition+"\n\nfirst\nsecond" {
+					if obj(obj(history[0])["userInputMessage"])["content"] != strings.TrimSpace(truncationSystemAddition)+"\n\nfirst\nsecond" {
 						t.Errorf("history=%v", history)
 					}
 					usesMsg, resultsMsg = 1, 2
