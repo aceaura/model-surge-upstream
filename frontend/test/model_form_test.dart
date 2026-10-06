@@ -117,7 +117,7 @@ void main() {
 
     await tester.tap(dropdownIn('model-account-field'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('oa-1 (openai.global.api.standard)').last);
+    await tester.tap(find.text('oa-1 (openai)').last);
     await tester.pumpAndSettle();
 
     await tester.tap(dropdownIn('model-protocol-field'));
