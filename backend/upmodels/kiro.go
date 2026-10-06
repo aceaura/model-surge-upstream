@@ -185,9 +185,10 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 		}
 		gotValid = true
 		for _, model := range parseEntries(body) {
-			// config.py HIDDEN_FROM_LIST=["auto"]: auto 不出列表,只经别名直达。
+			// config.py HIDDEN_FROM_LIST=["auto"] + model_resolver.py:394-395:
+			// auto 自身不入列表,但其别名 auto-kiro 出现在列表中。
 			if model.ID == "auto" {
-				continue
+				model.ID = "auto-kiro"
 			}
 			if !seenModels[model.ID] {
 				seenModels[model.ID] = true

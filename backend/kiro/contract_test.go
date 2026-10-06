@@ -188,10 +188,12 @@ func TestNativeEffortSchemas(t *testing.T) {
 	}{
 		{"opus exact", "claude-opus-5", object{"output_config": object{"effort": "xhigh"}}, "output_config", "xhigh", false, ""},
 		{"sonnet clamp", "claude-sonnet-4-6", object{"reasoning_effort": "xhigh"}, "output_config", "high", false, ""},
-		{"opus max", "claude-opus-4.8", object{"reasoning": object{"effort": "max"}}, "output_config", "max", false, ""},
+		{"opus max", "claude-opus-4.8", object{"reasoning_effort": "max"}, "output_config", "max", false, ""},
 		{"gpt none", "gpt-5.6-sol", object{"thinking": object{"type": "disabled"}}, "reasoning", "none", false, ""},
 		{"claude none omitted", "claude-sonnet-4.6", object{"thinking": object{"type": "disabled"}}, "", "", false, ""},
-		{"minimal alias", "gpt-5.5", object{"reasoning_effort": "minimal"}, "reasoning", "low", false, ""},
+		// anthropic 侧无 minimal 别名(config.py:526 只属 openai),未知档走
+		// EFFORT_FALLBACK。
+		{"anthropic minimal fallback", "gpt-5.5", object{"reasoning_effort": "minimal"}, "reasoning", "medium", false, ""},
 		{"unknown tier fallback", "gpt-5.6-terra", object{"reasoning_effort": "ultra"}, "reasoning", "medium", false, ""},
 		{"unknown model omitted", "other-model", object{"reasoning_effort": "max", "thinking": object{"type": "adaptive"}}, "", "", false, ""},
 		{"native adaptive", "claude-sonnet-5", object{"thinking": object{"type": "adaptive"}, "output_config": object{"effort": "max"}}, "output_config", "max", true, ""},

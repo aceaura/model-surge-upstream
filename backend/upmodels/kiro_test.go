@@ -62,7 +62,7 @@ func TestKiroListAuthenticationPaginationAndRefresh(t *testing.T) {
 			if r.URL.Query().Get("nextToken") != "page +/2" {
 				t.Errorf("pagination token = %q", r.URL.Query().Get("nextToken"))
 			}
-			// auto 属 HIDDEN_FROM_LIST:抓到了也不入列表。
+			// auto 属 HIDDEN_FROM_LIST:自身不入列表,以别名 auto-kiro 出现。
 			fmt.Fprint(w, `{"models":[{"modelId":"a","modelName":"Alpha"},{"modelId":"z"},{"modelId":"auto"}]}`)
 		default:
 			t.Error("unexpected extra page")
@@ -83,7 +83,7 @@ func TestKiroListAuthenticationPaginationAndRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Entry{{ID: "a", DisplayName: "Alpha"}, {ID: "z", DisplayName: "Zed"}}
+	want := []Entry{{ID: "a", DisplayName: "Alpha"}, {ID: "auto-kiro"}, {ID: "z", DisplayName: "Zed"}}
 	if !got.Queryable || !reflect.DeepEqual(got.Models, want) || calls != 2 {
 		t.Fatalf("report = %+v, calls = %d", got, calls)
 	}

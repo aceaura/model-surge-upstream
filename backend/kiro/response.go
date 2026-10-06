@@ -72,9 +72,10 @@ func newResponseState(o requestOptions) *responseState {
 		prefix = "msg_"
 	}
 	s := &responseState{options: o, id: prefix + strings.ReplaceAll(newID(), "-", ""), created: time.Now().Unix(), blockIndex: -1, inputTokens: o.inputEstimate, seenTools: map[string][sha256.Size]byte{}, seenNameArgs: map[[sha256.Size]byte]bool{}}
-	if o.fakeReasoning {
-		s.parser = newThinkingParser()
-	}
+	// streaming_core.py:296-299: 思考解析只受全局 FAKE_REASONING_ENABLED
+	// 门控,与本请求是否注入标签无关——模型自发输出 <thinking> 块同样
+	// 被剥离进 reasoning 通道。
+	s.parser = newThinkingParser()
 	return s
 }
 func (s *responseState) send(name string, v object) {

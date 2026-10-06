@@ -52,7 +52,7 @@ type message struct {
 }
 
 var (
-	contextSuffix = regexp.MustCompile(`\[\d+[mk]\]$`)
+	contextSuffix = regexp.MustCompile(`(?i)\[\d+[mk]\]$`)
 	standardModel = regexp.MustCompile(`^(claude-(?:haiku|sonnet|opus)-\d+)-(\d{1,2})(?:-(?:\d{8}|latest|\d+))?$`)
 	noMinorModel  = regexp.MustCompile(`^(claude-(?:haiku|sonnet|opus)-\d+)(?:-\d{8})?$`)
 	legacyModel   = regexp.MustCompile(`^(claude)-(\d+)-(\d+)-(haiku|sonnet|opus)(?:-(?:\d{8}|latest|\d+))?$`)
@@ -133,11 +133,18 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if n, ok := root["n"]; ok && jsonText(n) != "1" {
 		return fail(fmt.Errorf("multiple completions are not supported"))
 	}
-	system, err := textOnly(root["system"])
-	if err != nil {
-		return fail(err)
+	// converters_anthropic.py:106-116: 顶层 system 的多个文本块 "\n" 连接。
+	// 该字段只属 anthropic 协议;openai 模型无此字段,参考实现直接忽略。
+	system := ""
+	if protocol == "anthropic" {
+		var err error
+		system, err = systemPromptText(root["system"])
+		if err != nil {
+			return fail(err)
+		}
 	}
 	var tools []any
+	var toolDocs []string
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
 		flat := false
@@ -178,8 +185,10 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			description = "Tool: " + name
 		}
 		if utf8.RuneCountInString(description) > 10000 {
-			system = joinText(system, "Tool documentation for "+name+":\n"+description)
-			description = "See system instructions for documentation of " + name
+			// converters_core.py:616-636: 超长描述迁入系统提示的
+			// "# Tool Documentation" 段,工具上只留指引占位。
+			toolDocs = append(toolDocs, "## Tool: "+name+"\n\n"+description)
+			description = "[Full documentation in system prompt under '## Tool: " + name + "']"
 		}
 		tools = append(tools, object{"toolSpecification": object{"name": name, "description": description, "inputSchema": object{"json": sanitizeSchema(schema)}}})
 	}
@@ -255,18 +264,27 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 	}
 	var messages []message
+	var systemMsgs []string
+	lastWasTool := false
 	for _, v := range list(root["messages"]) {
 		m := obj(v)
 		role := str(m["role"])
-		// converters_openai.py:169-173: 只有 system 进系统提示;developer 等
-		// 未知角色按 user 解析,但归一化在合并之后(converters_core.py:1728-1740:
-		// merge → 首条 user → normalize → alternating)。
+		// models_anthropic.py:229: role 是 Literal["user","assistant"],其他
+		// 角色(含 system)在参考实现里直接被 422 拒绝。
+		if protocol == "anthropic" && role != "user" && role != "assistant" {
+			return fail(fmt.Errorf("role must be user or assistant"))
+		}
+		// converters_openai.py:169-175: 只有 system 进系统提示,多条 "\n"
+		// 连接并整体 strip;developer 等未知角色按 user 解析,但归一化在
+		// 合并之后(converters_core.py:1728-1740: merge → 首条 user →
+		// normalize → alternating)。
 		if role == "system" {
 			s, e := textOnly(m["content"])
 			if e != nil {
 				return fail(e)
 			}
-			system = joinText(system, s)
+			systemMsgs = append(systemMsgs, s)
+			lastWasTool = false
 			continue
 		}
 		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")
@@ -276,6 +294,14 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		msg, e := parseMessage(m, protocol)
 		if e != nil {
 			return fail(e)
+		}
+		if protocol == "openai" && role == "tool" && lastWasTool {
+			// converters_openai.py:186-212: 连续 tool 消息聚成一条 user,
+			// 不经过同角色合并(避免空文本 "\n" 连接 artifact)。
+			last := &messages[len(messages)-1]
+			last.results = append(last.results, msg.results...)
+			last.images = append(last.images, msg.images...)
+			continue
 		}
 		mergeRole := msg.role
 		if !parseable {
@@ -292,10 +318,32 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			msg.role = mergeRole
 			messages = append(messages, msg)
 		}
+		lastWasTool = protocol == "openai" && role == "tool"
+	}
+	if len(systemMsgs) > 0 {
+		system = strings.TrimSpace(strings.Join(systemMsgs, "\n"))
 	}
 	if len(messages) == 0 {
 		return fail(fmt.Errorf("messages must contain a user or assistant turn"))
 	}
+	// Truncation recovery (truncation_state.py): a previous response that was
+	// cut mid-stream earns a one-time synthetic notice in this request.
+	// routes_anthropic.py:230-254 在原始消息上注入,随后走 merge 等整条
+	// 流水线;在此注入并再合并一次相邻同角色,保持等价。
+	messages = injectTruncationNotices(messages)
+	merged := make([]message, 0, len(messages))
+	for _, m := range messages {
+		if len(merged) > 0 && merged[len(merged)-1].role == m.role {
+			last := &merged[len(merged)-1]
+			last.text = last.text + "\n" + m.text
+			last.images = append(last.images, m.images...)
+			last.uses = append(last.uses, m.uses...)
+			last.results = append(last.results, m.results...)
+		} else {
+			merged = append(merged, m)
+		}
+	}
+	messages = merged
 	if messages[0].role != "user" {
 		messages = append([]message{{role: "user", text: "(empty placeholder)"}}, messages...)
 	}
@@ -322,9 +370,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		messages = append(messages, message{role: "user", text: "(empty placeholder)"})
 		trailingAssistant = true
 	}
-	// Truncation recovery (truncation_state.py): a previous response that was
-	// cut mid-stream earns a one-time synthetic notice in this request.
-	messages = injectTruncationNotices(messages)
 	// Historical tools without usable definitions are retained as text, not
 	// silently discarded or sent as invalid native tool context.
 	historyAsText := len(tools) == 0
@@ -379,7 +424,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			}
 		}
 	}
-	cfg := extractThinking(root)
+	cfg := extractThinking(root, protocol)
 	opts.effort = cfg.effort
 	model := nativeModel(opts.model)
 	fields, e := effortFields(cfg, obj(root["thinking"]), model)
@@ -397,6 +442,14 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// only when no native channel is in play (NATIVE_EFFORT_SUPPRESS_TAGS).
 	suppressTags := len(fields) > 0 || cfg.adaptive
 	system += directive
+	if len(toolDocs) > 0 {
+		doc := "\n\n---\n# Tool Documentation\nThe following tools have detailed documentation that couldn't fit in the tool definition.\n\n" + strings.Join(toolDocs, "\n\n---\n\n")
+		if system == "" {
+			system = strings.TrimSpace(doc)
+		} else {
+			system += doc
+		}
+	}
 	if !suppressTags {
 		system += thinkingSystemAddition
 	}
@@ -538,6 +591,30 @@ func textOnly(v any) (string, error) {
 	}
 	return out, nil
 }
+
+// systemPromptText 是顶层 system 字段的提取:字符串原样,块列表 "\n" 连接
+// (converters_anthropic.py:115),与消息正文的直接拼接区分开。
+func systemPromptText(v any) (string, error) {
+	if v == nil {
+		return "", nil
+	}
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	a, ok := v.([]any)
+	if !ok {
+		return "", fmt.Errorf("content must be text or blocks")
+	}
+	parts := []string{}
+	for _, v := range a {
+		b := obj(v)
+		if str(b["type"]) != "text" {
+			return "", fmt.Errorf("unsupported text content block %q", str(b["type"]))
+		}
+		parts = append(parts, str(b["text"]))
+	}
+	return strings.Join(parts, "\n"), nil
+}
 func parseMessage(m object, protocol string) (message, error) {
 	result := message{role: str(m["role"])}
 	if result.role == "tool" {
@@ -566,7 +643,9 @@ func parseMessage(m object, protocol string) (message, error) {
 			switch str(b["type"]) {
 			case "text":
 				result.text += str(b["text"])
-			case "thinking", "redacted_thinking": // Native history has no reasoning channel.
+			case "thinking": // Native history has no reasoning channel.
+			// models_anthropic.py:205-212: ContentBlock 联合类型不含
+			// redacted_thinking,参考实现对它 422——落入 default 报错。
 			case "tool_reference": // Claude Code 延迟工具标记(models_anthropic.py:128),Kiro 无对应物,忽略。
 			case "image", "image_url":
 				// converters_anthropic.py:297-319: 图片只为 user 角色提取,
@@ -582,8 +661,10 @@ func parseMessage(m object, protocol string) (message, error) {
 					result.images = append(result.images, image)
 				}
 			case "tool_use":
+				// tool_use 块只在 anthropic assistant 回合提取;user 回合与
+				// openai 内容里的同类块参考实现静默丢弃。
 				if protocol != "anthropic" || result.role != "assistant" {
-					return result, fmt.Errorf("tool_use must be in an assistant turn")
+					continue
 				}
 				u, err := toolUse(str(b["id"]), str(b["name"]), b["input"])
 				if err != nil {
@@ -591,8 +672,10 @@ func parseMessage(m object, protocol string) (message, error) {
 				}
 				result.uses = append(result.uses, u)
 			case "tool_result":
-				if protocol != "anthropic" || result.role != "user" {
-					return result, fmt.Errorf("tool_result must be in a user turn")
+				// user 回合提取(anthropic 与 openai 皆支持,
+				// converters_openai.py:64-85),其余角色静默丢弃。
+				if result.role != "user" {
+					continue
 				}
 				text, images, err := resultContent(b["content"])
 				if err != nil {
@@ -610,8 +693,9 @@ func parseMessage(m object, protocol string) (message, error) {
 		}
 	}
 	for _, v := range list(m["tool_calls"]) {
+		// 参考实现只从 openai assistant 消息提取 tool_calls,其余位置忽略。
 		if protocol != "openai" || result.role != "assistant" {
-			return result, fmt.Errorf("tool_calls must be in an assistant turn")
+			continue
 		}
 		tc := obj(v)
 		if str(tc["type"]) != "function" {

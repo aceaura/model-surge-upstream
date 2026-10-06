@@ -63,27 +63,36 @@ type thinkingConfig struct {
 }
 
 var knownEffortTiers = map[string]bool{
-	"none": true, "minimal": true, "low": true, "medium": true,
+	"none": true, "low": true, "medium": true,
 	"high": true, "xhigh": true, "max": true,
 }
 
-func extractThinking(root object) thinkingConfig {
+func extractThinking(root object, protocol string) thinkingConfig {
 	cfg := thinkingConfig{}
+	// thinking 字段只属 anthropic 协议;openai 请求模型无此字段,
+	// 参考实现直接忽略(只读 reasoning_effort)。
 	thinking := obj(root["thinking"])
+	if protocol == "openai" {
+		thinking = nil
+	}
 	if str(thinking["type"]) == "adaptive" {
 		cfg.adaptive = true
 	}
 	// converters_anthropic.py:420-462 优先级:disabled → budget_tokens →
-	// adaptive → output_config.effort → reasoning_effort。
-	effort := str(obj(root["output_config"])["effort"])
-	if effort == "" {
+	// adaptive → output_config.effort → reasoning_effort;openai 侧只读
+	// reasoning_effort(converters_openai.py:321-353),minimal→low 别名也
+	// 只属 openai(config.py:526 OPENAI_EFFORT_ALIASES)。
+	effort := ""
+	if protocol == "openai" {
 		effort = str(root["reasoning_effort"])
-	}
-	if effort == "" {
-		effort = str(obj(root["reasoning"])["effort"])
+	} else {
+		effort = str(obj(root["output_config"])["effort"])
+		if effort == "" {
+			effort = str(root["reasoning_effort"])
+		}
 	}
 	effort = strings.ToLower(strings.TrimSpace(effort))
-	if effort == "minimal" {
+	if protocol == "openai" && effort == "minimal" {
 		effort = "low"
 	}
 	if effort != "" && !knownEffortTiers[effort] {

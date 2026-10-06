@@ -382,13 +382,17 @@ func TestTextOnlyEstimatesAndStopReasons(t *testing.T) {
 func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 	for _, protocol := range []string{"anthropic", "openai"} {
 		t.Run(protocol, func(t *testing.T) {
-			messages := []any{object{"role": "system", "content": "system instruction"}, object{"role": "developer", "content": "developer instruction"}, object{"role": "user", "content": "first"}, object{"role": "user", "content": "second"}}
+			var messages []any
 			var assistant, result, image object
 			if protocol == "anthropic" {
+				// models_anthropic.py:229: role 是 Literal["user","assistant"],
+				// system/developer 等角色被参考实现 422 拒绝。
+				messages = []any{object{"role": "user", "content": "first"}, object{"role": "user", "content": "second"}}
 				assistant = object{"role": "assistant", "content": []any{object{"type": "tool_use", "id": "history_1", "name": "lookup", "input": object{"x": 42}}}}
 				result = object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "history_1", "is_error": true, "content": "failed lookup"}}}
 				image = object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
 			} else {
+				messages = []any{object{"role": "system", "content": "system instruction"}, object{"role": "developer", "content": "developer instruction"}, object{"role": "user", "content": "first"}, object{"role": "user", "content": "second"}}
 				assistant = object{"role": "assistant", "content": nil, "tool_calls": []any{object{"id": "history_1", "type": "function", "function": object{"name": "lookup", "arguments": `{"x":42}`}}}}
 				result = object{"role": "tool", "tool_call_id": "history_1", "content": "lookup result"}
 				image = object{"type": "image_url", "image_url": object{"url": "data:image/png;base64,aGVsbG8="}}
@@ -409,24 +413,36 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 				}
 				state := obj(p["conversationState"])
 				history := list(state["history"])
-				// converters_core.py:1728-1740: 合并→首条user→归一→交错,
-				// developer 归一为 user 后与相邻 user 之间插合成 assistant 占位。
-				if len(history) != 8 {
-					t.Fatalf("history=%v", history)
+				var usesMsg, resultsMsg int
+				if protocol == "openai" {
+					// converters_core.py:1728-1740: 合并→首条user→归一→交错,
+					// developer 归一为 user 后与相邻 user 之间插合成 assistant 占位。
+					if len(history) != 8 {
+						t.Fatalf("history=%v", history)
+					}
+					first := obj(obj(history[0])["userInputMessage"])
+					if first["content"] != "system instruction"+truncationSystemAddition+"\n\n(empty placeholder)" {
+						t.Errorf("system/history=%v", first)
+					}
+					if obj(obj(history[2])["userInputMessage"])["content"] != "developer instruction" ||
+						obj(obj(history[4])["userInputMessage"])["content"] != "first\nsecond" {
+						t.Errorf("normalized history=%v", history)
+					}
+					usesMsg, resultsMsg = 5, 6
+				} else {
+					if len(history) != 4 {
+						t.Fatalf("history=%v", history)
+					}
+					if obj(obj(history[0])["userInputMessage"])["content"] != truncationSystemAddition+"\n\nfirst\nsecond" {
+						t.Errorf("history=%v", history)
+					}
+					usesMsg, resultsMsg = 1, 2
 				}
-				first := obj(obj(history[0])["userInputMessage"])
-				if first["content"] != "system instruction"+truncationSystemAddition+"\n\n(empty placeholder)" {
-					t.Errorf("system/history=%v", first)
-				}
-				if obj(obj(history[2])["userInputMessage"])["content"] != "developer instruction" ||
-					obj(obj(history[4])["userInputMessage"])["content"] != "first\nsecond" {
-					t.Errorf("normalized history=%v", history)
-				}
-				uses := list(obj(obj(history[5])["assistantResponseMessage"])["toolUses"])
+				uses := list(obj(obj(history[usesMsg])["assistantResponseMessage"])["toolUses"])
 				if len(uses) != 1 || obj(uses[0])["toolUseId"] != "history_1" || number(obj(obj(uses[0])["input"])["x"]) != 42 {
 					t.Errorf("toolUses=%v", uses)
 				}
-				results := list(obj(obj(obj(history[6])["userInputMessage"])["userInputMessageContext"])["toolResults"])
+				results := list(obj(obj(obj(history[resultsMsg])["userInputMessage"])["userInputMessageContext"])["toolResults"])
 				if len(results) != 1 || obj(results[0])["toolUseId"] != "history_1" {
 					t.Errorf("toolResults=%v", results)
 				}

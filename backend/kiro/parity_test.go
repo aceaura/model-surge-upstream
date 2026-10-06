@@ -86,10 +86,11 @@ func TestFakeReasoningInjection(t *testing.T) {
 		}
 	})
 	t.Run("minimal aliases low", func(t *testing.T) {
+		// config.py:526: minimal→low 别名只属 openai 侧。
 		root := base()
 		root["model"] = "other-model"
 		root["reasoning_effort"] = "minimal"
-		payload, _ := convert(t, root, "anthropic")
+		payload, _ := convert(t, root, "openai")
 		if content := currentContent(t, payload); !strings.Contains(content, "<thinking_effort>low</thinking_effort>") {
 			t.Fatalf("content=%q", content)
 		}
@@ -261,7 +262,10 @@ func TestFakeReasoningResponseParsing(t *testing.T) {
 			t.Fatal(string(data))
 		}
 	})
-	t.Run("suppressed tags stay plain text", func(t *testing.T) {
+	t.Run("suppressed tags still parsed from response", func(t *testing.T) {
+		// streaming_core.py:296-299: 响应侧思考解析只受全局开关门控,
+		// 本请求未注入标签(native effort)时模型自发的 <thinking> 块
+		// 同样被剥离进 thinking 通道。
 		server := stub(t, wire, nil)
 		root := object{"model": "claude-sonnet-4-6", "reasoning_effort": "high", "max_tokens": 1024, "messages": []any{object{"role": "user", "content": "hello"}}, "tools": toolDefinition("anthropic")}
 		req, _ := http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(root)))
@@ -275,7 +279,7 @@ func TestFakeReasoningResponseParsing(t *testing.T) {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(resp.Body)
 		blocks := list(parseResult(t, data)["content"])
-		if len(blocks) != 1 || obj(blocks[0])["text"] != "<thinking>secret</thinking>answer" {
+		if len(blocks) != 2 || obj(blocks[0])["thinking"] != "secret" || obj(blocks[1])["text"] != "answer" {
 			t.Fatal(blocks)
 		}
 	})
@@ -415,6 +419,19 @@ func TestToolPairingRepair(t *testing.T) {
 		payload, _ := convert(t, root, "anthropic")
 		if !strings.Contains(jsonText(payload), `"input":{}`) {
 			t.Fatal(payload)
+		}
+	})
+	t.Run("anthropic rejects non-user-assistant roles", func(t *testing.T) {
+		// models_anthropic.py:229: role 是 Literal["user","assistant"],
+		// 其他角色(含 system/developer)参考实现 422。
+		for _, role := range []string{"system", "developer", "function", "tool"} {
+			root := object{"model": "claude-sonnet-4.6", "max_tokens": 1024, "messages": []any{
+				object{"role": role, "content": "x"},
+				object{"role": "user", "content": "hello"},
+			}}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "anthropic", ""); err == nil {
+				t.Fatalf("role %q accepted", role)
+			}
 		}
 	})
 	t.Run("unknown role becomes user", func(t *testing.T) {
