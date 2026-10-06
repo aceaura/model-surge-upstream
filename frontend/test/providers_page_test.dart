@@ -249,7 +249,7 @@ void main() {
     final subTop = tester.getTopLeft(find.text('订阅 · 全球')).dy;
     final paygoTop = tester.getTopLeft(find.text('按量计费 · 中国')).dy;
     expect(subTop, lessThan(paygoTop), reason: '组内订阅类型排在按量前面');
-    expect(find.text('kimi'), findsNWidgets(2), reason: '两节标签都只显示厂商短名');
+    expect(find.text('kimi'), findsOneWidget, reason: '厂商小标只在卡头右上角一枚,不随节重复');
     expect(find.text('服务类型'), findsNothing,
         reason: '两条记录都无真实服务类型,该行隐藏');
     expect(find.widgetWithText(SelectableText, '—'), findsNothing);

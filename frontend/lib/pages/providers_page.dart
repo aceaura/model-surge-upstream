@@ -161,7 +161,7 @@ class _ProvidersPageState extends State<ProvidersPage> {
   }
 }
 
-/// 厂商大卡:卡头头像+厂商名,卡内按类型分节(节首类型签+缩写标签)。
+/// 厂商大卡:卡头头像+厂商名,右上角一枚厂商小标;卡内按类型分节(节首类型签)。
 class _VendorCard extends StatelessWidget {
   const _VendorCard({required this.group});
 
@@ -188,6 +188,8 @@ class _VendorCard extends StatelessWidget {
                     color: t.ink,
                   ),
                 ),
+                const Spacer(),
+                ProviderTag(providerVendor(group.specs.first.id)),
               ],
             ),
             for (var i = 0; i < group.specs.length; i++) ...[
@@ -198,8 +200,6 @@ class _VendorCard extends StatelessWidget {
               Row(
                 children: [
                   _TypeChip(spec: group.specs[i]),
-                  const Spacer(),
-                  ProviderTag(providerVendor(group.specs[i].id)),
                 ],
               ),
               const SizedBox(height: 8),
