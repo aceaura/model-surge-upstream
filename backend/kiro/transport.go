@@ -492,7 +492,7 @@ func enhanceKiroError(data []byte) string {
 		return "Invalid model ID or insufficient subscription level to use it."
 	}
 	if original == "Improperly formed request." && (reason == "UNKNOWN" || reason == "null") {
-		return "Kiro API rejected the request. If problem persists, open issue with info and attached debug logs at: " +
+		return "Kiro API rejected the request. If problem persists, open issue with info and attached debug logs at:" +
 			"https://github.com/jwadow/kiro-gateway/issues"
 	}
 	if payload.Reason != nil && reason != "UNKNOWN" {

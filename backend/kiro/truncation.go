@@ -177,7 +177,9 @@ func parseBracketToolCalls(text string) []object {
 		}
 		input, err := decodeObject(rest[i : end+1])
 		if err == nil {
-			calls = append(calls, object{"toolUseId": "call_" + strings.ReplaceAll(newID(), "-", ""), "name": name, "input": input})
+			// parsers.py:133-142: id 为 call_+8 hex;raw 保留原文供
+			// json.dumps(json.loads) 语义的保序归一。
+			calls = append(calls, object{"toolUseId": "call_" + strings.ReplaceAll(newID(), "-", "")[:8], "name": name, "input": input, "raw": rest[i : end+1]})
 		}
 		pos = start + end + 1
 	}

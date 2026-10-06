@@ -228,7 +228,7 @@ func TestBothProtocolsStreamAndNonstream(t *testing.T) {
 							t.Fatal(m)
 						}
 						calls := list(message["tool_calls"])
-						if len(calls) != 2 || obj(obj(calls[1])["function"])["arguments"] != `{"x":2}` {
+						if len(calls) != 2 || obj(obj(calls[1])["function"])["arguments"] != `{"x": 2}` {
 							t.Fatal(calls)
 						}
 						if number(usage["prompt_tokens"]) != 17 || number(usage["completion_tokens"]) != 9 || number(usage["total_tokens"]) != 26 {
@@ -285,7 +285,7 @@ func assertAnthropicStream(t *testing.T, es []object) {
 			final = e
 		}
 	}
-	if text != "hahathen" || len(open) != 4 || len(stopped) != 4 || types[1] != "tool_use" || ids[1] != "call_1" || ids[3] != "call_2" || arguments[1] != `{"x":1}` || arguments[3] != `{"x":2}` {
+	if text != "hahathen" || len(open) != 4 || len(stopped) != 4 || types[1] != "tool_use" || ids[1] != "call_1" || ids[3] != "call_2" || arguments[1] != `{"x": 1}` || arguments[3] != `{"x": 2}` {
 		t.Fatalf("text=%s indices=%v args=%v", text, types, arguments)
 	}
 	if obj(final["delta"])["stop_reason"] != "tool_use" || number(obj(final["usage"])["input_tokens"]) != 17 || number(obj(final["usage"])["output_tokens"]) != 9 {
@@ -320,7 +320,7 @@ func assertOpenAIStream(t *testing.T, es []object) {
 			args[i] += str(obj(tc["function"])["arguments"])
 		}
 	}
-	if text != "hahathen" || finish != "tool_calls" || ids[0] != "call_1" || ids[1] != "call_2" || args[0] != `{"x":1}` || args[1] != `{"x":2}` {
+	if text != "hahathen" || finish != "tool_calls" || ids[0] != "call_1" || ids[1] != "call_2" || args[0] != `{"x": 1}` || args[1] != `{"x": 2}` {
 		t.Fatalf("text=%s finish=%s ids=%v args=%v", text, finish, ids, args)
 	}
 	if number(usage["prompt_tokens"]) != 17 || number(usage["completion_tokens"]) != 9 || es[len(es)-1]["done"] != true {
@@ -623,11 +623,21 @@ func TestFailuresAreNotSuccessfulCompletions(t *testing.T) {
 					if err == nil {
 						t.Fatalf("accepted failure: %s", data)
 					}
-					if strings.Contains(string(data), "[DONE]") || strings.Contains(string(data), `"type":"message_stop"`) || strings.Contains(string(data), `"finish_reason":"stop"`) {
-						t.Fatalf("failure disguised as success: %s", data)
+					body := string(data)
+					// streaming_openai.py:431-441: openai 流式中段错误先发
+					// [DONE] 再中断连接,属参考实现的预期形状;其余路径不得
+					// 出现成功收尾标记。
+					disguised := strings.Contains(body, `"type":"message_stop"`) || strings.Contains(body, `"finish_reason":"stop"`)
+					if !disguised && !(stream && protocol == "openai") {
+						disguised = strings.Contains(body, "[DONE]")
 					}
-					if stream && !strings.Contains(string(data), `"type":"upstream_error"`) {
-						t.Fatalf("missing stream error event: %s (%v)", data, err)
+					if disguised {
+						t.Fatalf("failure disguised as success: %s", body)
+					}
+					// streaming_anthropic.py:726-732: anthropic 流式中段错误
+					// 以 error 事件发出;openai 不发错误事件。
+					if stream && protocol == "anthropic" && !strings.Contains(body, `"type":"error"`) {
+						t.Fatalf("missing stream error event: %s (%v)", body, err)
 					}
 				})
 			}
@@ -637,12 +647,13 @@ func TestFailuresAreNotSuccessfulCompletions(t *testing.T) {
 
 func TestImageLeniency(t *testing.T) {
 	// converters_core.py:390-392/750-770: URL 图片、空 data、坏 data URL 跳过
-	// 或原样放行,请求不在边界被拒。
+	// 或原样放行,请求不在边界被拒。image_url 块不在此列:
+	// models_anthropic.py 的 ContentBlock 联合类型只含 image,anthropic
+	// 请求带 image_url 在边界 422(见下方负例)。
 	blocks := []any{
 		object{"type": "text", "text": "look"},
 		object{"type": "image", "source": object{"type": "url", "url": "https://example.invalid/x.png"}},
 		object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": ""}},
-		object{"type": "image_url", "image_url": object{"url": "https://example.invalid/y.png"}},
 		object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}},
 	}
 	root := object{"model": "claude-sonnet-4-6", "max_tokens": 64, "messages": []any{object{"role": "user", "content": blocks}}}
@@ -662,6 +673,18 @@ func TestImageLeniency(t *testing.T) {
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
+
+	// models_anthropic.py: ContentBlock 联合不含 image_url,边界 400。
+	bad := object{"model": "claude-sonnet-4-6", "max_tokens": 64, "messages": []any{object{"role": "user", "content": []any{
+		object{"type": "image_url", "image_url": object{"url": "https://example.invalid/y.png"}},
+	}}}}
+	req, _ = http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(bad)))
+	for k, v := range Headers("native-token", "") {
+		req.Header.Set(k, v)
+	}
+	if _, err := NewTransport(nil).RoundTrip(req); err == nil {
+		t.Fatal("anthropic image_url accepted")
+	}
 }
 
 func TestLenientToolFrames(t *testing.T) {

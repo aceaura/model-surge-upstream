@@ -435,7 +435,7 @@ func TestToolFragmentAssemblyAndDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := list(obj(obj(list(parseResult(t, data)["choices"])[0])["message"])["tool_calls"])
-	if len(calls) != 1 || str(obj(obj(calls[0])["function"])["arguments"]) != `{"x":1}` {
+	if len(calls) != 1 || str(obj(obj(calls[0])["function"])["arguments"]) != `{"x": 1}` {
 		t.Fatalf("calls=%v", calls)
 	}
 }
@@ -448,8 +448,13 @@ func TestTerminalMarkerDoesNotMaskTrailingFrameFailure(t *testing.T) {
 		for _, stream := range []bool{false, true} {
 			server := stub(t, joinedFrames(prefix, tail), nil)
 			_, data, err := do(t, server.URL, "openai", stream)
-			if err == nil || strings.Contains(string(data), "[DONE]") {
-				t.Fatalf("trailing error masked: %s %v", data, err)
+			if err == nil {
+				t.Fatalf("trailing error masked: %s", data)
+			}
+			// streaming_openai.py:431-441: 流式中段错误补 [DONE] 后中断属
+			// 参考实现的预期形状;非流式不得出现成功收尾标记。
+			if !stream && strings.Contains(string(data), "[DONE]") {
+				t.Fatalf("trailing error masked: %s", data)
 			}
 		}
 	}

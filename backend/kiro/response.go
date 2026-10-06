@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -44,13 +46,16 @@ type finishedTool struct {
 	invalid  bool
 }
 
-// normalizeOrderedJSON 把合法 JSON 重编码为保序紧凑文本(对象键序按到达
-// 顺序保留,数字原文保留);非法输入 ok=false。
-func normalizeOrderedJSON(raw string) (string, bool) {
+// normalizeOrderedJSON 把合法 JSON 重编码为 Python json.dumps 风格文本:
+// 默认分隔符 ", "/": "、对象键序按到达顺序保留、数字按 Python repr 归一
+// (parsers.py:445 的 json.dumps(json.loads(raw)) 语义);asciiOnly 对应
+// ensure_ascii(openai arguments 存 ASCII 形式,anthropic partial_json 用
+// ensure_ascii=False 的 UTF-8 形式)。非法输入 ok=false。
+func normalizeOrderedJSON(raw string, asciiOnly bool) (string, bool) {
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
 	var buf strings.Builder
-	if !encodeOrderedValue(dec, &buf) {
+	if !encodeOrderedValue(dec, &buf, asciiOnly) {
 		return "", false
 	}
 	if _, err := dec.Token(); err != io.EOF {
@@ -59,18 +64,87 @@ func normalizeOrderedJSON(raw string) (string, bool) {
 	return buf.String(), true
 }
 
-func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder) bool {
+// pyJSONString 按 Python json.dumps 转义字符串:只转引号、反斜杠与常见控制
+// 符,不转 <>&;asciiOnly 时非 ASCII 字符转 \uXXXX(星平面用代理对)。
+func pyJSONString(s string, asciiOnly bool) string {
+	var buf strings.Builder
+	buf.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			buf.WriteString(`\"`)
+		case '\\':
+			buf.WriteString(`\\`)
+		case '\n':
+			buf.WriteString(`\n`)
+		case '\r':
+			buf.WriteString(`\r`)
+		case '\t':
+			buf.WriteString(`\t`)
+		case '\b':
+			buf.WriteString(`\b`)
+		case '\f':
+			buf.WriteString(`\f`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&buf, `\u%04x`, r)
+			} else if asciiOnly && r > 0x7f {
+				if r > 0xffff {
+					r1, r2 := utf16.EncodeRune(r)
+					fmt.Fprintf(&buf, `\u%04x\u%04x`, r1, r2)
+				} else {
+					fmt.Fprintf(&buf, `\u%04x`, r)
+				}
+			} else {
+				buf.WriteRune(r)
+			}
+		}
+	}
+	buf.WriteByte('"')
+	return buf.String()
+}
+
+// pyNumber 按 Python repr 归一数字:整数原文保留(任意精度),浮点走最短
+// 表示且恒带小数点或指数(json "1e2"→"100.0"、"1.50"→"1.5")。
+func pyNumber(n json.Number) string {
+	s := n.String()
+	if strings.IndexAny(s, ".eEnN") < 0 {
+		return s
+	}
+	f, err := n.Float64()
+	if err != nil {
+		return s
+	}
+	out := strconv.FormatFloat(f, 'g', -1, 64)
+	if strings.IndexAny(out, ".en") < 0 {
+		out += ".0"
+	}
+	return out
+}
+
+func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool) bool {
 	tok, err := dec.Token()
 	if err != nil {
 		return false
 	}
 	delim, ok := tok.(json.Delim)
 	if !ok {
-		b, err := json.Marshal(tok)
-		if err != nil {
+		switch x := tok.(type) {
+		case string:
+			buf.WriteString(pyJSONString(x, asciiOnly))
+		case json.Number:
+			buf.WriteString(pyNumber(x))
+		case bool:
+			if x {
+				buf.WriteString("true")
+			} else {
+				buf.WriteString("false")
+			}
+		case nil:
+			buf.WriteString("null")
+		default:
 			return false
 		}
-		buf.Write(b)
 		return true
 	}
 	switch delim {
@@ -79,7 +153,7 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder) bool {
 		first := true
 		for dec.More() {
 			if !first {
-				buf.WriteByte(',')
+				buf.WriteString(", ")
 			}
 			first = false
 			kt, err := dec.Token()
@@ -90,10 +164,9 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder) bool {
 			if !ok {
 				return false
 			}
-			kb, _ := json.Marshal(ks)
-			buf.Write(kb)
-			buf.WriteByte(':')
-			if !encodeOrderedValue(dec, buf) {
+			buf.WriteString(pyJSONString(ks, asciiOnly))
+			buf.WriteString(": ")
+			if !encodeOrderedValue(dec, buf, asciiOnly) {
 				return false
 			}
 		}
@@ -106,10 +179,10 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder) bool {
 		first := true
 		for dec.More() {
 			if !first {
-				buf.WriteByte(',')
+				buf.WriteString(", ")
 			}
 			first = false
-			if !encodeOrderedValue(dec, buf) {
+			if !encodeOrderedValue(dec, buf, asciiOnly) {
 				return false
 			}
 		}
@@ -203,11 +276,13 @@ type responseState struct {
 }
 
 func newResponseState(o requestOptions) *responseState {
-	prefix := "chatcmpl-"
+	// utils.py: chatcmpl- 用完整 32 hex,msg_ 用前 24 hex,call_ 用前 8 hex。
+	hex := strings.ReplaceAll(newID(), "-", "")
+	id := "chatcmpl-" + hex
 	if o.protocol == "anthropic" {
-		prefix = "msg_"
+		id = "msg_" + hex[:24]
 	}
-	s := &responseState{options: o, id: prefix + strings.ReplaceAll(newID(), "-", ""), created: time.Now().Unix(), blockIndex: -1, inputTokens: o.inputEstimate}
+	s := &responseState{options: o, id: id, created: time.Now().Unix(), blockIndex: -1, inputTokens: o.inputEstimate}
 	// streaming_core.py:296-299: 思考解析只受全局 FAKE_REASONING_ENABLED
 	// 门控,与本请求是否注入标签无关——模型自发输出 <thinking> 块同样
 	// 被剥离进 reasoning 通道。
@@ -352,7 +427,7 @@ func (s *responseState) finishTool() error {
 	if strings.TrimSpace(args) == "" {
 		args = "{}"
 	}
-	norm, ok := normalizeOrderedJSON(args)
+	norm, ok := normalizeOrderedJSON(args, true)
 	invalid := false
 	if !ok {
 		// parsers.py: truncated arguments are diagnosed and replaced with {};
@@ -394,34 +469,34 @@ func (s *responseState) finishTool() error {
 		}
 	}
 	if s.options.stream && s.options.protocol == "anthropic" {
+		// streaming_anthropic.py:515-518: partial_json 用 ensure_ascii=False
+		// 的 UTF-8 形式,与存储的 ASCII arguments 分开渲染。
+		partial, _ := normalizeOrderedJSON(norm, false)
 		block := object{"type": "tool_use", "id": t.id, "name": t.name, "input": object{}}
 		s.openBlock("tool_use", block)
-		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": norm}})
+		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": partial}})
 		s.closeBlock()
 	}
 	return nil
 }
 func (s *responseState) toolEvent(d object) error {
-	name := str(d["name"])
-	id := str(d["toolUseId"])
-	if name != "" {
-		// A named frame starts one tool; only this tool is buffered for validation.
+	if _, hasName := d["name"]; hasName {
+		// parsers.py:330/376-401: name 键出现即开启新工具,空名同样建
+		// 工具(参考实现不校验,交由上游判定)。
 		if s.tool != nil {
 			if err := s.finishTool(); err != nil {
 				return err
 			}
 		}
-		if id == "" {
-			id = "call_" + strings.ReplaceAll(newID(), "-", "")
+		id := str(d["toolUseId"])
+		if _, hasID := d["toolUseId"]; !hasID {
+			// parsers.py:395: 仅键缺省时生成 call_+8 hex;空串原样保留。
+			id = "call_" + strings.ReplaceAll(newID(), "-", "")[:8]
 		}
-		s.tool = &pendingTool{id: id, name: name}
+		s.tool = &pendingTool{id: id, name: str(d["name"])}
 	} else if s.tool == nil {
 		// parsers.py:408-427: 无开启工具的碎片帧静默忽略。
 		return nil
-	}
-	if id != "" && id != s.tool.id {
-		// Python 单 current_tool_call 模型不追踪碎片 id,归属当前工具。
-		id = s.tool.id
 	}
 	if v, exists := d["input"]; exists {
 		piece := ""
@@ -434,7 +509,10 @@ func (s *responseState) toolEvent(d object) error {
 			}
 		case nil:
 		default:
-			piece = fmt.Sprint(x) // parsers.py: str(input_data)
+			// parsers.py: str(input_data) if input_data else ''——假值静默为空。
+			if truthy(x) {
+				piece = pythonicString(x)
+			}
 		}
 		if s.tool.args.Len()+len(piece) > maxToolBytes {
 			return fmt.Errorf("kiro: tool arguments exceed %d bytes", maxToolBytes)
@@ -483,9 +561,14 @@ func (s *responseState) accept(e wireEvent) error {
 	// Terminal metering events are emitted at the end in the observed protocol;
 	// clean EOF alone is insufficient evidence of a completed generation.
 	if v, ok := d["usage"]; ok {
-		// streaming_openai.py:270-279: openai 路径把任意真值 usage(credits
+		// streaming_openai.py:270-279: openai 流式路径把任意真值 usage(credits
 		// 计量或绝对 token 字典)当作完成信号;streaming_anthropic.py:543-547
-		// 的 anthropic 路径只认 contextUsagePercentage,usage 帧仅取缓存字段。
+		// 的 anthropic 流式路径只认 contextUsagePercentage,usage 帧仅取缓存字段。
+		// streaming_core.py:491-495: 收集路径(非流式与严格缓冲)两协议都把
+		// 任意非 null usage(含 0 与 {})当完成信号。
+		if !s.options.stream || s.options.policyMode != "" {
+			s.terminal = true
+		}
 		if n, ok := v.(json.Number); ok {
 			if f, err := n.Float64(); err == nil && f != 0 {
 				s.credits, s.hasCredits = f, true
@@ -532,7 +615,7 @@ func (s *responseState) accept(e wireEvent) error {
 	if _, ok := d["followupPrompt"]; ok {
 		return nil
 	}
-	if name := str(d["name"]); name != "" {
+	if _, has := d["name"]; has {
 		return s.toolEvent(d)
 	}
 	if _, ok := d["input"]; ok {
@@ -660,6 +743,13 @@ func (s *responseState) emitBracketTool(call object) error {
 	id, name := str(call["toolUseId"]), str(call["name"])
 	input := obj(call["input"])
 	canonical := jsonText(input)
+	// parsers.py:142: 括号工具 arguments 同走 json.dumps(json.loads) 归一;
+	// 有原文时保序重编码,缺原文退回 map 序列化。
+	if raw := str(call["raw"]); raw != "" {
+		if norm, ok := normalizeOrderedJSON(raw, true); ok {
+			canonical = norm
+		}
+	}
 	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result)。
 	if s.options.policyMode != "" {
 		if s.options.forbidTools || !s.options.allowedTools[name] {
@@ -677,11 +767,13 @@ func (s *responseState) emitBracketTool(call object) error {
 			return fmt.Errorf("kiro: response exceeds collection limit")
 		}
 	}
-	// streaming_anthropic.py:571-613: 括号恢复的块在收尾实时追加,不去重。
+	// streaming_anthropic.py:571-613: 括号恢复的块在收尾实时追加,不去重;
+	// partial_json 用 ensure_ascii=False 的 UTF-8 形式。
 	if s.options.stream && s.options.protocol == "anthropic" {
+		partial, _ := normalizeOrderedJSON(canonical, false)
 		block := object{"type": "tool_use", "id": id, "name": name, "input": object{}}
 		s.openBlock("tool_use", block)
-		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": canonical}})
+		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": partial}})
 		s.closeBlock()
 	}
 	return nil
@@ -930,7 +1022,14 @@ func newStreamBody(body *managedBody, s *responseState, ctx context.Context) *st
 func (b *streamBody) fail(err error) {
 	b.err = err
 	b.done = true
-	b.state.send("error", object{"type": "error", "error": object{"type": "upstream_error", "message": err.Error()}})
+	if b.state.options.protocol == "anthropic" {
+		// streaming_anthropic.py:726-732: 中段错误以 api_error 事件发出。
+		b.state.send("error", object{"type": "error", "error": object{"type": "api_error", "message": "Internal error: " + err.Error()}})
+	} else {
+		// streaming_openai.py:431-441 + routes_openai.py:862-866: openai 不发
+		// 错误事件,尽力补 [DONE] 后中断。
+		b.pending.WriteString("data: [DONE]\n\n")
+	}
 	b.upstream.Close()
 }
 func (b *streamBody) Read(p []byte) (int, error) {

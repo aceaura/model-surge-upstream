@@ -588,7 +588,7 @@ func TestBracketToolCallRecovery(t *testing.T) {
 		}
 		message := obj(obj(list(parseResult(t, data)["choices"])[0])["message"])
 		calls := list(message["tool_calls"])
-		if len(calls) != 1 || str(obj(obj(calls[0])["function"])["name"]) != "lookup" || str(obj(obj(calls[0])["function"])["arguments"]) != `{"city":"Paris"}` {
+		if len(calls) != 1 || str(obj(obj(calls[0])["function"])["name"]) != "lookup" || str(obj(obj(calls[0])["function"])["arguments"]) != `{"city": "Paris"}` {
 			t.Fatal(message)
 		}
 		if !strings.Contains(str(message["content"]), "[Called lookup") {
