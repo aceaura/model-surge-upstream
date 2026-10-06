@@ -535,6 +535,18 @@ class _ModelFormState extends State<ModelForm> {
           children: [
             Row(
               children: [
+                SizedBox(
+                  width: 28,
+                  child: Text(
+                    '0',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: Theme.of(context).hintColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Switch(
                   key: const ValueKey('model-effort-off'),
                   value: _disableThinking,
@@ -542,7 +554,7 @@ class _ModelFormState extends State<ModelForm> {
                 ),
                 const SizedBox(width: 8),
                 const Expanded(
-                  child: Text('启用 0 档（关闭思考）', style: TextStyle(fontSize: 12.5)),
+                  child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
                 ),
               ],
             ),
