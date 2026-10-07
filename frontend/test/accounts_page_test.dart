@@ -299,6 +299,72 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('检测中转圈与操作按钮同尺寸,相邻控件不位移', (tester) async {
+    final gate = Completer<void>();
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        final path = request.url.path;
+        final Map<String, dynamic> payload;
+        if (path.startsWith('/admin/account-test/')) {
+          await gate.future;
+          payload = {'ok': true, 'status_code': 200, 'latency_ms': 1};
+        } else if (path == '/admin/accounts') {
+          payload = {
+            'accounts': [
+              {
+                'name': 'ds-1',
+                'provider_id': 'deepseek.global.api.standard',
+                'credential': {'api_key': 'sk-***'},
+                'base_url': 'https://api.deepseek.com',
+                'headers': <String, dynamic>{},
+                'enabled': true,
+              }
+            ]
+          };
+        } else if (path == '/admin/providers') {
+          payload = {'providers': <dynamic>[]};
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: AccountsPage(
+          client: client,
+          onOpenSettings: () {},
+          onOpenModels: (_) {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final copyRect = tester.getRect(find.byTooltip('拷贝'));
+    final modelsRect = tester.getRect(find.byTooltip('模型'));
+    await tester.tap(find.byTooltip('检测连通性'));
+    await tester.pump();
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(tester.getSize(find.byTooltip('检测连通性')),
+        tester.getSize(find.byTooltip('拷贝')),
+        reason: '转圈占位必须与 IconButton 同尺寸,否则相邻文字抖动');
+    expect(tester.getRect(find.byTooltip('拷贝')), copyRect);
+    expect(tester.getRect(find.byTooltip('模型')), modelsRect);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('重新激活(active false→true)重新拉取列表,切页回来能看到后配的额度脚本',
       (tester) async {
     // 页在 IndexedStack 里常驻:外面给账号配了额度脚本后切回账号页,

@@ -136,9 +136,10 @@ class _QuotaInlineState extends State<QuotaInline> {
         Text(_relative(at), style: TextStyle(fontSize: 10, color: t.faint)),
         // 刷新钮贴住时间文案,中间不留空隙。
         if (_busy)
+          // 与刷新图标同尺寸(12),避免查询中时间文案抖动。
           SizedBox(
-            width: 10,
-            height: 10,
+            width: 12,
+            height: 12,
             child: CircularProgressIndicator(strokeWidth: 1.5, color: t.faint),
           )
         else

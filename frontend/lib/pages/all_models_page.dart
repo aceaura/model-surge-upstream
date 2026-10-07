@@ -502,9 +502,12 @@ class _AllModelsPageState extends State<AllModelsPage> {
                   () => _copy(m, accounts, providers), t),
               // 排位仿 CC Switch(编辑/拷贝/检测/统计/删除),检测中换行内 spinner。
               if (_testing.contains(m.id))
-                const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: SizedBox(
+                // 复用 IconButton 占位,确保转圈与按钮同尺寸,避免左右文字抖动。
+                IconButton(
+                  tooltip: '检测连通性',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: null,
+                  icon: const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
