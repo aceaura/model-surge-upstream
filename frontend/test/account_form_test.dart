@@ -1015,7 +1015,12 @@ void main() {
   testWidgets(
     'bailian quota card shows persisted auth and pure-starred blank keys',
     (tester) async {
-      await pumpForm(tester, editing: accountBailianVerified);
+      final requests = <http.Request>[];
+      await pumpForm(
+        tester,
+        editing: accountBailianVerified,
+        client: bailianClient(requests),
+      );
       await expandQuotaSection(tester);
       expect(find.text('Token Plan 额度认证'), findsOneWidget);
       expect(find.text('已认证'), findsNWidgets(3));
@@ -1042,10 +1047,69 @@ void main() {
         final field = tester.widget<TextField>(input);
         expect(field.controller!.text, isEmpty);
         expect(field.obscureText, isTrue);
-        expect(field.decoration!.hintText, '***');
+        expect(field.decoration!.hintText, '************');
+        final eye = find.descendant(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byTooltip('显示'),
+        );
+        await tester.ensureVisible(eye);
+        await tester.tap(eye);
+        await tester.pumpAndSettle();
+        final revealed = tester.widget<TextField>(input);
+        expect(revealed.obscureText, isFalse);
+        expect(revealed.controller!.text, isEmpty);
+        expect(revealed.decoration!.hintText, '************');
+        expect(find.text('已认证'), findsNWidgets(3));
+        await tester.tap(
+          find.descendant(
+            of: find.byKey(ValueKey(key)),
+            matching: find.byTooltip('隐藏'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.widget<TextField>(input).obscureText, isTrue);
       }
+      expect(requests, isEmpty);
     },
   );
+
+  testWidgets('bailian AccessKey eyes reveal new input independently', (
+    tester,
+  ) async {
+    final requests = <http.Request>[];
+    await pumpForm(
+      tester,
+      editing: accountBailian,
+      client: bailianClient(requests),
+    );
+    await expandQuotaSection(tester);
+    await enterBailianKeys(tester);
+    final id = find.byKey(const ValueKey('bailian-access-key-id'));
+    final secret = find.byKey(const ValueKey('bailian-access-key-secret'));
+    final apiKey = find.byKey(const ValueKey('account-api-key'));
+    TextField input(Finder form) => tester.widget<TextField>(
+      find.descendant(of: form, matching: find.byType(TextField)),
+    );
+    for (final form in [id, secret, apiKey]) {
+      expect(input(form).obscureText, isTrue);
+      expect(input(form).decoration!.border, isA<OutlineInputBorder>());
+    }
+    for (final form in [id, secret]) {
+      final eye = find.descendant(of: form, matching: find.byTooltip('显示'));
+      await tester.ensureVisible(eye);
+      await tester.tap(eye);
+      await tester.pumpAndSettle();
+      expect(input(form).obscureText, isFalse);
+      expect(input(form).decoration!.hintText, isNull);
+      expect(input(apiKey).obscureText, isTrue);
+      if (form == id) {
+        expect(input(secret).obscureText, isTrue);
+      }
+    }
+    expect(input(id).controller!.text, ' ak-id-private ');
+    expect(input(secret).controller!.text, ' ak-secret-private ');
+    expect(requests, isEmpty);
+  });
 
   testWidgets('bailian card absent for other providers and Coding Plan', (
     tester,

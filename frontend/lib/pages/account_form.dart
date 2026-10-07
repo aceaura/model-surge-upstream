@@ -328,6 +328,8 @@ class _AccountFormState extends State<AccountForm> {
   );
 
   bool _revealKey = false;
+  bool _revealBailianAkId = false;
+  bool _revealBailianAkSecret = false;
   bool _busy = false;
 
   bool get _isEdit => _editing != null;
@@ -1531,11 +1533,24 @@ class _AccountFormState extends State<AccountForm> {
             key: const ValueKey('bailian-access-key-id'),
             controller: _bailianAkId,
             enabled: !_busy,
-            obscureText: true,
+            obscureText: !_revealBailianAkId,
             onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
-              hintText: _hasStoredBailianKeys ? '***' : null,
+              hintText: _hasStoredBailianKeys ? '************' : null,
+              suffixIcon: IconButton(
+                tooltip: _revealBailianAkId ? '隐藏' : '显示',
+                icon: Icon(
+                  _revealBailianAkId
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
+                onPressed: _busy
+                    ? null
+                    : () => setState(
+                        () => _revealBailianAkId = !_revealBailianAkId,
+                      ),
+              ),
             ),
           ),
         ),
@@ -1546,11 +1561,24 @@ class _AccountFormState extends State<AccountForm> {
             key: const ValueKey('bailian-access-key-secret'),
             controller: _bailianAkSecret,
             enabled: !_busy,
-            obscureText: true,
+            obscureText: !_revealBailianAkSecret,
             onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
-              hintText: _hasStoredBailianKeys ? '***' : null,
+              hintText: _hasStoredBailianKeys ? '************' : null,
+              suffixIcon: IconButton(
+                tooltip: _revealBailianAkSecret ? '隐藏' : '显示',
+                icon: Icon(
+                  _revealBailianAkSecret
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
+                onPressed: _busy
+                    ? null
+                    : () => setState(
+                        () => _revealBailianAkSecret = !_revealBailianAkSecret,
+                      ),
+              ),
             ),
           ),
         ),
