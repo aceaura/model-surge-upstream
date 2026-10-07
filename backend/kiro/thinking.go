@@ -116,7 +116,7 @@ func extractThinking(root object, protocol string) thinkingConfig {
 			effort = "medium"
 		}
 	} else {
-		effort = str(obj(root["output_config"])["effort"])
+		effort = strings.TrimSpace(str(obj(root["output_config"])["effort"]))
 		if effort == "" {
 			effort = str(root["reasoning_effort"])
 		}

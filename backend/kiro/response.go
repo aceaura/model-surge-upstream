@@ -57,7 +57,7 @@ func normalizeOrderedJSON(raw string, asciiOnly bool) (string, bool) {
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
 	var buf strings.Builder
-	if !encodeOrderedValue(dec, &buf, asciiOnly) {
+	if !encodeOrderedValue(dec, &buf, raw, asciiOnly) {
 		return "", false
 	}
 	if _, err := dec.Token(); err != io.EOF {
@@ -72,35 +72,78 @@ func pyJSONString(s string, asciiOnly bool) string {
 	var buf strings.Builder
 	buf.WriteByte('"')
 	for _, r := range s {
-		switch r {
-		case '"':
-			buf.WriteString(`\"`)
-		case '\\':
-			buf.WriteString(`\\`)
-		case '\n':
-			buf.WriteString(`\n`)
-		case '\r':
-			buf.WriteString(`\r`)
-		case '\t':
-			buf.WriteString(`\t`)
-		case '\b':
-			buf.WriteString(`\b`)
-		case '\f':
-			buf.WriteString(`\f`)
-		default:
-			if r < 0x20 {
-				fmt.Fprintf(&buf, `\u%04x`, r)
-			} else if asciiOnly && r > 0x7f {
-				if r > 0xffff {
-					r1, r2 := utf16.EncodeRune(r)
-					fmt.Fprintf(&buf, `\u%04x\u%04x`, r1, r2)
-				} else {
-					fmt.Fprintf(&buf, `\u%04x`, r)
-				}
+		writeJSONRune(&buf, r, asciiOnly)
+	}
+	buf.WriteByte('"')
+	return buf.String()
+}
+
+func writeJSONRune(buf *strings.Builder, r rune, asciiOnly bool) {
+	switch r {
+	case '"':
+		buf.WriteString(`\"`)
+	case '\\':
+		buf.WriteString(`\\`)
+	case '\n':
+		buf.WriteString(`\n`)
+	case '\r':
+		buf.WriteString(`\r`)
+	case '\t':
+		buf.WriteString(`\t`)
+	case '\b':
+		buf.WriteString(`\b`)
+	case '\f':
+		buf.WriteString(`\f`)
+	default:
+		if r < 0x20 || (r >= 0xd800 && r <= 0xdfff) {
+			fmt.Fprintf(buf, `\u%04x`, r)
+		} else if asciiOnly && r > 0x7f {
+			if r > 0xffff {
+				r1, r2 := utf16.EncodeRune(r)
+				fmt.Fprintf(buf, `\u%04x\u%04x`, r1, r2)
 			} else {
-				buf.WriteRune(r)
+				fmt.Fprintf(buf, `\u%04x`, r)
+			}
+		} else {
+			buf.WriteRune(r)
+		}
+	}
+}
+
+// Go's JSON decoder replaces unpaired surrogates; preserve their escaped identity.
+func pyJSONTokenString(raw string, asciiOnly bool) string {
+	raw = raw[strings.IndexByte(raw, '"')+1 : len(raw)-1]
+	var buf strings.Builder
+	buf.WriteByte('"')
+	for i := 0; i < len(raw); {
+		r, size := utf8.DecodeRuneInString(raw[i:])
+		i += size
+		if r == '\\' {
+			r = rune(raw[i])
+			i++
+			switch r {
+			case 'u':
+				n, _ := strconv.ParseUint(raw[i:i+4], 16, 16)
+				r, i = rune(n), i+4
+				if r >= 0xd800 && r <= 0xdbff && strings.HasPrefix(raw[i:], `\u`) {
+					next, _ := strconv.ParseUint(raw[i+2:i+6], 16, 16)
+					if next >= 0xdc00 && next <= 0xdfff {
+						r, i = utf16.DecodeRune(r, rune(next)), i+6
+					}
+				}
+			case 'b':
+				r = '\b'
+			case 'f':
+				r = '\f'
+			case 'n':
+				r = '\n'
+			case 'r':
+				r = '\r'
+			case 't':
+				r = '\t'
 			}
 		}
+		writeJSONRune(&buf, r, asciiOnly)
 	}
 	buf.WriteByte('"')
 	return buf.String()
@@ -124,7 +167,8 @@ func pyNumber(n json.Number) string {
 	return out
 }
 
-func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool) bool {
+func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, raw string, asciiOnly bool) bool {
+	start := int(dec.InputOffset())
 	tok, err := dec.Token()
 	if err != nil {
 		return false
@@ -133,7 +177,7 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool)
 	if !ok {
 		switch x := tok.(type) {
 		case string:
-			buf.WriteString(pyJSONString(x, asciiOnly))
+			buf.WriteString(pyJSONTokenString(raw[start:int(dec.InputOffset())], asciiOnly))
 		case json.Number:
 			buf.WriteString(pyNumber(x))
 		case bool:
@@ -154,23 +198,25 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool)
 		keys, values := []string{}, []string{}
 		indices := map[string]int{}
 		for dec.More() {
+			keyStart := int(dec.InputOffset())
 			kt, err := dec.Token()
 			if err != nil {
 				return false
 			}
-			ks, ok := kt.(string)
-			if !ok {
+			if _, ok := kt.(string); !ok {
 				return false
 			}
+			keyRaw := raw[keyStart:int(dec.InputOffset())]
+			key := pyJSONTokenString(keyRaw, true)
 			var value strings.Builder
-			if !encodeOrderedValue(dec, &value, asciiOnly) {
+			if !encodeOrderedValue(dec, &value, raw, asciiOnly) {
 				return false
 			}
-			if i, exists := indices[ks]; exists {
+			if i, exists := indices[key]; exists {
 				values[i] = value.String()
 			} else {
-				indices[ks] = len(keys)
-				keys = append(keys, ks)
+				indices[key] = len(keys)
+				keys = append(keys, pyJSONTokenString(keyRaw, asciiOnly))
 				values = append(values, value.String())
 			}
 		}
@@ -182,7 +228,7 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool)
 			if i > 0 {
 				buf.WriteString(", ")
 			}
-			buf.WriteString(pyJSONString(key, asciiOnly))
+			buf.WriteString(key)
 			buf.WriteString(": ")
 			buf.WriteString(values[i])
 		}
@@ -195,7 +241,7 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool)
 				buf.WriteString(", ")
 			}
 			first = false
-			if !encodeOrderedValue(dec, buf, asciiOnly) {
+			if !encodeOrderedValue(dec, buf, raw, asciiOnly) {
 				return false
 			}
 		}
@@ -285,6 +331,7 @@ type responseState struct {
 	sentRole                      bool
 	stopReason                    string
 	stopSequence                  string
+	thinkingSignature             string
 	emit                          func(string, object)
 }
 
@@ -570,14 +617,8 @@ func (s *responseState) accept(e wireEvent) error {
 	// Terminal metering events are emitted at the end in the observed protocol;
 	// clean EOF alone is insufficient evidence of a completed generation.
 	if v, ok := d["usage"]; ok && v != nil {
-		// streaming_core.py:491-496 的任意非 null usage 含显式 null 除外:
-		// parsers.py:354/356 get(...,0) 遇 null 得 None,不算完成信号。
-		// streaming_openai.py:270-279: openai 流式路径把任意真值 usage(credits
-		// 计量或绝对 token 字典)当作完成信号;streaming_anthropic.py:543-547
-		// 的 anthropic 流式路径只认 contextUsagePercentage,usage 帧仅取缓存字段。
-		// streaming_core.py:491-495: 收集路径(非流式与严格缓冲)两协议都把
-		// 任意非 null usage(含 0 与 {})当完成信号。
-		if !s.options.stream || s.options.policyMode != "" {
+		// 普通 OpenAI 两种输出均走生成器语义；仅 collect 路径认假值 usage。
+		if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) {
 			s.terminal = true
 		}
 		if n, ok := v.(json.Number); ok {
@@ -656,6 +697,9 @@ func (s *responseState) accept(e wireEvent) error {
 		return s.emitBlock("thinking", text, false)
 	}
 	if signature := str(d["signature"]); signature != "" {
+		if !s.options.stream {
+			s.thinkingSignature = signature
+		}
 		if s.blockType != "thinking" {
 			// streaming_anthropic.py:329-344: 无开启思考块的签名帧静默忽略。
 			return nil
@@ -779,6 +823,9 @@ func (s *responseState) finalize() error {
 			}
 			s.blocks = make([]any, 0, len(merged)+2)
 			if thinkingSeen {
+				if s.thinkingSignature != "" {
+					sig = s.thinkingSignature
+				}
 				if sig == "" {
 					sig = fakeSignature()
 				}

@@ -472,6 +472,9 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			}
 		}
 		if protocol == "openai" {
+			if _, has := t["type"]; !has {
+				t["type"] = "function"
+			}
 			if value := t["name"]; value != nil {
 				if _, ok := value.(string); !ok {
 					return fail(fmt.Errorf("tool name must be a string"))
@@ -1428,16 +1431,7 @@ func parseMessage(m object, protocol string) (message, error) {
 					continue
 				}
 				id := b["tool_use_id"]
-				if protocol == "anthropic" {
-					// pydantic smart union: 缺 tool_use_id 落 UnknownContentBlock
-					// 兜底,提取器只验真值(converters_anthropic.py:151)——
-					// 空串/0/None 丢弃,非字符串真值(如 int)原样上行。
-					if !truthy(id) {
-						continue
-					}
-				} else if id == nil {
-					// openai 侧缺省按 "" 保留上行
-					// (converters_openai.py:79-82 .get("tool_use_id", ""))。
+				if protocol == "openai" && id == nil {
 					id = ""
 				}
 				text, images, err := resultContent(b["content"], protocol)
@@ -1445,6 +1439,9 @@ func parseMessage(m object, protocol string) (message, error) {
 					return result, err
 				}
 				result.images = append(result.images, images...)
+				if protocol == "anthropic" && !truthy(id) {
+					continue
+				}
 				result.results = append(result.results, toolResult(id, text))
 			default:
 				if protocol == "openai" {

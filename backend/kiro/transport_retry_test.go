@@ -285,6 +285,39 @@ func TestOrdinaryScalarToolStream(t *testing.T) {
 	}
 }
 
+func TestRound23ObjectToolArgumentOrder(t *testing.T) {
+	for _, wrapped := range []bool{false, true} {
+		for _, protocol := range []string{"openai", "anthropic"} {
+			first := `{"name":"lookup","toolUseId":"first","input":{"b":1,"a":2},"stop":true}`
+			second := `{"name":"lookup","toolUseId":"second","input":"{\"b\":1,\"a\":2}","stop":true}`
+			if wrapped {
+				first = `{"toolUseEvent":` + first + `}`
+				second = `{"toolUseEvent":` + second + `}`
+			}
+			headers := append(stringHeader(":message-type", "event"), stringHeader(":event-type", "toolUseEvent")...)
+			wire := joinedFrames(frameWithHeaders(headers, []byte(first)), frameWithHeaders(headers, []byte(second)), endFrame())
+			server := stub(t, wire, nil)
+			_, data, err := do(t, server.URL, protocol, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			for _, event := range events(t, data) {
+				if protocol == "anthropic" {
+					if obj(event["content_block"])["type"] == "tool_use" {
+						calls++
+					}
+				} else if choices := list(event["choices"]); len(choices) > 0 {
+					calls += len(list(obj(obj(choices[0])["delta"])["tool_calls"]))
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("protocol=%s wrapped=%v calls=%d", protocol, wrapped, calls)
+			}
+		}
+	}
+}
+
 func TestRound22UnicodeThinkingStream(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		text := strings.Repeat("中🙂é", 20)

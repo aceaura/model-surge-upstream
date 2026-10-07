@@ -89,8 +89,21 @@ func (p *eventReader) next() (wireEvent, error) {
 	if kind == "" {
 		return wireEvent{}, fmt.Errorf("kiro: eventstream event type missing")
 	}
-	if nested := obj(data[kind]); nested != nil {
+	nested := obj(data[kind])
+	if nested != nil {
 		data = nested
+	}
+	if len(obj(data["input"])) > 0 {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return wireEvent{}, err
+		}
+		if nested != nil {
+			if err := json.Unmarshal(fields[kind], &fields); err != nil {
+				return wireEvent{}, err
+			}
+		}
+		data["input"] = string(fields["input"])
 	}
 	if _, ok := data["exception"]; ok {
 		return wireEvent{}, fmt.Errorf("kiro: upstream exception: %s", jsonText(data["exception"]))

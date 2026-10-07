@@ -1336,6 +1336,109 @@ func TestRound18Fixes(t *testing.T) {
 	})
 }
 
+func TestRound23RequestDetails(t *testing.T) {
+	t.Run("effort whitespace fallback", func(t *testing.T) {
+		for _, thinking := range []any{nil, object{"type": "adaptive"}} {
+			root := object{"model": "claude-sonnet-4.6", "messages": []any{object{"role": "user", "content": "x"}}, "thinking": thinking, "output_config": object{"effort": " "}, "reasoning_effort": "high"}
+			_, opts := convert(t, root, "anthropic")
+			if opts.effort != "high" || opts.fakeReasoning {
+				t.Fatalf("options=%+v", opts)
+			}
+		}
+	})
+	t.Run("tool type estimate default", func(t *testing.T) {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"function": object{"name": "f", "parameters": object{}}}}}
+		_, missing := convert(t, root, "openai")
+		obj(list(root["tools"])[0])["type"] = "function"
+		_, explicit := convert(t, root, "openai")
+		if missing.estimateParts != explicit.estimateParts {
+			t.Fatalf("missing=%+v explicit=%+v", missing.estimateParts, explicit.estimateParts)
+		}
+	})
+	t.Run("empty tool result id retains image", func(t *testing.T) {
+		m := object{"role": "user", "content": []any{object{"tool_use_id": "", "content": []any{object{"source": object{"media_type": "image/png", "data": "YQ=="}}}}}}
+		got, err := parseMessage(m, "anthropic")
+		if err != nil || len(got.images) != 1 || len(got.results) != 0 {
+			t.Fatalf("message=%+v err=%v", got, err)
+		}
+	})
+}
+
+func TestRound23UnicodeBracketTools(t *testing.T) {
+	for _, text := range []string{`[Called f with args: {"x":"K"}]`, `[Called 查询 with args: {}]`, "[Called\u00a0f\u00a0with\u00a0args:\u00a0{}]"} {
+		got := parseBracketToolCalls(text)
+		if len(got) != 1 {
+			t.Fatalf("text=%q calls=%v", text, got)
+		}
+	}
+}
+
+func TestRound23UsageCompletionMatrix(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, stream := range []bool{false, true} {
+			for _, strict := range []bool{false, true} {
+				for _, usage := range []any{json.Number("0"), object{}} {
+					opts := requestOptions{protocol: protocol, stream: stream}
+					if strict {
+						opts.policyMode = "none"
+					}
+					s := newResponseState(opts)
+					if err := s.accept(wireEvent{kind: "assistantResponseEvent", data: object{"content": "x"}}); err != nil {
+						t.Fatal(err)
+					}
+					if err := s.accept(wireEvent{kind: "usageEvent", data: object{"usage": usage}}); err != nil {
+						t.Fatal(err)
+					}
+					if err := s.finalize(); err != nil {
+						t.Fatal(err)
+					}
+					wantTerminal := strict || (protocol == "anthropic" && !stream)
+					if s.terminal != wantTerminal {
+						t.Fatalf("protocol=%s stream=%v strict=%v usage=%v terminal=%v", protocol, stream, strict, usage, s.terminal)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestRound23LateThinkingSignature(t *testing.T) {
+	s := newResponseState(requestOptions{protocol: "anthropic"})
+	for _, event := range []wireEvent{
+		{kind: "reasoningEvent", data: object{"text": "t"}},
+		{kind: "assistantResponseEvent", data: object{"content": "a"}},
+		{kind: "reasoningEvent", data: object{"signature": "s"}},
+	} {
+		if err := s.accept(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if obj(s.blocks[0])["signature"] != "s" {
+		t.Fatalf("blocks=%v", s.blocks)
+	}
+}
+
+func TestRound23SurrogateJSONKeys(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`{"\ud800":1,"\ud801":2}`, `{"\ud800": 1, "\ud801": 2}`},
+		{`{"\ud800":1,"\uD800":2}`, `{"\ud800": 2}`},
+		{`{"v":"\ud800\ud801\udc00"}`, `{"v": "\ud800\ud801\udc00"}`},
+		{`{"\ud83d\ude42":1,"🙂":2}`, `{"\ud83d\ude42": 2}`},
+		{`["\"\\\/\b\f\n\r\t", "中"]`, `["\"\\/\b\f\n\r\t", "\u4e2d"]`},
+	} {
+		got, ok := normalizeOrderedJSON(tc.raw, true)
+		if !ok || got != tc.want {
+			t.Fatalf("raw=%s arguments=%s ok=%v", tc.raw, got, ok)
+		}
+	}
+	if got, ok := normalizeOrderedJSON(`{"\ud800":1,"\ud801":2}`, false); !ok || got != `{"\ud800": 1, "\ud801": 2}` {
+		t.Fatalf("UTF-8 safety=%s ok=%v", got, ok)
+	}
+}
+
 func TestRound22SamplingNaN(t *testing.T) {
 	for _, key := range []string{"temperature", "top_p"} {
 		for _, value := range []any{"NaN", "nan", "+Inf", "-Inf"} {

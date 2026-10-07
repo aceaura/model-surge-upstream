@@ -3,6 +3,7 @@ package kiro
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -108,89 +109,35 @@ func looksTruncatedJSON(s string) bool {
 	return quotes%2 != 0
 }
 
+const bracketSpace = `[\s\p{Z}\x{0085}\x{000b}\x{001c}-\x{001f}]`
+
+var bracketToolPattern = regexp.MustCompile(`(?i)\[Called` + bracketSpace + `+([\p{L}\p{N}_]+)` + bracketSpace + `+with` + bracketSpace + `+args:` + bracketSpace + `*`)
+
 // parseBracketToolCalls extracts [Called name with args: {...}] calls that some
 // models emit as plain text (parsers.py:parse_bracket_tool_calls).
 func parseBracketToolCalls(text string) []object {
-	// parsers.py:111: 前置守卫 "[Called" 区分大小写(正则 :117 却
-	// IGNORECASE)——纯小写 "[called" 文本直接不恢复。
 	if !strings.Contains(text, "[Called") {
 		return nil
 	}
 	var calls []object
-	lower := strings.ToLower(text)
-	for pos := 0; ; {
-		idx := strings.Index(lower[pos:], "[called")
-		if idx < 0 {
-			return calls
-		}
-		start := pos + idx + len("[called")
-		rest := text[start:]
-		restLower := lower[start:]
-		// parsers.py:115 正则 \[Called\s+(\w+)\s+with\s+args:\s* 的\s+全是
-		// 强制词边界:粘连形式(如 withargs:)不匹配。
-		i := 0
-		for i < len(rest) && isSpace(rest[i]) {
-			i++
-		}
-		if i == 0 {
-			pos = start
-			continue
-		}
-		nameStart := i
-		for i < len(rest) && isWord(rest[i]) {
-			i++
-		}
-		name := rest[nameStart:i]
-		if name == "" {
-			pos = start
-			continue
-		}
-		ws := i
-		for i < len(rest) && isSpace(rest[i]) {
-			i++
-		}
-		if i == ws || !strings.HasPrefix(restLower[i:], "with") {
-			pos = start
-			continue
-		}
-		i += len("with")
-		ws = i
-		for i < len(rest) && isSpace(rest[i]) {
-			i++
-		}
-		if i == ws || !strings.HasPrefix(restLower[i:], "args:") {
-			pos = start
-			continue
-		}
-		i += len("args:")
-		for i < len(rest) && isSpace(rest[i]) {
-			i++
-		}
-		// parsers.py:122: find('{') 在 args: 后的全文里搜第一个 '{',
-		// 可跳过任意中间文本(甚至跨过下一个 [Called 段)。
-		brace := strings.IndexByte(rest[i:], '{')
+	for _, match := range bracketToolPattern.FindAllStringSubmatchIndex(text, -1) {
+		start := match[1]
+		brace := strings.IndexByte(text[start:], '{')
 		if brace < 0 {
-			return calls
-		}
-		i += brace
-		end := matchingBrace(rest, i)
-		if end < 0 {
-			pos = start + i
 			continue
 		}
-		input, err := decodeObject(rest[i : end+1])
-		if err == nil {
-			// parsers.py:133-142: id 为 call_+8 hex;raw 保留原文供
-			// json.dumps(json.loads) 语义的保序归一。
-			calls = append(calls, object{"toolUseId": "call_" + strings.ReplaceAll(newID(), "-", "")[:8], "name": name, "input": input, "raw": rest[i : end+1]})
+		start += brace
+		end := matchingBrace(text, start)
+		if end < 0 {
+			continue
 		}
-		pos = start + end + 1
+		raw := text[start : end+1]
+		input, err := decodeObject(raw)
+		if err == nil {
+			calls = append(calls, object{"toolUseId": "call_" + strings.ReplaceAll(newID(), "-", "")[:8], "name": text[match[2]:match[3]], "input": input, "raw": raw})
+		}
 	}
-}
-
-func isSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '\r' }
-func isWord(b byte) bool {
-	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+	return calls
 }
 
 // matchingBrace finds the closing brace for the one at start, string/escape
