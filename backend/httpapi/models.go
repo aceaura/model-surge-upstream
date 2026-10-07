@@ -104,7 +104,10 @@ func (h handler) updateModel(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	m, err := h.Models.Update(r.Context(), req.input(r.PathValue("id")))
+	in := req.input(r.PathValue("id"))
+	// body 带 id 且与路径不同即改名;缺省/相同都按普通更新。
+	in.NewID = req.ID
+	m, err := h.Models.Update(r.Context(), in)
 	if err != nil {
 		writeError(w, err)
 		return

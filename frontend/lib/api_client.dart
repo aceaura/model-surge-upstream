@@ -272,6 +272,7 @@ class ApiClient {
 
   Future<UpstreamModel> updateModel({
     required String id,
+    String? newId,
     String? account,
     String? nativeModel,
     String? protocol,
@@ -287,6 +288,8 @@ class ApiClient {
       'PUT',
       '/admin/models/$id',
       body: {
+        // 改名:newId 非空且与路径 id 不同,服务端把主键改写为新标识。
+        'id': ?newId,
         'account': ?account,
         'native_model': ?nativeModel,
         'protocol': ?protocol,

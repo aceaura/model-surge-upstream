@@ -50,6 +50,10 @@ type Input struct {
 	// 保留旧值），指向空串=回内置映射，非空=显式格式（保存期校验枚举）。
 	EffortFormat *string
 	Enabled      bool
+	// NewID 改名目标（仅 Update 使用）：空=沿用 ID；非空且不同于 ID 时把
+	// 记录主键改写为 NewID，同事务随迁 chat_sessions.model_id。
+	// usage_logs 是历史流水，保留改名前的旧标识。
+	NewID string
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
@@ -141,6 +145,11 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	if in.EffortFormat == nil {
 		in.EffortFormat = &existing.EffortFormat
 	}
+	newID := strings.TrimSpace(in.NewID)
+	rename := newID != "" && newID != existing.ID
+	if rename {
+		in.ID = newID
+	}
 	m, err := r.validate(ctx, in)
 	if err != nil {
 		return Model{}, err
@@ -150,23 +159,55 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	m.UpdatedAt = time.Now().UTC()
 
 	persist := func() error {
-		tag, err := r.pool.Exec(ctx, `UPDATE models SET
-			account=$2, native_model=$3, protocol=$4, context_window=$5,
-			defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
-			enabled=$11, updated_at=$12 WHERE id=$1`,
-			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
+		if !rename {
+			tag, err := r.pool.Exec(ctx, `UPDATE models SET
+				account=$2, native_model=$3, protocol=$4, context_window=$5,
+				defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
+				enabled=$11, updated_at=$12 WHERE id=$1`,
+				m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
+				[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
+				m.EffortFormat, m.Enabled, m.UpdatedAt)
+			if err != nil {
+				return apperr.Wrap(apperr.StorageError, "update model", err)
+			}
+			if tag.RowsAffected() == 0 {
+				return apperr.New(apperr.NotFound, fmt.Sprintf("model %q not found", m.ID))
+			}
+			return nil
+		}
+		// 改名要动主键并随迁会话回显，单事务提交;目标 id 撞车报 AlreadyExists。
+		tx, err := r.pool.Begin(ctx)
+		if err != nil {
+			return apperr.Wrap(apperr.StorageError, "begin tx", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		tag, err := tx.Exec(ctx, `UPDATE models SET
+			id=$2, account=$3, native_model=$4, protocol=$5, context_window=$6,
+			defaults=$7, overrides=$8, compact=$9, efforts=$10, effort_format=$11,
+			enabled=$12, updated_at=$13 WHERE id=$1`,
+			existing.ID, m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
 			m.EffortFormat, m.Enabled, m.UpdatedAt)
 		if err != nil {
-			return apperr.Wrap(apperr.StorageError, "update model", err)
+			return mapWriteErr(err, m.ID)
 		}
 		if tag.RowsAffected() == 0 {
-			return apperr.New(apperr.NotFound, fmt.Sprintf("model %q not found", m.ID))
+			return apperr.New(apperr.NotFound, fmt.Sprintf("model %q not found", existing.ID))
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE chat_sessions SET model_id=$2 WHERE model_id=$1`, existing.ID, m.ID); err != nil {
+			return apperr.Wrap(apperr.StorageError, "rename model in chat sessions", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return apperr.Wrap(apperr.StorageError, "commit rename", err)
 		}
 		return nil
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
 		return Model{}, err
+	}
+	if rename {
+		r.cache.Invalidate(ctx, cache.ModelKey(existing.ID))
 	}
 	return m, nil
 }

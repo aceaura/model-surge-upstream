@@ -199,6 +199,8 @@ class _ModelFormState extends State<ModelForm> {
       if (_isEdit) {
         await widget.client.updateModel(
           id: widget.editing!.id,
+          // 标识可改:写错的模型名在编辑页直接改名,服务端改写主键。
+          newId: _id.text.trim(),
           account: _account,
           nativeModel: _nativeModel.text.trim(),
           protocol: _protocol,
@@ -322,23 +324,22 @@ class _ModelFormState extends State<ModelForm> {
               ),
             ),
           ),
-          // 编辑模式下模型标识不可改,直接不渲染该字段(标题已含标识)
-          if (!_isEdit) ...[
-            const SizedBox(height: 20),
-            LabeledField(
-              label: '模型标识',
-              child: TextFormField(
-                key: const ValueKey('model-id'),
-                controller: _id,
-                decoration: const InputDecoration(
-                  hintText: 'kimi-1/k2',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? '模型标识不能为空' : null,
+          // 模型标识编辑态也可改:写错的模型名直接改名保存(服务端改写主键,
+          // 会话回显随迁,用量历史保留旧标识)。
+          const SizedBox(height: 20),
+          LabeledField(
+            label: '模型标识',
+            child: TextFormField(
+              key: const ValueKey('model-id'),
+              controller: _id,
+              decoration: const InputDecoration(
+                hintText: 'kimi-1/k2',
+                border: OutlineInputBorder(),
               ),
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? '模型标识不能为空' : null,
             ),
-          ],
+          ),
           const SizedBox(height: 20),
           LabeledField(
             label: '上游模型名',

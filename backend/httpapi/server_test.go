@@ -200,6 +200,12 @@ func (s *stubModels) Update(_ context.Context, in model.Input) (model.Model, err
 		return model.Model{}, apperr.New(apperr.NotFound, "model "+in.ID+" not found")
 	}
 	m.Enabled = in.Enabled
+	if in.NewID != "" && in.NewID != in.ID {
+		delete(s.data, in.ID)
+		m.ID = in.NewID
+		s.data[in.NewID] = m
+		return m, nil
+	}
 	s.data[in.ID] = m
 	return m, nil
 }
@@ -899,6 +905,30 @@ func TestModelCRUD(t *testing.T) {
 	}
 	if _, ok := f.models.data["kimi-1/k3"]; ok {
 		t.Error("model should be gone")
+	}
+}
+
+// body 带与路径不同的 id 即改名:旧标识失效、新标识可读。
+func TestModelRename(t *testing.T) {
+	f := newFixture(t)
+
+	rec := f.do(t, "POST", "/admin/models", adminKey,
+		`{"id":"kimi-1/k3","account":"kimi-1","native_model":"kimi-k3","protocol":"chat_completions"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, "PUT", "/admin/models/kimi-1/k3", adminKey, `{"id":"kimi-1/k3-renamed"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename = %d: %s", rec.Code, rec.Body)
+	}
+	if _, ok := f.models.data["kimi-1/k3"]; ok {
+		t.Error("old id should be gone after rename")
+	}
+	if _, ok := f.models.data["kimi-1/k3-renamed"]; !ok {
+		t.Error("new id should exist after rename")
+	}
+	if rec := f.do(t, "GET", "/admin/models/kimi-1/k3-renamed", adminKey, ""); rec.Code != http.StatusOK {
+		t.Fatalf("get renamed = %d: %s", rec.Code, rec.Body)
 	}
 }
 

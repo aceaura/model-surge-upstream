@@ -308,8 +308,52 @@ func assertRawEfforts(t *testing.T, got json.RawMessage, want string) {
 	}
 }
 
-func TestUpdateNotFound(t *testing.T) {
+// 改名走主键改写:旧 id 失效、新 id 可读;同名 NewID 退化为普通更新;
+// 撞已有 id 报 AlreadyExists。
+func TestUpdateRename(t *testing.T) {
 	repo, _ := fixtures(t)
+	ctx := context.Background()
+	if _, err := repo.Create(ctx, input()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	in := input()
+	in.NewID = "kimi-1/k2x"
+	renamed, err := repo.Update(ctx, in)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if renamed.ID != "kimi-1/k2x" {
+		t.Errorf("renamed id = %q, want kimi-1/k2x", renamed.ID)
+	}
+	if _, err := repo.Get(ctx, "kimi-1/k2"); !apperr.Is(err, apperr.NotFound) {
+		t.Errorf("old id err = %v, want not_found", err)
+	}
+	if _, err := repo.Get(ctx, "kimi-1/k2x"); err != nil {
+		t.Errorf("new id should resolve: %v", err)
+	}
+
+	same := input()
+	same.ID = "kimi-1/k2x"
+	same.NewID = "kimi-1/k2x"
+	if _, err := repo.Update(ctx, same); err != nil {
+		t.Fatalf("same-id update: %v", err)
+	}
+
+	other := input()
+	other.ID = "kimi-1/k3"
+	if _, err := repo.Create(ctx, other); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	clash := input()
+	clash.ID = "kimi-1/k2x"
+	clash.NewID = "kimi-1/k3"
+	if _, err := repo.Update(ctx, clash); !apperr.Is(err, apperr.AlreadyExists) {
+		t.Errorf("clash code = %q, want already_exists", apperr.CodeOf(err))
+	}
+}
+
+func TestUpdateNotFound(t *testing.T) {	repo, _ := fixtures(t)
 	in := input()
 	in.ID = "ghost/x"
 	if _, err := repo.Update(context.Background(), in); !apperr.Is(err, apperr.NotFound) {

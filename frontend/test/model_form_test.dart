@@ -199,6 +199,10 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(method, mode == 'edit' ? 'PUT' : 'POST');
+        if (mode == 'edit') {
+          // 编辑恒带标识:未改时即原值,改了即改名目标。
+          expect(submitted!['id'], 'kimi-1/existing');
+        }
         expect(submitted!['native_model'], 'qwen3.8-max');
         expect(submitted!['account'], 'kimi-1');
         expect(submitted!['protocol'], 'anthropic');
@@ -345,8 +349,11 @@ void main() {
     expect(find.text('262.144'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
-    // 编辑态不渲染标识字段(标题已含标识,且不可改)。
-    expect(find.byKey(const ValueKey('model-id')), findsNothing);
+    // 编辑态标识字段可改(改名保存),预填当前标识。
+    final idField = tester.widget<TextFormField>(
+      find.byKey(const ValueKey('model-id')),
+    );
+    expect(idField.controller!.text, 'kimi-1/k2');
   });
 
   testWidgets('copy prefills config but keeps create semantics', (
