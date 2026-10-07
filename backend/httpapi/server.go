@@ -9,6 +9,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/chat"
+	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
@@ -49,6 +50,7 @@ type Resolver interface {
 
 type Quota interface {
 	Query(ctx context.Context, accountName string) (quota.Report, error)
+	VerifyBailian(ctx context.Context, cred credential.Credential) (credential.Credential, error)
 	// Cached 无视存活期回缓存报告,供 auto=1 轮询对空闲账号短路。
 	Cached(accountName string) (quota.Report, bool)
 	Forget(name string)

@@ -151,8 +151,7 @@ Map<String, String> importKiroCredentialJson(String text) {
   final data = _kiroJson(text);
   final hash = data['clientIdHash'];
   if (hash != null) {
-    if (hash is! String ||
-        !RegExp(r'^[a-zA-Z0-9_-]{1,128}$').hasMatch(hash)) {
+    if (hash is! String || !RegExp(r'^[a-zA-Z0-9_-]{1,128}$').hasMatch(hash)) {
       throw const FormatException('Kiro SSO 注册文件标识无效');
     }
     final registration = _readKiroCacheDocument('$hash.json');
@@ -168,7 +167,8 @@ Map<String, String> importKiroCredentialJson(String text) {
 }
 
 Map<String, String> loadKiroAppCredentials() => importKiroCredentialJson(
-    jsonEncode(_readKiroCacheDocument('kiro-auth-token.json')));
+  jsonEncode(_readKiroCacheDocument('kiro-auth-token.json')),
+);
 
 /// kimi-desktop 本地存储目录(leveldb 里存着网页会话的 refresh/access token)。
 String kimiDesktopLeveldbDir() {
@@ -183,8 +183,9 @@ String kimiDesktopLeveldbDir() {
 @visibleForTesting
 String? debugKimiDesktopDirOverride;
 
-final _jwtPattern =
-    RegExp(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+');
+final _jwtPattern = RegExp(
+  r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+',
+);
 
 /// 从 kimi-desktop leveldb 文件字节里挑网页会话 refresh_token:JWT 三段、
 /// 载荷 iss=user-center 且 typ=refresh,取 exp 最大者(access token 短效
@@ -202,7 +203,8 @@ String parseKimiWebRefreshToken(Iterable<List<int>> blobs) {
       Map<String, dynamic> payload;
       try {
         final decoded = jsonDecode(
-            utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
+          utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+        );
         if (decoded is! Map<String, dynamic>) continue;
         payload = decoded;
       } on FormatException {
@@ -222,65 +224,6 @@ String parseKimiWebRefreshToken(Iterable<List<int>> blobs) {
     throw const FormatException('本地存储里没有网页会话登录态(请先登录 kimi-desktop)');
   }
   return best;
-}
-
-/// 测试覆写:替换进程执行,避免测试真跑 npm/bl。
-@visibleForTesting
-Future<ProcessResult> Function(String exe, List<String> args)?
-    debugBlExecOverride;
-
-/// 百炼 AK/SK 引导:确保本机装有 bl(缺失时用 npm 全局静默安装),随后
-/// 用填入的 AK/SK 登录并即签一个控制台 access_token——签得出即验证通过,
-/// config.json 里的新鲜 token 立刻可被后端额度链使用,之后撞过期 bl 会
-/// 自动续签。返回 null 表示成功,否则为已脱敏的错误文案(绝不回显 AK/SK)。
-Future<String?> ensureBlAndLogin(
-    String accessKeyId, String accessKeySecret) async {
-  final exec = debugBlExecOverride ??
-      (String exe, List<String> args) =>
-          Process.run(exe, args, runInShell: true);
-  String sanitize(Object? text) => '$text'
-      .replaceAll(accessKeyId, '***')
-      .replaceAll(accessKeySecret, '***')
-      .trim();
-  Future<bool> toolExists(String name) async {
-    try {
-      final r = await exec(Platform.isWindows ? 'where' : 'which', [name]);
-      return r.exitCode == 0;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  try {
-    if (!await toolExists('bl')) {
-      if (!await toolExists('npm')) {
-        return '未检测到 bl 与 npm;请先安装 Node.js,再点本按钮自动安装 bl';
-      }
-      final install = await exec('npm', ['install', '-g', 'bailian-cli']);
-      if (install.exitCode != 0) {
-        return 'bl 自动安装失败:${sanitize(install.stderr)}';
-      }
-    }
-    final login = await exec('bl', [
-      'auth',
-      'login',
-      '--open-api',
-      '--access-key-id',
-      accessKeyId,
-      '--access-key-secret',
-      accessKeySecret,
-    ]);
-    if (login.exitCode != 0) {
-      return 'AccessKey 未通过 bl 验证:${sanitize(login.stderr)}';
-    }
-    final mint = await exec('bl', ['auth', 'generate-access-token']);
-    if (mint.exitCode != 0) {
-      return 'AccessKey 已写入 bl,但签发额度 token 失败:${sanitize(mint.stderr)}';
-    }
-    return null;
-  } catch (e) {
-    return '无法执行 bl:${sanitize(e)}';
-  }
 }
 
 /// 账号创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
@@ -313,74 +256,84 @@ class AccountForm extends StatefulWidget {
 }
 
 class _AccountFormState extends State<AccountForm> {
+  late Account? _editing = widget.editing;
+  bool _savedInPlace = false;
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name = TextEditingController(
-      text: widget.editing?.name ??
-          (widget.copyFrom != null ? '${widget.copyFrom!.name}-copy' : ''));
+    text:
+        _editing?.name ??
+        (widget.copyFrom != null ? '${widget.copyFrom!.name}-copy' : ''),
+  );
   late final TextEditingController _apiKey = TextEditingController();
   // oauth_refresh(订阅登录态)字段:refresh_token 永不下发明文,
   // 编辑态留空表示保留;account_id 是标识不是秘密,预填回显。
   late final TextEditingController _refreshToken = TextEditingController();
   late final TextEditingController _accountId = TextEditingController(
-      text: widget.editing?.accountId ?? widget.copyFrom?.accountId ?? '');
+    text: _editing?.accountId ?? widget.copyFrom?.accountId ?? '',
+  );
   // kimi 网页会话 token(api_key 形态的可选附加凭据):会员月总额度只在
   // 网页网关可查,API key 拿不到;永不下发明文,编辑态留空表示保留。
   late final TextEditingController _webRefreshToken = TextEditingController();
-  // 百炼 AK/SK:一次性引导本机 bl 登录验证,不随账号提交。
+  // 百炼 AK/SK 随账号保存;输入框只装新值,绝不装入服务端掩码。
   late final TextEditingController _bailianAkId = TextEditingController();
   late final TextEditingController _bailianAkSecret = TextEditingController();
-  bool _revealAkSecret = false;
-  bool _blBusy = false;
-  bool _blVerified = false;
   late final TextEditingController _profileArn = TextEditingController(
-      text: widget.editing?.profileArn ?? widget.copyFrom?.profileArn ?? '');
+    text: _editing?.profileArn ?? widget.copyFrom?.profileArn ?? '',
+  );
   late final TextEditingController _authRegion = TextEditingController(
-      text: widget.editing?.region ?? widget.copyFrom?.region ?? 'us-east-1');
+    text: _editing?.region ?? widget.copyFrom?.region ?? 'us-east-1',
+  );
   late final TextEditingController _apiRegion = TextEditingController(
-      text: widget.editing?.apiRegion ?? widget.copyFrom?.apiRegion ?? '');
+    text: _editing?.apiRegion ?? widget.copyFrom?.apiRegion ?? '',
+  );
   late final TextEditingController _clientId = TextEditingController(
-      text: widget.editing?.clientId ?? widget.copyFrom?.clientId ?? '');
+    text: _editing?.clientId ?? widget.copyFrom?.clientId ?? '',
+  );
   final _clientSecret = TextEditingController();
   final _revealedKiroFields = <String>{};
   String _kiroAccessToken = '';
   String _kiroExpiry = '';
 
   late String? _providerId =
-      widget.editing?.providerId ?? widget.copyFrom?.providerId;
+      _editing?.providerId ?? widget.copyFrom?.providerId;
   // 编辑/拷贝时按已存 providerId 反推级联选项。
   late String? _vendor = _spec?.displayName;
   late String? _billing = _spec?.billingLabel;
   late String? _region = _spec?.regionLabel;
-  late String? _plan =
-      _spec != null && _spec!.plan.isNotEmpty ? _spec!.plan : null;
+  late String? _plan = _spec != null && _spec!.plan.isNotEmpty
+      ? _spec!.plan
+      : null;
 
   // 请求地址可编辑:默认取提供商默认地址,已存覆盖值时取覆盖值
-  late final TextEditingController _baseUrl =
-      TextEditingController(text: _initialBaseUrl());
+  late final TextEditingController _baseUrl = TextEditingController(
+    text: _initialBaseUrl(),
+  );
   late Map<String, String> _headers = {
-    ...?widget.editing?.headers ?? widget.copyFrom?.headers
+    ...?_editing?.headers ?? widget.copyFrom?.headers,
   };
   // 启停由列表行的开关控制,表单不再展示;编辑/拷贝时沿用原值提交,
   // 新建默认启用
   late final bool _enabled =
-      widget.editing?.enabled ?? widget.copyFrom?.enabled ?? true;
+      _editing?.enabled ?? widget.copyFrom?.enabled ?? true;
 
   // ── 额度查询(走供应商内置实现,这里配总开关与两个调度间隔)──
   late bool _quotaEnabled = _initialSettings?.quotaEnabled ?? true;
   late final TextEditingController _quotaInterval = TextEditingController(
-      text: (_initialSettings?.autoIntervalMinutes ?? 0) > 0
-          ? '${_initialSettings!.autoIntervalMinutes}'
-          : '');
-  late final TextEditingController _quotaStopInterval =
-      TextEditingController(text: _initialStopInterval());
+    text: (_initialSettings?.autoIntervalMinutes ?? 0) > 0
+        ? '${_initialSettings!.autoIntervalMinutes}'
+        : '',
+  );
+  late final TextEditingController _quotaStopInterval = TextEditingController(
+    text: _initialStopInterval(),
+  );
 
   bool _revealKey = false;
   bool _busy = false;
 
-  bool get _isEdit => widget.editing != null;
+  bool get _isEdit => _editing != null;
 
   QuotaSettings? get _initialSettings =>
-      widget.editing?.quotaSettings ?? widget.copyFrom?.quotaSettings;
+      _editing?.quotaSettings ?? widget.copyFrom?.quotaSettings;
 
   @override
   void dispose() {
@@ -407,15 +360,15 @@ class _AccountFormState extends State<AccountForm> {
   String _initialStopInterval() {
     final v = _initialSettings?.stopIntervalMinutes ?? 0;
     if (v > 0) return '$v';
-    return (widget.editing == null && widget.copyFrom == null) ? '5' : '';
+    return (_editing == null && widget.copyFrom == null) ? '5' : '';
   }
 
   /// 当前选中的提供商是否 OAuth 登录态(订阅)凭据形态。
   bool get _isOAuth => _spec?.credential == 'oauth_refresh';
   bool get _isKiro => _spec?.credential == 'kiro_refresh';
   bool get _hasStoredKiroCredentials =>
-      widget.editing?.credentialKind == 'kiro_refresh' &&
-      widget.editing?.providerId == _providerId;
+      _editing?.credentialKind == 'kiro_refresh' &&
+      _editing?.providerId == _providerId;
 
   ProviderSpec? get _spec =>
       widget.providers.where((p) => p.id == _providerId).firstOrNull;
@@ -425,7 +378,7 @@ class _AccountFormState extends State<AccountForm> {
       '';
 
   String _initialBaseUrl() {
-    final source = widget.editing ?? widget.copyFrom;
+    final source = _editing ?? widget.copyFrom;
     if (source != null) {
       return source.baseUrl.isNotEmpty
           ? source.baseUrl
@@ -437,14 +390,17 @@ class _AccountFormState extends State<AccountForm> {
 
   void _resolveProvider() {
     final plans = _planOptions;
-    final effectivePlan =
-        plans.length > 1 ? _plan : (plans.isEmpty ? null : plans.first);
+    final effectivePlan = plans.length > 1
+        ? _plan
+        : (plans.isEmpty ? null : plans.first);
     final match = widget.providers
-        .where((p) =>
-            p.displayName == _vendor &&
-            p.billingLabel == _billing &&
-            p.regionLabel == _region &&
-            p.plan == effectivePlan)
+        .where(
+          (p) =>
+              p.displayName == _vendor &&
+              p.billingLabel == _billing &&
+              p.regionLabel == _region &&
+              p.plan == effectivePlan,
+        )
         .firstOrNull;
     final oldDefault = _defaultBaseUrlFor(_providerId);
     final cur = _baseUrl.text.trim();
@@ -493,6 +449,10 @@ class _AccountFormState extends State<AccountForm> {
       return {
         'kind': 'api_key',
         'api_key': _apiKey.text.trim(),
+        if (_isBailianTokenPlan && _bailianAkId.text.trim().isNotEmpty)
+          'bailian_access_key_id': _bailianAkId.text.trim(),
+        if (_isBailianTokenPlan && _bailianAkSecret.text.trim().isNotEmpty)
+          'bailian_access_key_secret': _bailianAkSecret.text.trim(),
       };
     }
     if (providerVendor(_providerId ?? '') == 'kimi') {
@@ -512,8 +472,29 @@ class _AccountFormState extends State<AccountForm> {
     };
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit({bool verifyBailian = false, bool close = true}) async {
+    if (_busy) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_isBailianTokenPlan) {
+      final id = _bailianAkId.text.trim();
+      final secret = _bailianAkSecret.text.trim();
+      if ((verifyBailian || id.isNotEmpty || secret.isNotEmpty) &&
+          ((id.isEmpty && !_hasStoredBailianKeys) ||
+              (secret.isEmpty && !_hasStoredBailianKeys))) {
+        TopToast.show(context, '请先填入 AccessKey ID 与 Secret', error: true);
+        return;
+      }
+      if ([id, secret].any(
+        (v) =>
+            v.isNotEmpty &&
+            (RegExp(r'^\*+$').hasMatch(v) ||
+                RegExp(r'[\s\x00-\x1f\x7f]').hasMatch(v)),
+      )) {
+        TopToast.show(context, '请填写有效 AccessKey,不能使用脱敏星号', error: true);
+        return;
+      }
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() => _busy = true);
     try {
       // 与提供商默认一致即视为不覆盖,保持"跟随提供商"语义
@@ -521,9 +502,10 @@ class _AccountFormState extends State<AccountForm> {
       final baseUrl = url == (_spec?.baseUrl ?? '') ? '' : url;
       final quotaSettings = _quotaSettingsPayload();
       final credential = _credentialPayload();
+      final Account saved;
       if (_isEdit) {
-        await widget.client.updateAccount(
-          name: widget.editing!.name,
+        saved = await widget.client.updateAccount(
+          name: _editing!.name,
           providerId: _providerId,
           apiKey: _apiKey.text.trim(),
           baseUrl: baseUrl,
@@ -531,9 +513,10 @@ class _AccountFormState extends State<AccountForm> {
           quotaSettings: quotaSettings,
           enabled: _enabled,
           credential: credential,
+          verifyBailian: verifyBailian,
         );
       } else {
-        await widget.client.createAccount(
+        saved = await widget.client.createAccount(
           name: _name.text.trim(),
           providerId: _providerId!,
           apiKey: _apiKey.text.trim(),
@@ -542,10 +525,23 @@ class _AccountFormState extends State<AccountForm> {
           quotaSettings: quotaSettings,
           enabled: _enabled,
           credential: credential,
+          verifyBailian: verifyBailian,
         );
       }
       if (!mounted) return;
-      widget.onDone(true);
+      if (close) {
+        widget.onDone(true);
+      } else {
+        setState(() {
+          _editing = saved;
+          _savedInPlace = true;
+          _name.text = saved.name;
+          _apiKey.clear();
+          _bailianAkId.clear();
+          _bailianAkSecret.clear();
+        });
+        TopToast.show(context, '额度认证已验证并保存，切页或重启后保留');
+      }
     } catch (e) {
       if (!mounted) return;
       showError(context, e);
@@ -562,67 +558,66 @@ class _AccountFormState extends State<AccountForm> {
       {for (final p in widget.providers) p.displayName}.toList();
 
   List<String> get _billingOptions => {
-        for (final p in widget.providers)
-          if (p.displayName == _vendor) p.billingLabel
-      }.toList();
+    for (final p in widget.providers)
+      if (p.displayName == _vendor) p.billingLabel,
+  }.toList();
 
   List<String> get _regionOptions => {
-        for (final p in widget.providers)
-          if (p.displayName == _vendor && p.billingLabel == _billing)
-            p.regionLabel
-      }.toList();
+    for (final p in widget.providers)
+      if (p.displayName == _vendor && p.billingLabel == _billing) p.regionLabel,
+  }.toList();
 
   List<String> get _planOptions => {
-        for (final p in widget.providers)
-          if (p.displayName == _vendor &&
-              p.billingLabel == _billing &&
-              p.regionLabel == _region)
-            p.plan
-      }.toList();
+    for (final p in widget.providers)
+      if (p.displayName == _vendor &&
+          p.billingLabel == _billing &&
+          p.regionLabel == _region)
+        p.plan,
+  }.toList();
 
   Widget _vendorDropdown() => StyledDropdownFormField(
-        key: const ValueKey('account-provider-vendor'),
-        value: _vendor,
-        decoration: const InputDecoration(border: OutlineInputBorder()),
-        options: _vendorOptions,
-        onChanged: (v) => setState(() {
-          _vendor = v;
-          _billing = null;
-          _region = null;
-          _plan = null;
-          _resolveProvider();
-        }),
-        validator: (v) => v == null ? '请选择提供商' : null,
-      );
+    key: const ValueKey('account-provider-vendor'),
+    value: _vendor,
+    decoration: const InputDecoration(border: OutlineInputBorder()),
+    options: _vendorOptions,
+    onChanged: (v) => setState(() {
+      _vendor = v;
+      _billing = null;
+      _region = null;
+      _plan = null;
+      _resolveProvider();
+    }),
+    validator: (v) => v == null ? '请选择提供商' : null,
+  );
 
   Widget _billingDropdown() => StyledDropdownFormField(
-        key: const ValueKey('account-provider-billing'),
-        value: _billing,
-        enabled: _vendor != null,
-        decoration: const InputDecoration(border: OutlineInputBorder()),
-        options: _billingOptions,
-        onChanged: (v) => setState(() {
-          _billing = v;
-          _region = null;
-          _plan = null;
-          _resolveProvider();
-        }),
-        validator: (v) => v == null ? '请选择计费模式' : null,
-      );
+    key: const ValueKey('account-provider-billing'),
+    value: _billing,
+    enabled: _vendor != null,
+    decoration: const InputDecoration(border: OutlineInputBorder()),
+    options: _billingOptions,
+    onChanged: (v) => setState(() {
+      _billing = v;
+      _region = null;
+      _plan = null;
+      _resolveProvider();
+    }),
+    validator: (v) => v == null ? '请选择计费模式' : null,
+  );
 
   Widget _regionDropdown() => StyledDropdownFormField(
-        key: const ValueKey('account-provider-region'),
-        value: _region,
-        enabled: _billing != null,
-        decoration: const InputDecoration(border: OutlineInputBorder()),
-        options: _regionOptions,
-        onChanged: (v) => setState(() {
-          _region = v;
-          _plan = null;
-          _resolveProvider();
-        }),
-        validator: (v) => v == null ? '请选择服务区域' : null,
-      );
+    key: const ValueKey('account-provider-region'),
+    value: _region,
+    enabled: _billing != null,
+    decoration: const InputDecoration(border: OutlineInputBorder()),
+    options: _regionOptions,
+    onChanged: (v) => setState(() {
+      _region = v;
+      _plan = null;
+      _resolveProvider();
+    }),
+    validator: (v) => v == null ? '请选择服务区域' : null,
+  );
 
   Widget _planDropdown() {
     final options = _planOptions;
@@ -644,38 +639,45 @@ class _AccountFormState extends State<AccountForm> {
     );
   }
 
+  void _leave() {
+    if (!_busy) widget.onDone(_savedInPlace);
+  }
+
   @override
   Widget build(BuildContext context) {
     return FormPage(
       breadcrumbs: [
-        CrumbLevel('账号', onTap: () => widget.onDone(false)),
+        CrumbLevel('账号', onTap: _leave),
         CrumbLevel(
           _isEdit
-              ? '编辑 ${widget.editing!.name}'
+              ? '编辑 ${_editing!.name}'
               : widget.copyFrom != null
-                  ? '拷贝 ${widget.copyFrom!.name}'
-                  : '新建账号',
+              ? '拷贝 ${widget.copyFrom!.name}'
+              : '新建账号',
         ),
       ],
       avatar: ProviderAvatar(providerId: _providerId ?? '?', size: 56),
-      onCancel: () => widget.onDone(false),
+      onCancel: _leave,
       onSubmit: _submit,
       submitLabel: _isEdit ? '保存' : '创建',
       busy: _busy,
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _basicSection(),
-            const SizedBox(height: 26),
-            HeaderEditor(
-              initial: _headers,
-              onChanged: (h) => _headers = h,
+      child: AbsorbPointer(
+        absorbing: _busy,
+        child: Focus(
+          descendantsAreFocusable: !_busy,
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _basicSection(),
+                const SizedBox(height: 26),
+                HeaderEditor(initial: _headers, onChanged: (h) => _headers = h),
+                const SizedBox(height: 26),
+                _quotaSection(),
+              ],
             ),
-            const SizedBox(height: 26),
-            _quotaSection(),
-          ],
+          ),
         ),
       ),
     );
@@ -684,8 +686,7 @@ class _AccountFormState extends State<AccountForm> {
   // ── 基本信息(提供商/账号名/请求地址/密钥),收进可折叠分栏 ──
 
   String get _basicSubtitle {
-    final p =
-        widget.providers.where((p) => p.id == _providerId).firstOrNull;
+    final p = widget.providers.where((p) => p.id == _providerId).firstOrNull;
     final name = p?.displayName ?? _providerId ?? '';
     return name.isEmpty ? '提供商、请求地址与密钥' : name;
   }
@@ -710,12 +711,9 @@ class _AccountFormState extends State<AccountForm> {
               key: const ValueKey('account-name'),
               controller: _name,
               enabled: !_isEdit,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-              ),
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? '账号名不能为空'
-                  : null,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? '账号名不能为空' : null,
             ),
           ),
           const SizedBox(height: 20),
@@ -733,9 +731,7 @@ class _AccountFormState extends State<AccountForm> {
             child: TextFormField(
               key: const ValueKey('account-base-url'),
               controller: _baseUrl,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-              ),
+              decoration: const InputDecoration(border: OutlineInputBorder()),
               validator: (v) {
                 final t = v?.trim() ?? '';
                 if (t.isEmpty) return '请求地址不能为空';
@@ -747,7 +743,7 @@ class _AccountFormState extends State<AccountForm> {
             ),
           ),
           const SizedBox(height: 20),
-          if ((_isOAuth || _isKiro) && _isEdit && widget.editing!.needsReauth) ...[
+          if ((_isOAuth || _isKiro) && _isEdit && _editing!.needsReauth) ...[
             Container(
               key: const ValueKey('oauth-reauth-banner'),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -792,19 +788,21 @@ class _AccountFormState extends State<AccountForm> {
           // 掩码帮助辨认;完整密钥后端从不下发。
           hintText: _isEdit
               ? _revealKey
-                  ? widget.editing!.maskedApiKey
-                  : '************'
+                    ? _editing!.maskedApiKey
+                    : '************'
               : widget.copyFrom != null
-                  ? _revealKey
-                      ? widget.copyFrom!.maskedApiKey
-                      : '************'
-                  : null,
+              ? _revealKey
+                    ? widget.copyFrom!.maskedApiKey
+                    : '************'
+              : null,
           border: const OutlineInputBorder(),
           suffixIcon: IconButton(
             tooltip: _revealKey ? '隐藏' : '显示',
-            icon: Icon(_revealKey
-                ? Icons.visibility_off_outlined
-                : Icons.visibility_outlined),
+            icon: Icon(
+              _revealKey
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+            ),
             onPressed: () => setState(() => _revealKey = !_revealKey),
           ),
         ),
@@ -820,21 +818,19 @@ class _AccountFormState extends State<AccountForm> {
   /// 默认纯星号、眼睛亮掩码、完整 token 后端从不下发;可选手动粘贴或
   /// 从本机 kimi-desktop 本地存储自动提取。
   Widget _kimiWebTokenField() {
-    final masked = widget.editing?.maskedWebRefreshToken ??
+    final masked =
+        _editing?.maskedWebRefreshToken ??
         widget.copyFrom?.maskedWebRefreshToken ??
         '';
-    final hasToken = _webRefreshToken.text.trim().isNotEmpty || masked.isNotEmpty;
+    final hasToken =
+        _webRefreshToken.text.trim().isNotEmpty || masked.isNotEmpty;
     return _loginCard(
       title: '网页会话登录态',
       configured: hasToken,
       configuredHint: '已配置;重新导入或粘贴新值整体替换,留空保留原值。',
       unconfiguredHint: '可选;导入本机 kimi-desktop 的网页会话登录态后,额度页可显示会员月总额度。',
       items: [
-        _checkItem(
-          done: hasToken,
-          name: '网页会话 Token',
-          desc: '月度会员额度查询链的凭据',
-        ),
+        _checkItem(done: hasToken, name: '网页会话 Token', desc: '月度会员额度查询链的凭据'),
       ],
       buttons: [
         OutlinedButton.icon(
@@ -848,7 +844,8 @@ class _AccountFormState extends State<AccountForm> {
       details: [
         LabeledField(
           label: '网页会话 Token',
-          hint: '可选;填入后额度页可显示会员月总额度。'
+          hint:
+              '可选;填入后额度页可显示会员月总额度。'
               '${_isEdit ? '留空保留原值' : ''}',
           child: TextFormField(
             key: const ValueKey('account-web-refresh-token'),
@@ -857,15 +854,17 @@ class _AccountFormState extends State<AccountForm> {
             decoration: InputDecoration(
               hintText: (_isEdit || widget.copyFrom != null)
                   ? _revealKey
-                      ? masked
-                      : '************'
+                        ? masked
+                        : '************'
                   : null,
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 tooltip: _revealKey ? '隐藏' : '显示',
-                icon: Icon(_revealKey
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined),
+                icon: Icon(
+                  _revealKey
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
                 onPressed: () => setState(() => _revealKey = !_revealKey),
               ),
             ),
@@ -898,9 +897,15 @@ class _AccountFormState extends State<AccountForm> {
   }
 
   /// Kiro 密钥独立眼睛开关,已存值仅以纯星号占位,从不把掩码写入输入框。
-  Widget _kiroField(String key, String label, TextEditingController controller,
-      {String? hint, bool secret = false, bool hasMasked = false,
-      String? Function(String?)? validator}) {
+  Widget _kiroField(
+    String key,
+    String label,
+    TextEditingController controller, {
+    String? hint,
+    bool secret = false,
+    bool hasMasked = false,
+    String? Function(String?)? validator,
+  }) {
     final revealed = _revealedKiroFields.contains(key);
     return LabeledField(
       label: label,
@@ -915,9 +920,11 @@ class _AccountFormState extends State<AccountForm> {
           suffixIcon: secret
               ? IconButton(
                   tooltip: revealed ? '隐藏' : '显示',
-                  icon: Icon(revealed
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined),
+                  icon: Icon(
+                    revealed
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
                   onPressed: () => setState(() {
                     if (revealed) {
                       _revealedKiroFields.remove(key);
@@ -956,11 +963,12 @@ class _AccountFormState extends State<AccountForm> {
     final invalid = _validateKiroSecret(value);
     if (invalid != null) return invalid;
     final hasId = _clientId.text.trim().isNotEmpty;
-    final hasSecret = _clientSecret.text.trim().isNotEmpty ||
+    final hasSecret =
+        _clientSecret.text.trim().isNotEmpty ||
         (_hasStoredKiroCredentials &&
             hasId &&
-            _clientId.text.trim() == widget.editing!.clientId &&
-            widget.editing!.maskedClientSecret.isNotEmpty);
+            _clientId.text.trim() == _editing!.clientId &&
+            _editing!.maskedClientSecret.isNotEmpty);
     return hasId != hasSecret ? 'SSO Client ID 与 Client Secret 必须一起填写' : null;
   }
 
@@ -993,26 +1001,37 @@ class _AccountFormState extends State<AccountForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Text(title,
+          Row(
+            children: [
+              Text(
+                title,
                 style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: t.ink)),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              decoration: BoxDecoration(
-                color: configured ? t.successSoft : t.bg,
-                borderRadius: BorderRadius.circular(10),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: t.ink,
+                ),
               ),
-              child: Text(
-                configured ? configuredLabel : unconfiguredLabel,
-                style: TextStyle(
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: configured ? t.successSoft : t.bg,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  configured ? configuredLabel : unconfiguredLabel,
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
-                    color: configured ? t.success : t.faint),
+                    color: configured ? t.success : t.faint,
+                  ),
+                ),
               ),
-            ),
-          ]),
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
             configured ? configuredHint : unconfiguredHint,
@@ -1036,10 +1055,12 @@ class _AccountFormState extends State<AccountForm> {
   }
 
   Widget _kiroLoginCard() {
-    final source = widget.editing ?? widget.copyFrom;
-    final hasRefresh = _refreshToken.text.trim().isNotEmpty ||
+    final source = _editing ?? widget.copyFrom;
+    final hasRefresh =
+        _refreshToken.text.trim().isNotEmpty ||
         (source?.maskedRefreshToken.isNotEmpty ?? false);
-    final hasSso = _clientId.text.trim().isNotEmpty &&
+    final hasSso =
+        _clientId.text.trim().isNotEmpty &&
         (_clientSecret.text.trim().isNotEmpty ||
             (source?.maskedClientSecret.isNotEmpty ?? false));
     final arn = _profileArn.text.trim();
@@ -1052,7 +1073,8 @@ class _AccountFormState extends State<AccountForm> {
       title: 'Kiro 登录态',
       configured: hasRefresh,
       configuredHint: '凭据已落库,msu 独立续期与查询额度,不依赖本机登录状态;换账号登录后点「重新导入」整体替换。',
-      unconfiguredHint: '导入本机 Kiro App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。\nIAM / Identity Center 账号的 SSO 会话最长 90 天,到期需重新导入一次。',
+      unconfiguredHint:
+          '导入本机 Kiro App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。\nIAM / Identity Center 账号的 SSO 会话最长 90 天,到期需重新导入一次。',
       items: [
         _checkItem(
           done: hasRefresh,
@@ -1083,8 +1105,9 @@ class _AccountFormState extends State<AccountForm> {
         OutlinedButton.icon(
           key: const ValueKey('kiro-autofill-app'),
           icon: Icon(
-              hasRefresh ? Icons.refresh : Icons.file_download_outlined,
-              size: 18),
+            hasRefresh ? Icons.refresh : Icons.file_download_outlined,
+            size: 18,
+          ),
           label: Text(hasRefresh ? '从 Kiro App 重新导入' : '从 Kiro App 导入'),
           onPressed: _fillKiroApp,
         ),
@@ -1104,74 +1127,109 @@ class _AccountFormState extends State<AccountForm> {
     final t = context.tokens;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(children: [
-        Container(
-          width: 17,
-          height: 17,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: done ? t.success : Colors.transparent,
-            border: done ? null : Border.all(color: t.faint, width: 1.2),
+      child: Row(
+        children: [
+          Container(
+            width: 17,
+            height: 17,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: done ? t.success : Colors.transparent,
+              border: done ? null : Border.all(color: t.faint, width: 1.2),
+            ),
+            child: done
+                ? const Icon(Icons.check, size: 11, color: Colors.white)
+                : null,
           ),
-          child: done
-              ? const Icon(Icons.check, size: 11, color: Colors.white)
-              : null,
-        ),
-        const SizedBox(width: 10),
-        Text(name,
+          const SizedBox(width: 10),
+          Text(
+            name,
             style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w500, color: t.ink)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(desc,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: t.ink,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              desc,
               style: TextStyle(fontSize: 12, color: t.faint),
-              overflow: TextOverflow.ellipsis),
-        ),
-        const SizedBox(width: 10),
-        Text(
-          done ? (value ?? '已配置') : pendingLabel,
-          style: TextStyle(
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            done ? (value ?? '已配置') : pendingLabel,
+            style: TextStyle(
               fontSize: 12,
               color: done ? t.success : t.faint,
-              fontFamily: done && value != null ? AppConst.fontMono : null),
-        ),
-      ]),
+              fontFamily: done && value != null ? AppConst.fontMono : null,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   List<Widget> _kiroDetailFields() {
-    final source = widget.editing ?? widget.copyFrom;
+    final source = _editing ?? widget.copyFrom;
     return [
-      _kiroField('account-refresh-token', 'Refresh Token', _refreshToken,
-          secret: true,
-          hasMasked: source?.maskedRefreshToken.isNotEmpty ?? false,
-          hint: 'Kiro 刷新令牌;Desktop 登录或 SSO 均可。'
-              '${_hasStoredKiroCredentials ? '编辑时留空保留原值' : '必填,由服务端自动续期'}',
-          validator: (v) {
-            final invalid = _validateKiroSecret(v);
-            if (invalid != null) return invalid;
-            return !_hasStoredKiroCredentials && (v?.trim().isEmpty ?? true)
-                ? 'Refresh Token 不能为空'
-                : null;
-          }),
+      _kiroField(
+        'account-refresh-token',
+        'Refresh Token',
+        _refreshToken,
+        secret: true,
+        hasMasked: source?.maskedRefreshToken.isNotEmpty ?? false,
+        hint:
+            'Kiro 刷新令牌;Desktop 登录或 SSO 均可。'
+            '${_hasStoredKiroCredentials ? '编辑时留空保留原值' : '必填,由服务端自动续期'}',
+        validator: (v) {
+          final invalid = _validateKiroSecret(v);
+          if (invalid != null) return invalid;
+          return !_hasStoredKiroCredentials && (v?.trim().isEmpty ?? true)
+              ? 'Refresh Token 不能为空'
+              : null;
+        },
+      ),
       const SizedBox(height: 20),
-      _kiroField('account-profile-arn', 'Profile ARN', _profileArn,
-          hint: '可选;Desktop 刷新可自动回填'),
+      _kiroField(
+        'account-profile-arn',
+        'Profile ARN',
+        _profileArn,
+        hint: '可选;Desktop 刷新可自动回填',
+      ),
       const SizedBox(height: 20),
-      _kiroField('account-auth-region', '认证区域', _authRegion,
-          hint: '令牌签发区域,默认 us-east-1'),
+      _kiroField(
+        'account-auth-region',
+        '认证区域',
+        _authRegion,
+        hint: '令牌签发区域,默认 us-east-1',
+      ),
       const SizedBox(height: 20),
-      _kiroField('account-api-region', 'API 区域', _apiRegion,
-          hint: '可选;推理区域可与认证区域不同'),
+      _kiroField(
+        'account-api-region',
+        'API 区域',
+        _apiRegion,
+        hint: '可选;推理区域可与认证区域不同',
+      ),
       const SizedBox(height: 20),
-      _kiroField('account-client-id', 'SSO Client ID', _clientId,
-          hint: '可选;与 Client Secret 一起填写启用 SSO'),
+      _kiroField(
+        'account-client-id',
+        'SSO Client ID',
+        _clientId,
+        hint: '可选;与 Client Secret 一起填写启用 SSO',
+      ),
       const SizedBox(height: 20),
-      _kiroField('account-client-secret', 'SSO Client Secret', _clientSecret,
-          secret: true,
-          hasMasked: source?.maskedClientSecret.isNotEmpty ?? false,
-          hint: _hasStoredKiroCredentials ? '编辑时留空保留原值' : 'Desktop 登录无需填写',
-          validator: _validateKiroClientPair),
+      _kiroField(
+        'account-client-secret',
+        'SSO Client Secret',
+        _clientSecret,
+        secret: true,
+        hasMasked: source?.maskedClientSecret.isNotEmpty ?? false,
+        hint: _hasStoredKiroCredentials ? '编辑时留空保留原值' : 'Desktop 登录无需填写',
+        validator: _validateKiroClientPair,
+      ),
     ];
   }
 
@@ -1203,16 +1261,19 @@ class _AccountFormState extends State<AccountForm> {
   List<Widget> _oauthFields() => [_codexLoginCard()];
 
   Widget _codexLoginCard() {
-    final masked = widget.editing?.maskedRefreshToken ??
+    final masked =
+        _editing?.maskedRefreshToken ??
         widget.copyFrom?.maskedRefreshToken ??
         '';
-    final hasRefresh = _refreshToken.text.trim().isNotEmpty || masked.isNotEmpty;
+    final hasRefresh =
+        _refreshToken.text.trim().isNotEmpty || masked.isNotEmpty;
     final accountId = _accountId.text.trim();
     return _loginCard(
       title: 'Codex 登录态',
       configured: hasRefresh,
       configuredHint: '凭据已落库,msu 独立续期与查询额度,不依赖本机登录状态;换账号登录后重新导入整体替换。',
-      unconfiguredHint: '导入本机 codex CLI 或 Codex App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。',
+      unconfiguredHint:
+          '导入本机 codex CLI 或 Codex App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。',
       items: [
         _checkItem(
           done: hasRefresh,
@@ -1259,15 +1320,17 @@ class _AccountFormState extends State<AccountForm> {
             // 与密钥同款:默认纯星号,眼睛才亮掩码;完整 token 后端从不下发。
             hintText: (_isEdit || widget.copyFrom != null)
                 ? _revealKey
-                    ? masked
-                    : '************'
+                      ? masked
+                      : '************'
                 : null,
             border: const OutlineInputBorder(),
             suffixIcon: IconButton(
               tooltip: _revealKey ? '隐藏' : '显示',
-              icon: Icon(_revealKey
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined),
+              icon: Icon(
+                _revealKey
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+              ),
               onPressed: () => setState(() => _revealKey = !_revealKey),
             ),
           ),
@@ -1287,12 +1350,9 @@ class _AccountFormState extends State<AccountForm> {
         child: TextFormField(
           key: const ValueKey('account-account-id'),
           controller: _accountId,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-          ),
-          validator: (v) => (v == null || v.trim().isEmpty)
-              ? 'Account ID 不能为空'
-              : null,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+          validator: (v) =>
+              (v == null || v.trim().isEmpty) ? 'Account ID 不能为空' : null,
           onChanged: (_) => setState(() {}),
         ),
       ),
@@ -1302,7 +1362,10 @@ class _AccountFormState extends State<AccountForm> {
   /// 从指定来源读登录态填入 refresh_token 与 account_id;缺失/格式错误
   /// 只报该来源。本地几 KB 小文件,同步读避免异步缝隙里表单已销毁。
   void _fillFrom(
-      String label, String path, (String, String) Function(String) parse) {
+    String label,
+    String path,
+    (String, String) Function(String) parse,
+  ) {
     try {
       final (rt, id) = parse(File(path).readAsStringSync());
       setState(() {
@@ -1326,8 +1389,8 @@ class _AccountFormState extends State<AccountForm> {
       title: '额度查询',
       subtitle: _quotaEnabled
           ? (_providerId == 'bailian.cn.subscribe.token-plan'
-              ? 'bl 自动续期 · AccessKey 仅由本机 bl 保管'
-              : '走供应商内置查询;两个间隔留空走默认值')
+                ? 'ModelSurge 内置签发/续期 · 认证随账号保存'
+                : '走供应商内置查询;两个间隔留空走默认值')
           : '已关闭 · 该账号不查询额度',
       initiallyExpanded: _initialSettings?.empty == false,
       child: Column(
@@ -1342,8 +1405,7 @@ class _AccountFormState extends State<AccountForm> {
               ),
               const SizedBox(width: 8),
               const Expanded(
-                child:
-                    Text('启用实时额度查询', style: TextStyle(fontSize: 12.5)),
+                child: Text('启用实时额度查询', style: TextStyle(fontSize: 12.5)),
               ),
             ],
           ),
@@ -1387,71 +1449,94 @@ class _AccountFormState extends State<AccountForm> {
           ],
           if (_providerId == 'bailian.cn.subscribe.token-plan') ...[
             const SizedBox(height: 20),
-            _bailianBlFields(),
+            _bailianAuthFields(),
           ],
         ],
       ),
     );
   }
 
-  Widget _bailianBlFields() {
+  bool get _isBailianTokenPlan =>
+      _providerId == 'bailian.cn.subscribe.token-plan';
+
+  bool get _hasStoredBailianKeys =>
+      _isBailianTokenPlan &&
+      _editing?.providerId == _providerId &&
+      (_editing?.maskedBailianAccessKeyId.isNotEmpty ?? false) &&
+      (_editing?.maskedBailianAccessKeySecret.isNotEmpty ?? false);
+
+  bool get _bailianVerified =>
+      _hasStoredBailianKeys &&
+      _bailianAkId.text.trim().isEmpty &&
+      _bailianAkSecret.text.trim().isEmpty &&
+      (_editing?.bailianVerified ?? false);
+
+  Widget _bailianAuthFields() {
+    final verified = _bailianVerified;
+    const explanation = 'AccessKey → ModelSurge 内置签发 → 账号持久保存 → 失效自动续期';
     return _loginCard(
       title: 'Token Plan 额度认证',
-      configured: _blVerified,
-      configuredLabel: '本次已验证',
-      unconfiguredLabel: '本次未验证',
-      configuredHint: '本机 bl 登录与额度 Token 签发已验证通过。AccessKey 由 bl 保管,不随账号保存;后端需读取同一份 bl 配置。',
-      unconfiguredHint: 'AccessKey → 本机 bl 登录 → 签发额度 Token → 后端直读配置。无需手动复制 Token,续期由 bl 配合自动任务完成。\n首次使用请展开 AccessKey 详情;已有 bl 登录态无需重复验证,本卡片仅显示本次验证结果。',
+      configured: verified,
+      configuredLabel: '已认证',
+      unconfiguredLabel: '未认证',
+      configuredHint: '$explanation\n认证已随账号保存,切页或重启后保留。',
+      unconfiguredHint: '$explanation\n验证并保存会提交完整账号表单;无需环境配置或外部 CLI。',
       items: [
         _checkItem(
-          done: _blVerified,
-          name: 'bl CLI',
-          desc: '缺失时自动安装',
-          value: '已验证',
-          pendingLabel: '待验证',
+          done: _hasStoredBailianKeys,
+          name: 'AccessKey',
+          desc: '随账号保存',
+          pendingLabel: '待保存',
         ),
         _checkItem(
-          done: _blVerified,
-          name: 'AccessKey 登录',
-          desc: '由本机 bl 保管,不随账号保存',
-          value: '已验证',
-          pendingLabel: '待验证',
-        ),
-        _checkItem(
-          done: _blVerified,
+          done: verified,
           name: '额度查询 Token',
-          desc: '签发到 bl 配置,后端自动读取',
-          value: '已验证',
-          pendingLabel: '待验证',
+          desc: '内置签发/续期',
+          value: '已认证',
+          pendingLabel: '待认证',
+        ),
+        _checkItem(
+          done: verified,
+          name: '认证状态',
+          desc: '切页/重启后保留',
+          value: '已认证',
+          pendingLabel: '待认证',
         ),
       ],
       buttons: [
         OutlinedButton.icon(
-          key: const ValueKey('bailian-bl-install'),
-          icon: _blBusy
+          key: const ValueKey('bailian-auth-verify'),
+          icon: _busy
               ? const SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(_blVerified ? Icons.refresh : Icons.terminal_outlined,
-                  size: 18),
-          label: Text(_blBusy
-              ? '正在安装/验证 bl…'
-              : (_blVerified ? '重新验证 bl' : '安装 bl 并验证')),
-          onPressed: _blBusy ? null : _ensureBl,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  verified ? Icons.refresh : Icons.verified_user_outlined,
+                  size: 18,
+                ),
+          label: Text(verified ? '重新验证并保存' : '验证并保存'),
+          onPressed: _busy
+              ? null
+              : () => _submit(verifyBailian: true, close: false),
         ),
       ],
       detailsToggleKey: const ValueKey('bailian-details-toggle'),
-      detailsTitle: 'AccessKey 详情(仅交给本机 bl,不随账号保存)',
+      detailsTitle: 'AccessKey 详情(随账号保存,编辑时留空保留原值)',
       details: [
         LabeledField(
           label: 'AccessKey ID',
           child: TextFormField(
             key: const ValueKey('bailian-access-key-id'),
             controller: _bailianAkId,
-            enabled: !_blBusy,
-            onChanged: (_) => setState(() => _blVerified = false),
-            decoration: const InputDecoration(border: OutlineInputBorder()),
+            enabled: !_busy,
+            obscureText: true,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              hintText: _hasStoredBailianKeys ? '***' : null,
+            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -1460,48 +1545,17 @@ class _AccountFormState extends State<AccountForm> {
           child: TextFormField(
             key: const ValueKey('bailian-access-key-secret'),
             controller: _bailianAkSecret,
-            enabled: !_blBusy,
-            onChanged: (_) => setState(() => _blVerified = false),
-            obscureText: !_revealAkSecret,
+            enabled: !_busy,
+            obscureText: true,
+            onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                tooltip: _revealAkSecret ? '隐藏' : '显示',
-                icon: Icon(_revealAkSecret
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined),
-                onPressed: () =>
-                    setState(() => _revealAkSecret = !_revealAkSecret),
-              ),
+              hintText: _hasStoredBailianKeys ? '***' : null,
             ),
           ),
         ),
       ],
     );
-  }
-
-  Future<void> _ensureBl() async {
-    final id = _bailianAkId.text.trim();
-    final secret = _bailianAkSecret.text.trim();
-    if (id.isEmpty || secret.isEmpty) {
-      TopToast.show(context, '请先填入 AccessKey ID 与 Secret', error: true);
-      return;
-    }
-    setState(() {
-      _blBusy = true;
-      _blVerified = false;
-    });
-    final error = await ensureBlAndLogin(id, secret);
-    if (!mounted) return;
-    setState(() {
-      _blBusy = false;
-      _blVerified = error == null;
-    });
-    if (error == null) {
-      TopToast.show(context, 'bl 已就绪,AccessKey 验证通过;额度查询 token 将自动续期');
-    } else {
-      TopToast.show(context, error, error: true);
-    }
   }
 
   /// 分钟数值框校验:留空表示沿用后端默认,填了须是范围内的整数。
@@ -1560,21 +1614,24 @@ class _DetailsDisclosureState extends State<_DetailsDisclosure>
           onTap: () => _ctrl.isDismissed ? _ctrl.forward() : _ctrl.reverse(),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              AnimatedBuilder(
-                animation: _ctrl,
-                builder: (context, _) => Icon(
-                  _ctrl.value > 0.5 ? Icons.expand_more : Icons.chevron_right,
-                  size: 15,
-                  color: t.faint,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedBuilder(
+                  animation: _ctrl,
+                  builder: (context, _) => Icon(
+                    _ctrl.value > 0.5 ? Icons.expand_more : Icons.chevron_right,
+                    size: 15,
+                    color: t.faint,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 2),
-              Text(
-                widget.title,
-                style: TextStyle(fontSize: 12.5, color: t.faint),
-              ),
-            ]),
+                const SizedBox(width: 2),
+                Text(
+                  widget.title,
+                  style: TextStyle(fontSize: 12.5, color: t.faint),
+                ),
+              ],
+            ),
           ),
         ),
         AnimatedBuilder(

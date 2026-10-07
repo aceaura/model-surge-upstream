@@ -173,6 +173,10 @@ class Account {
     this.apiRegion = '',
     this.clientId = '',
     this.maskedClientSecret = '',
+    this.maskedBailianAccessKeyId = '',
+    this.maskedBailianAccessKeySecret = '',
+    this.maskedConsoleAccessToken = '',
+    this.consoleVerifiedAt,
   });
 
   final String name;
@@ -212,6 +216,18 @@ class Account {
   /// 可选 SSO secret,服务端仅回纯星号。
   final String maskedClientSecret;
 
+  /// 百炼额度凭据均为服务端纯星号掩码,只能展示是否已保存。
+  final String maskedBailianAccessKeyId;
+  final String maskedBailianAccessKeySecret;
+  final String maskedConsoleAccessToken;
+  final DateTime? consoleVerifiedAt;
+
+  bool get bailianVerified =>
+      maskedBailianAccessKeyId.isNotEmpty &&
+      maskedBailianAccessKeySecret.isNotEmpty &&
+      maskedConsoleAccessToken.isNotEmpty &&
+      consoleVerifiedAt != null;
+
   factory Account.fromJson(Map<String, dynamic> json) {
     final credential = json['credential'] as Map<String, dynamic>? ?? const {};
     final headers = json['headers'] as Map<String, dynamic>? ?? const {};
@@ -234,6 +250,15 @@ class Account {
       apiRegion: credential['api_region'] as String? ?? '',
       clientId: credential['client_id'] as String? ?? '',
       maskedClientSecret: credential['client_secret'] as String? ?? '',
+      maskedBailianAccessKeyId:
+          credential['bailian_access_key_id'] as String? ?? '',
+      maskedBailianAccessKeySecret:
+          credential['bailian_access_key_secret'] as String? ?? '',
+      maskedConsoleAccessToken:
+          credential['console_access_token'] as String? ?? '',
+      consoleVerifiedAt: DateTime.tryParse(
+        credential['console_verified_at'] as String? ?? '',
+      ),
     );
   }
 }

@@ -24,6 +24,16 @@ func (f fakeAccounts) Get(_ context.Context, name string) (account.Account, erro
 	return acc, nil
 }
 
+func (f fakeAccounts) UpdateCredential(ctx context.Context, name string, cred credential.Credential) error {
+	acc, err := f.Get(ctx, name)
+	if err != nil {
+		return err
+	}
+	acc.Credential = cred
+	f[name] = acc
+	return nil
+}
+
 func acct(name, providerID, baseURL string) account.Account {
 	return account.Account{
 		Name:       name,

@@ -19,6 +19,43 @@ func TestDecodeAPIKey(t *testing.T) {
 	}
 }
 
+func TestBailianCredentialPersistenceAndRedaction(t *testing.T) {
+	c := Credential{Kind: provider.CredAPIKey, APIKey: "sk-inference", BailianAccessKeyID: "LTAI-very-secret-id", BailianAccessKeySecret: "very-secret-access-key", ConsoleAccessToken: "console-secret-token", ConsoleVerifiedAt: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
+	raw, err := c.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Decode(raw)
+	if err != nil || back != c {
+		t.Fatalf("credential JSON persistence: %v", err)
+	}
+	v := c.Redact()
+	if v.BailianAccessKeyID != "***" || v.BailianAccessKeySecret != "***" || v.ConsoleAccessToken != "***" || !v.ConsoleVerifiedAt.Equal(c.ConsoleVerifiedAt) {
+		t.Fatal("AK/SK must be purely masked while exposing verified timestamp")
+	}
+	view, _ := json.Marshal(v)
+	for _, secret := range []string{c.BailianAccessKeyID, c.BailianAccessKeySecret, c.ConsoleAccessToken} {
+		if strings.Contains(string(view), secret) || strings.Contains(c.String(), secret) {
+			t.Fatal("Bailian secret leaked")
+		}
+	}
+	for _, id := range []string{"", "   ", "id"} {
+		for _, secret := range []string{"", "   ", "secret"} {
+			c.BailianAccessKeyID, c.BailianAccessKeySecret = id, secret
+			wantError := (strings.TrimSpace(id) == "") != (strings.TrimSpace(secret) == "")
+			if (c.Validate() != nil) != wantError {
+				t.Fatal("AK/SK validation must require a complete pair")
+			}
+		}
+	}
+	c.ConsoleVerifiedAt = time.Time{}
+	raw, _ = c.Encode()
+	view, _ = json.Marshal(c.Redact())
+	if strings.Contains(string(raw), "console_verified_at") || strings.Contains(string(view), "console_verified_at") {
+		t.Fatal("zero verified timestamp must be omitted")
+	}
+}
+
 func TestDecodeRejects(t *testing.T) {
 	cases := map[string]struct{ raw, wants string }{
 		"unknown kind":          {`{"kind":"static_token","token":"x"}`, "unsupported credential kind"},

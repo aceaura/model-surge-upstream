@@ -2,12 +2,15 @@ package quota
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -405,101 +408,73 @@ func TestBuiltinBailianNotLogined(t *testing.T) {
 }
 
 func TestBuiltinBailianMissingConsoleToken(t *testing.T) {
-	t.Setenv("MSU_BAILIAN_CLI_CONFIG", "")
-	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
-	q := New(fakeAccounts{"bl-1": a}, time.Minute)
-	_, err := q.Query(context.Background(), "bl-1")
-	if err == nil || !strings.Contains(err.Error(), "安装 bl 并验证") ||
-		!strings.Contains(err.Error(), "MSU_BAILIAN_CLI_CONFIG") {
-		t.Fatalf("err = %v, want CLI setup and backend config guidance", err)
-	}
-	if strings.Contains(err.Error(), "console_access_token") {
-		t.Errorf("err = %v, no manual console token field remains in the form", err)
+	t.Setenv("MSU_BAILIAN_CLI_CONFIG", "ignored")
+	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "ignored-id")
+	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "ignored-secret")
+	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://untrusted.invalid")
+	q := New(fakeAccounts{a.Name: a}, time.Minute)
+	_, err := q.Query(context.Background(), a.Name)
+	if err == nil || !strings.Contains(err.Error(), bailianLoginHint) {
+		t.Fatalf("err = %v, want account reauthentication guidance", err)
 	}
 }
 
-func TestBailianConsoleTokenConfig(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		config string
-	}{
-		{"missing", ""},
-		{"invalid JSON", "{"},
-		{"wrong token type", `{"access_token":123}`},
-		{"missing token", `{}`},
-		{"blank token", `{"access_token":"   "}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.json")
-			t.Setenv("MSU_BAILIAN_CLI_CONFIG", path)
-			if tc.config != "" {
-				if err := os.WriteFile(path, []byte(tc.config), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			a := account.Account{}
-			a.Credential.ConsoleAccessToken = " ct-stored "
-			if got := bailianConsoleToken(a); got != "ct-stored" {
-				t.Fatalf("token = %q, want stored token fallback", got)
-			}
-			a.Credential.ConsoleAccessToken = ""
-			a.Credential.APIKey = "sk-inference"
-			if got := bailianConsoleToken(a); got != "" {
-				t.Fatalf("token = %q, inference key must not authenticate quota queries", got)
-			}
-		})
-	}
-}
-
-func TestBuiltinBailianCLIConfigRotation(t *testing.T) {
+func TestBuiltinBailianAccountTokenIsolation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"access_token":"foreign-cli-token"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("MSU_BAILIAN_CLI_CONFIG", path)
+	t.Setenv("BAILIAN_CONFIG_DIR", filepath.Dir(path))
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := calls.Add(1)
-		want := "Bearer ct-first"
-		if call > 3 {
-			want = "Bearer ct-renewed"
+		calls.Add(1)
+		if r.Header.Get("X-Original-Host") != "bailian-cs.console.aliyun.com" {
+			t.Error("account base URL must not control the quota endpoint")
 		}
-		if got := r.Header.Get("Authorization"); got != want {
-			t.Errorf("call %d auth = %q, want %q from CLI config", call, got, want)
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer ct-first" && auth != "Bearer ct-second" && auth != "Bearer ct-rotated" {
+			t.Error("token must come only from the requested account")
 		}
-		if r.URL.Path != "/cli/api.json" || r.Method != http.MethodPost {
-			t.Errorf("request = %s %s, want POST /cli/api.json", r.Method, r.URL.Path)
-		}
-		var payload string
-		switch api := r.URL.Query().Get("api"); {
-		case strings.HasSuffix(api, "/usage"):
-			payload = `{"per5HourPercentage":0.5}`
-		case strings.HasSuffix(api, "/subscription"):
-			payload = `{"specCode":"pro"}`
-		case strings.HasSuffix(api, "/quota-config"):
-			payload = `{"pro":{"five_hour":100}}`
-		default:
-			t.Errorf("api = %q", api)
-		}
-		_, _ = w.Write([]byte(bailianEnvelope(payload)))
+		writeBailianFixture(w, r)
 	}))
 	defer srv.Close()
-	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
-	a.Credential.ConsoleAccessToken = "ct-stale"
-	q := builtinQuota(srv.URL, a)
-	q.ttl = -time.Second
-	for _, token := range []string{"ct-first", "ct-renewed"} {
-		if err := os.WriteFile(path, []byte(`{"access_token":" `+token+` "}`), 0600); err != nil {
+	a := acct("first", "bailian.cn.subscribe.token-plan", "https://untrusted.invalid")
+	a.Credential.ConsoleAccessToken = "ct-first"
+	b := a
+	b.Name, b.Credential.ConsoleAccessToken = "second", "ct-second"
+	store := fakeAccounts{a.Name: a, b.Name: b}
+	q := New(store, time.Minute)
+	q.SetClient(&http.Client{Transport: hostRewrite{target: srv.URL}})
+	for _, name := range []string{a.Name, b.Name, a.Name} {
+		if _, err := q.Query(context.Background(), name); err != nil {
 			t.Fatal(err)
 		}
-		got, err := q.Query(context.Background(), a.Name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got.Meters) != 1 || got.Meters[0].Used == nil || *got.Meters[0].Used != 50 {
-			t.Fatalf("meters = %+v, want 50 credits used", got.Meters)
-		}
 	}
-	if got := calls.Load(); got != 6 {
-		t.Fatalf("calls = %d, want three endpoints for each token", got)
+	if calls.Load() != 6 {
+		t.Fatal("valid quota must use the existing cache")
 	}
+	a.Credential.ConsoleAccessToken = "ct-rotated"
+	if err := store.UpdateCredential(context.Background(), a.Name, a.Credential); err != nil {
+		t.Fatal(err)
+	}
+	q.Forget(a.Name)
+	if _, err := q.Query(context.Background(), a.Name); err != nil {
+		t.Fatal(err)
+	}
+	if store[b.Name].Credential.ConsoleAccessToken != "ct-second" {
+		t.Fatal("account tokens leaked across accounts")
+	}
+}
+
+func writeBailianFixture(w http.ResponseWriter, r *http.Request) {
+	payload := `{"per5HourPercentage":0.5}`
+	if strings.HasSuffix(r.URL.Query().Get("api"), "/subscription") {
+		payload = `{"specCode":"pro"}`
+	} else if strings.HasSuffix(r.URL.Query().Get("api"), "/quota-config") {
+		payload = `{"pro":{"five_hour":100}}`
+	}
+	_, _ = w.Write([]byte(bailianEnvelope(payload)))
 }
 
 // 注册表与规格标记必须一一对应:加了内置实现忘了标 QuotaQueryable(或
@@ -520,5 +495,327 @@ func TestBuiltinRegistryMatchesQueryableSpecs(t *testing.T) {
 		if _, ok := builtinQuotas[id]; !ok {
 			t.Errorf("provider %q declares QuotaQueryable but has no builtin query", id)
 		}
+	}
+}
+
+func bailianAuthCredential() credential.Credential {
+	return credential.Credential{Kind: provider.CredAPIKey, APIKey: "sk-inference", BailianAccessKeyID: "fixture-id", BailianAccessKeySecret: "fixture-secret"}
+}
+
+func TestBailianSigningCLIParity(t *testing.T) {
+	// Fixture follows installed CLI Ht/Wt/Gt with fixed date/UUID, empty
+	// query/body and sorted headers INCLUDING x-acs-version and final newline.
+	req, _ := http.NewRequest(http.MethodPost, bailianMintURL, nil)
+	signBailian(req, bailianAuthCredential(), "2026-10-07T12:00:00Z", "00000000-0000-4000-8000-000000000000")
+	want := "ACS3-HMAC-SHA256 Credential=fixture-id,SignedHeaders=content-type;host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version,Signature=1d2acc812a34e557cae7b3499bd593d086f2fb2ae2512dc7854d1725a2c34652"
+	if req.Header.Get("Authorization") != want {
+		t.Fatal("ACS3 signature differs from CLI fixture")
+	}
+	if req.Host != "modelstudio.cn-beijing.aliyuncs.com" || req.URL.RawQuery != "" || req.Body != nil || req.Header.Get("X-Acs-Version") != "2026-02-10" {
+		t.Fatal("mint request differs from official CLI")
+	}
+}
+
+func TestBailianVerifyRequiresWholeTriple(t *testing.T) {
+	for _, failAt := range []string{"", "usage", "subscription", "quota-config", "meters"} {
+		t.Run(failAt, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.URL.Path == "/modelstudio/cli/generateAccessToken" {
+					body, _ := io.ReadAll(r.Body)
+					if len(body) != 0 || r.URL.RawQuery != "" || r.Method != "POST" || r.Header.Get("X-Original-Host") != "modelstudio.cn-beijing.aliyuncs.com" || r.Header.Get("X-Acs-Signature-Nonce") == "" {
+						t.Error("mint must use fixed endpoint, empty POST and random nonce")
+					}
+					_, _ = w.Write([]byte(`{"cliAccessToken":"new-console-token"}`))
+					return
+				}
+				if r.Header.Get("Authorization") != "Bearer new-console-token" {
+					t.Error("new console token required")
+				}
+				if strings.HasSuffix(r.URL.Query().Get("api"), "/"+failAt) {
+					w.WriteHeader(500)
+					return
+				}
+				if failAt == "meters" && strings.HasSuffix(r.URL.Query().Get("api"), "/usage") {
+					_, _ = w.Write([]byte(bailianEnvelope(`{"per5HourPercentage":2}`)))
+					return
+				}
+				writeBailianFixture(w, r)
+			}))
+			defer srv.Close()
+			q := New(fakeAccounts{}, time.Minute)
+			q.SetClient(&http.Client{Transport: hostRewrite{target: srv.URL}})
+			original := bailianAuthCredential()
+			original.ConsoleAccessToken = "old-console-token"
+			got, err := q.VerifyBailian(context.Background(), original)
+			if failAt == "" {
+				if err != nil || got.ConsoleAccessToken != "new-console-token" || got.ConsoleVerifiedAt.IsZero() || got.ConsoleVerifiedAt.Location() != time.UTC || got.APIKey != original.APIKey || calls.Load() != 4 {
+					t.Fatalf("verify: %v", err)
+				}
+			} else if err == nil || got != (credential.Credential{}) {
+				t.Fatal("partial success must never grant verification")
+			}
+		})
+	}
+}
+
+type bailianRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f bailianRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestBailianMintFailureSanitization(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"http", 500, `fixture-secret fixture-id sk-inference`},
+		{"failure", 200, `{"Success":false,"Message":"fixture-secret","cliAccessToken":"leaked-token"}`},
+		{"missing", 200, `{"Message":"fixture-secret"}`},
+		{"malformed", 200, `fixture-secret`},
+		{"oversize", 200, strings.Repeat("s", bodyLimit+1)},
+		{"redirect", 302, `fixture-secret`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Location", "/leak")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			q := New(fakeAccounts{}, time.Minute)
+			q.SetClient(&http.Client{Transport: hostRewrite{target: srv.URL}})
+			_, err := q.mintBailian(context.Background(), bailianAuthCredential())
+			if err == nil || calls.Load() != 1 {
+				t.Fatal("invalid mint or redirect must fail without following redirects")
+			}
+			for _, secret := range []string{"fixture-secret", "fixture-id", "sk-inference", "leaked-token"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatal("upstream error leaked authentication material")
+				}
+			}
+		})
+	}
+	q := New(fakeAccounts{}, time.Minute)
+	q.SetClient(&http.Client{Transport: bailianRoundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("fixture-secret") })})
+	if _, err := q.mintBailian(context.Background(), bailianAuthCredential()); err == nil || strings.Contains(err.Error(), "fixture-secret") {
+		t.Fatal("transport error must be sanitized")
+	}
+}
+
+func TestBailianRenewalRetryAndRestart(t *testing.T) {
+	for _, reject := range []string{"missing", "NotLogined", "401", "403", "retry-rejected", "mint-failed"} {
+		t.Run(reject, func(t *testing.T) {
+			var mints, consoleCalls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/modelstudio/cli/generateAccessToken" {
+					mints.Add(1)
+					if reject == "mint-failed" {
+						w.WriteHeader(500)
+						return
+					}
+					_, _ = w.Write([]byte(`{"cliAccessToken":"rotated-console"}`))
+					return
+				}
+				consoleCalls.Add(1)
+				if r.Header.Get("Authorization") == "Bearer stale-console" || reject == "retry-rejected" {
+					if reject == "401" {
+						w.WriteHeader(401)
+					} else if reject == "403" {
+						w.WriteHeader(403)
+					} else {
+						_, _ = w.Write([]byte(`{"data":{"success":false,"errorCode":"NotLogined"}}`))
+					}
+					return
+				}
+				writeBailianFixture(w, r)
+			}))
+			defer srv.Close()
+			a := acct("bl", "bailian.cn.subscribe.token-plan", "https://untrusted.invalid")
+			a.Credential = bailianAuthCredential()
+			a.Credential.ConsoleAccessToken = "stale-console"
+			a.Credential.ConsoleVerifiedAt = time.Now().UTC()
+			if reject == "missing" {
+				a.Credential.ConsoleAccessToken = ""
+			}
+			store := fakeAccounts{a.Name: a}
+			q := New(store, time.Minute)
+			client := &http.Client{Transport: hostRewrite{target: srv.URL}}
+			q.SetClient(client)
+			_, err := q.Query(context.Background(), a.Name)
+			persisted := store[a.Name].Credential
+			if mints.Load() != 1 {
+				t.Fatal("renewal must mint at most once")
+			}
+			if reject == "mint-failed" || reject == "retry-rejected" {
+				if err == nil || !strings.Contains(err.Error(), bailianLoginHint) || persisted.ConsoleAccessToken != "" || !persisted.ConsoleVerifiedAt.IsZero() {
+					t.Fatal("failed renewal must clear persisted verified state")
+				}
+				if persisted.BailianAccessKeySecret != a.Credential.BailianAccessKeySecret || persisted.APIKey != a.Credential.APIKey {
+					t.Fatal("reauth must retain AK/SK and inference key")
+				}
+				if consoleCalls.Load() > 2 {
+					t.Fatal("renewal retry exceeded limit")
+				}
+				return
+			}
+			if err != nil || persisted.ConsoleAccessToken != "rotated-console" || persisted.ConsoleVerifiedAt.IsZero() {
+				t.Fatalf("renewal: %v", err)
+			}
+			wantCalls := int32(4)
+			if reject == "missing" {
+				wantCalls = 3
+			}
+			if consoleCalls.Load() != wantCalls {
+				t.Fatal("renewal must retry all three quota calls")
+			}
+			// Simulate restart by round-tripping the persisted credential JSON,
+			// constructing a fresh accounts store and a fresh Quota (no caches).
+			raw, _ := persisted.Encode()
+			restored, err := credential.Decode(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.Credential = restored
+			fresh := New(fakeAccounts{a.Name: a}, time.Minute)
+			fresh.SetClient(client)
+			if _, err := fresh.Query(context.Background(), a.Name); err != nil || mints.Load() != 1 {
+				t.Fatalf("restart failed to restore token: %v", err)
+			}
+		})
+	}
+}
+
+type lockedBailianAccounts struct {
+	mu  sync.Mutex
+	raw []byte
+}
+
+func (s *lockedBailianAccounts) Get(context.Context, string) (account.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var a account.Account
+	err := json.Unmarshal(s.raw, &a)
+	return a, err
+}
+func (s *lockedBailianAccounts) UpdateCredential(ctx context.Context, name string, cred credential.Credential) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var a account.Account
+	if err := json.Unmarshal(s.raw, &a); err != nil {
+		return err
+	}
+	a.Credential = cred
+	var err error
+	s.raw, err = json.Marshal(a)
+	return err
+}
+
+func TestBailianLateExpiryRestartsWholeTriple(t *testing.T) {
+	for _, expiredAt := range []string{"subscription", "quota-config"} {
+		t.Run(expiredAt, func(t *testing.T) {
+			var mints atomic.Int32
+			var mu sync.Mutex
+			var calls []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/modelstudio/cli/generateAccessToken" {
+					mints.Add(1)
+					_, _ = w.Write([]byte(`{"cliAccessToken":"rotated-console"}`))
+					return
+				}
+				api := r.URL.Query().Get("api")
+				stage := api[strings.LastIndex(api, "/")+1:]
+				mu.Lock()
+				calls = append(calls, stage)
+				mu.Unlock()
+				if r.Header.Get("Authorization") == "Bearer stale-console" && stage == expiredAt {
+					_, _ = w.Write([]byte(`{"data":{"success":true,"DataV2":{"data":{"success":false,"message":"FAIL::BailianGateway.Login.NotLogined::expired"}}}}`))
+					return
+				}
+				writeBailianFixture(w, r)
+			}))
+			defer srv.Close()
+			a := acct("bl", "bailian.cn.subscribe.token-plan", "")
+			a.Credential = bailianAuthCredential()
+			a.Credential.ConsoleAccessToken = "stale-console"
+			q := builtinQuota(srv.URL, a)
+			if _, err := q.Query(context.Background(), a.Name); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			want := "usage,subscription,usage,subscription,quota-config"
+			if expiredAt == "quota-config" {
+				want = "usage,subscription,quota-config,usage,subscription,quota-config"
+			}
+			if mints.Load() != 1 || strings.Join(calls, ",") != want {
+				t.Fatal("late expiry must restart usage/subscription/config exactly once")
+			}
+		})
+	}
+}
+
+func TestBailianNonAuthFailureDoesNotRenew(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/cli/api.json" {
+			t.Error("ordinary quota error must not trigger mint")
+		}
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte(`private-secret upstream-error`))
+	}))
+	defer srv.Close()
+	a := acct("bl", "bailian.cn.subscribe.token-plan", "")
+	a.Credential = bailianAuthCredential()
+	a.Credential.ConsoleAccessToken = "live-console"
+	a.Credential.ConsoleVerifiedAt = time.Now().UTC()
+	store := fakeAccounts{a.Name: a}
+	q := New(store, time.Minute)
+	q.SetClient(&http.Client{Transport: hostRewrite{target: srv.URL}})
+	if _, err := q.Query(context.Background(), a.Name); err == nil || strings.Contains(err.Error(), "private-secret") {
+		t.Fatal("quota failure must be safely reported")
+	}
+	if calls.Load() != 1 || store[a.Name].Credential != a.Credential {
+		t.Fatal("non-auth failure must not invalidate auth or retry")
+	}
+}
+
+func TestBailianConcurrentRefreshSingleMint(t *testing.T) {
+	var mints atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/modelstudio/cli/generateAccessToken" {
+			mints.Add(1)
+			_, _ = w.Write([]byte(`{"cliAccessToken":"rotated-console"}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer rotated-console" {
+			t.Error("stale token after refresh")
+		}
+		writeBailianFixture(w, r)
+	}))
+	defer srv.Close()
+	a := acct("bl", "bailian.cn.subscribe.token-plan", "")
+	a.Credential = bailianAuthCredential()
+	raw, _ := json.Marshal(a)
+	store := &lockedBailianAccounts{raw: raw}
+	q := New(store, time.Minute)
+	q.SetClient(&http.Client{Transport: hostRewrite{target: srv.URL}})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := q.Query(context.Background(), a.Name); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if mints.Load() != 1 {
+		t.Fatal("concurrent queries must reload the rotated account under the refresh lock")
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
@@ -48,6 +49,7 @@ type Report struct {
 
 type Accounts interface {
 	Get(ctx context.Context, name string) (account.Account, error)
+	UpdateCredential(ctx context.Context, name string, cred credential.Credential) error
 }
 
 // TokenSource 为刷新型凭据的账号在内置查询前取出当前可用的
@@ -68,6 +70,8 @@ type Quota struct {
 	tokens   TokenSource
 
 	kimiTokens kimiAccessCache
+	// Bailian refreshes reload and persist account credentials under this lock.
+	bailianMu sync.Mutex
 
 	mu     sync.RWMutex
 	cached map[string]entry

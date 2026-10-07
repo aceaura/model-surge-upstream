@@ -145,6 +145,7 @@ class ApiClient {
     Map<String, dynamic>? quotaSettings,
     bool enabled = true,
     Map<String, dynamic>? credential,
+    bool verifyBailian = false,
   }) async {
     final body = await _send(
       'POST',
@@ -158,7 +159,10 @@ class ApiClient {
         'headers': ?headers,
         'quota_settings': ?quotaSettings,
         'enabled': enabled,
+        if (verifyBailian) 'verify_bailian': true,
       },
+      // 新 AK/SK 的普通保存也会签发并验证三个额度端点。
+      timeout: const Duration(seconds: 60),
     );
     return Account.fromJson(body['account'] as Map<String, dynamic>);
   }
@@ -175,6 +179,7 @@ class ApiClient {
     Map<String, dynamic>? quotaSettings,
     required bool enabled,
     Map<String, dynamic>? credential,
+    bool verifyBailian = false,
   }) async {
     final body = await _send(
       'PUT',
@@ -189,7 +194,10 @@ class ApiClient {
         'headers': ?headers,
         'quota_settings': ?quotaSettings,
         'enabled': enabled,
+        if (verifyBailian) 'verify_bailian': true,
       },
+      // 新 AK/SK 的普通保存也会签发并验证三个额度端点。
+      timeout: const Duration(seconds: 60),
     );
     return Account.fromJson(body['account'] as Map<String, dynamic>);
   }

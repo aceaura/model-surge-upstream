@@ -7,31 +7,95 @@ package quota
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
+	"math"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/credential"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
 const (
 	bailianConsoleURL = "https://bailian-cs.console.aliyun.com/cli/api.json"
 	bailianAPIPrefix  = "zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2F"
-	bailianLoginHint  = "百炼控制台登录已失效，请执行 bl auth generate-access-token 续签并检查自动续期任务；AccessKey 失效时请在额度查询设置中重新执行「安装 bl 并验证」"
+	bailianLoginHint  = "百炼控制台认证已失效，请检查账号 AccessKey ID/Secret 并重新「验证并保存」（推理 API Key 不能用于额度查询）"
+	bailianMintURL    = "https://modelstudio.cn-beijing.aliyuncs.com/modelstudio/cli/generateAccessToken"
 )
 
-// bailianMeters 聚合三接口出窗口计量。任一接口失败整份报告不可用:
-// 窗口总额依赖 subscription/quota-config,缺一就会报错数字。
-func bailianMeters(ctx context.Context, q *Quota, spec provider.Spec, acc account.Account) ([]Meter, error) {
-	token := bailianConsoleToken(acc)
-	if token == "" {
-		return nil, apperr.New(apperr.InvalidRequest,
-			"未读取到百炼 CLI 控制台登录态，请在额度查询设置中执行「安装 bl 并验证」，并确认后端已配置 MSU_BAILIAN_CLI_CONFIG（推理 API Key 不能用于额度查询）")
+var errBailianNotLogined = apperr.New(apperr.QuotaUnavailable, bailianLoginHint)
+
+// 认证失败不能写入账号，成功必须包含真实额度验证。
+func (q *Quota) VerifyBailian(ctx context.Context, cred credential.Credential) (credential.Credential, error) {
+	if cred.Kind != provider.CredAPIKey || cred.Validate() != nil {
+		return credential.Credential{}, apperr.New(apperr.InvalidCredential, "百炼验证需要推理 API Key 和完整 AccessKey ID/Secret")
 	}
+	token, err := q.mintBailian(ctx, cred)
+	if err != nil {
+		return credential.Credential{}, err
+	}
+	if _, err := q.bailianQuota(ctx, token); err != nil {
+		return credential.Credential{}, err
+	}
+	cred.ConsoleAccessToken = token
+	cred.ConsoleVerifiedAt = time.Now().UTC()
+	return cred, nil
+}
+
+// 锁内重读凭据，避免重复续期已被其他查询轮换的 Token。
+func bailianMeters(ctx context.Context, q *Quota, _ provider.Spec, acc account.Account) ([]Meter, error) {
+	q.bailianMu.Lock()
+	defer q.bailianMu.Unlock()
+	var err error
+	acc, err = q.accounts.Get(ctx, acc.Name)
+	if err != nil {
+		return nil, err
+	}
+	if acc.ProviderID != "bailian.cn.subscribe.token-plan" {
+		return nil, apperr.New(apperr.InvalidProvider, "百炼账号供应商已更改，请重试")
+	}
+	cred := acc.Credential
+	if token := strings.TrimSpace(cred.ConsoleAccessToken); token != "" {
+		meters, err := q.bailianQuota(ctx, token)
+		if !errors.Is(err, errBailianNotLogined) {
+			return meters, err
+		}
+	}
+	// Missing or rejected token: mint once, then retry the whole triple once.
+	token, err := q.mintBailian(ctx, cred)
+	var meters []Meter
+	if err == nil {
+		meters, err = q.bailianQuota(ctx, token)
+	}
+	if err != nil {
+		cred.ConsoleAccessToken = ""
+		cred.ConsoleVerifiedAt = time.Time{}
+		// Even cancellation must not leave a rejected token marked verified.
+		clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
+		defer cancel()
+		if err := q.accounts.UpdateCredential(clearCtx, acc.Name, cred); err != nil {
+			return nil, apperr.New(apperr.StorageError, "无法保存百炼认证失效状态，请重新验证")
+		}
+		return nil, apperr.New(apperr.QuotaUnavailable, bailianLoginHint)
+	}
+	cred.ConsoleAccessToken = token
+	cred.ConsoleVerifiedAt = time.Now().UTC()
+	if err := q.accounts.UpdateCredential(ctx, acc.Name, cred); err != nil {
+		return nil, apperr.New(apperr.StorageError, "无法保存百炼续期认证，请重试")
+	}
+	return meters, nil
+}
+
+func (q *Quota) bailianQuota(ctx context.Context, token string) ([]Meter, error) {
 	payloads := make([]any, 3)
 	for i, api := range []string{"usage", "subscription", "quota-config"} {
 		p, err := q.bailianCall(ctx, token, api)
@@ -43,23 +107,83 @@ func bailianMeters(ctx context.Context, q *Quota, spec provider.Spec, acc accoun
 	return bailianMetersOf(payloads[0], payloads[1], payloads[2])
 }
 
-// bailianConsoleToken 取控制台 access_token:MSU_BAILIAN_CLI_CONFIG 指向
-// bl CLI 的 config.json 时优先读它——bl 撞到过期会用已存 AK/SK 自动续期
-// 并写回该文件,直读它就永远拿到新鲜 token;读不到回落账号落库值。
-func bailianConsoleToken(acc account.Account) string {
-	if p := strings.TrimSpace(os.Getenv("MSU_BAILIAN_CLI_CONFIG")); p != "" {
-		if raw, err := os.ReadFile(p); err == nil {
-			var cfg struct {
-				AccessToken string `json:"access_token"`
-			}
-			if json.Unmarshal(raw, &cfg) == nil {
-				if t := strings.TrimSpace(cfg.AccessToken); t != "" {
-					return t
-				}
-			}
-		}
+// ACS3 必须包含全部 x-acs-* 头及 canonical headers 的尾部换行。
+func signBailian(req *http.Request, cred credential.Credential, date, nonce string) {
+	const signed = "content-type;host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version"
+	emptyHash := bailianSHA256("")
+	req.Host = "modelstudio.cn-beijing.aliyuncs.com"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Acs-Action", "GenerateCLIAccessToken")
+	req.Header.Set("X-Acs-Version", "2026-02-10")
+	req.Header.Set("X-Acs-Content-Sha256", emptyHash)
+	req.Header.Set("X-Acs-Date", date)
+	req.Header.Set("X-Acs-Signature-Nonce", nonce)
+	canonicalHeaders := "content-type:application/json\nhost:" + req.Host +
+		"\nx-acs-action:GenerateCLIAccessToken\nx-acs-content-sha256:" + emptyHash +
+		"\nx-acs-date:" + date + "\nx-acs-signature-nonce:" + nonce + "\nx-acs-version:2026-02-10\n"
+	canonical := strings.Join([]string{"POST", "/modelstudio/cli/generateAccessToken", "", canonicalHeaders, signed, emptyHash}, "\n")
+	mac := hmac.New(sha256.New, []byte(cred.BailianAccessKeySecret))
+	_, _ = mac.Write([]byte("ACS3-HMAC-SHA256\n" + bailianSHA256(canonical)))
+	req.Header.Set("Authorization", "ACS3-HMAC-SHA256 Credential="+cred.BailianAccessKeyID+
+		",SignedHeaders="+signed+",Signature="+hex.EncodeToString(mac.Sum(nil)))
+}
+
+func bailianSHA256(s string) string {
+	hash := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(hash[:])
+}
+
+func (q *Quota) mintBailian(ctx context.Context, cred credential.Credential) (string, error) {
+	cred.BailianAccessKeyID = strings.TrimSpace(cred.BailianAccessKeyID)
+	cred.BailianAccessKeySecret = strings.TrimSpace(cred.BailianAccessKeySecret)
+	if cred.BailianAccessKeyID == "" || cred.BailianAccessKeySecret == "" {
+		return "", apperr.New(apperr.InvalidCredential, bailianLoginHint)
 	}
-	return strings.TrimSpace(acc.Credential.ConsoleAccessToken)
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", apperr.New(apperr.QuotaUnavailable, "百炼签名生成失败，请重试")
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, bailianMintURL, nil)
+	signBailian(req, cred, time.Now().UTC().Format("2006-01-02T15:04:05Z"), hex.EncodeToString(random[:]))
+	raw, err := q.bailianDo(req)
+	if err != nil {
+		return "", err
+	}
+	var reply struct {
+		Success *bool  `json:"Success"`
+		Code    string `json:"Code"`
+		Token   string `json:"cliAccessToken"`
+	}
+	if json.Unmarshal(raw, &reply) != nil || (reply.Success != nil && !*reply.Success) ||
+		(reply.Code != "" && reply.Code != "Success" && reply.Code != "200") || strings.TrimSpace(reply.Token) == "" || strings.ContainsAny(reply.Token, "\r\n") {
+		return "", apperr.New(apperr.QuotaUnavailable, "百炼认证签发失败，请检查 AccessKey 权限并重新验证")
+	}
+	return strings.TrimSpace(reply.Token), nil
+}
+
+// 禁止重定向并隐藏上游错误，避免泄露签名头或凭据。
+func (q *Quota) bailianDo(req *http.Request) ([]byte, error) {
+	client := *q.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if client.Timeout == 0 || client.Timeout > requestTimeout {
+		client.Timeout = requestTimeout
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, apperr.New(apperr.QuotaUnavailable, "百炼认证或额度请求失败，请重试")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, errBailianNotLogined
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, apperr.New(apperr.QuotaUnavailable, "百炼认证或额度接口未返回成功结果")
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
+	if err != nil || len(raw) > bodyLimit {
+		return nil, apperr.New(apperr.QuotaUnavailable, "百炼响应读取失败或超出大小限制")
+	}
+	return raw, nil
 }
 
 // bailianCall 调一个逻辑接口并拆双层信封:外层 data.success 与内层
@@ -75,16 +199,16 @@ func (q *Quota) bailianCall(ctx context.Context, token, api string) (any, error)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	raw, _, err := q.do(req)
+	raw, err := q.bailianDo(req)
 	if err != nil {
 		return nil, err
 	}
 	var payload any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, apperr.Wrap(apperr.QuotaUnavailable, "decode console response", err)
+		return nil, apperr.New(apperr.QuotaUnavailable, "百炼额度响应无效")
 	}
 	if bailianNotLogined(payload) {
-		return nil, apperr.New(apperr.QuotaUnavailable, bailianLoginHint)
+		return nil, errBailianNotLogined
 	}
 	outer, _ := payload.(map[string]any)
 	data, _ := outer["data"].(map[string]any)
@@ -103,8 +227,7 @@ func (q *Quota) bailianCall(ctx context.Context, token, api string) (any, error)
 func bailianNotLogined(v any) bool {
 	switch t := v.(type) {
 	case string:
-		s := strings.ToLower(t)
-		return s == "notlogined" || s == "bailiangateway.login.notlogined"
+		return strings.Contains(strings.ToLower(t), "notlogined")
 	case map[string]any:
 		for _, val := range t {
 			if bailianNotLogined(val) {
@@ -121,14 +244,7 @@ func bailianNotLogined(v any) bool {
 	return false
 }
 
-func bailianError(payload any) string {
-	if m, ok := payload.(map[string]any); ok {
-		for _, key := range []string{"message", "errorMsg", "errMsg"} {
-			if s, ok := m[key].(string); ok && s != "" {
-				return "百炼控制台额度接口未返回成功结果：" + s
-			}
-		}
-	}
+func bailianError(_ any) string {
 	return "百炼控制台额度接口未返回成功结果，请确认控制台登录状态后重试"
 }
 
@@ -163,7 +279,7 @@ func bailianMetersOf(usage, subscription, config any) ([]Meter, error) {
 			continue
 		}
 		ratio, ok := numberOf(raw)
-		if !ok || ratio < 0 || ratio > 1 {
+		if !ok || math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 {
 			return nil, apperr.New(apperr.QuotaUnavailable,
 				"百炼额度使用比例无效，必须在 0 到 1 之间")
 		}
@@ -178,7 +294,7 @@ func bailianMetersOf(usage, subscription, config any) ([]Meter, error) {
 		}
 		if totalRaw, ok := plan[w.quota]; ok && totalRaw != nil {
 			total, ok := numberOf(totalRaw)
-			if !ok || total < 0 {
+			if !ok || math.IsNaN(total) || math.IsInf(total, 0) || total < 0 {
 				return nil, apperr.New(apperr.QuotaUnavailable, "百炼套餐总额度无效")
 			}
 			usedCredits := ratio * total
@@ -190,7 +306,7 @@ func bailianMetersOf(usage, subscription, config any) ([]Meter, error) {
 		}
 		if resetRaw, ok := u[w.prefix+"ResetTime"]; ok && resetRaw != nil {
 			ms, ok := numberOf(resetRaw)
-			if !ok || ms < 0 {
+			if !ok || math.IsNaN(ms) || math.IsInf(ms, 0) || ms < 0 || ms >= math.MaxInt64 {
 				return nil, apperr.New(apperr.QuotaUnavailable, "百炼额度重置时间无效")
 			}
 			t := time.UnixMilli(int64(ms)).UTC()

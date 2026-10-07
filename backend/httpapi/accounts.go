@@ -1,13 +1,17 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/credential"
+	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
 type accountRequest struct {
@@ -19,6 +23,7 @@ type accountRequest struct {
 	Headers       map[string]string      `json:"headers"`
 	QuotaSettings *account.QuotaSettings `json:"quota_settings"`
 	Enabled       *bool                  `json:"enabled"`
+	VerifyBailian bool                   `json:"verify_bailian,omitempty"`
 }
 
 // input 把请求体转成仓储入参。凭据支持两种写法：完整 credential 对象，
@@ -43,9 +48,45 @@ func (r accountRequest) input(name string) (account.Input, error) {
 		if err != nil {
 			return account.Input{}, apperr.New(apperr.InvalidCredential, err.Error())
 		}
+		// Verification state is server-owned, regardless of submitted JSON.
+		cred.ConsoleVerifiedAt = time.Time{}
 		in.Credential = cred
 	case r.APIKey != "":
 		in.Credential = credential.Credential{Kind: "api_key", APIKey: r.APIKey}
+	}
+	return in, nil
+}
+
+// 编辑态先合并旧凭据，认证失败时不保存任何表单改动。
+func (h handler) prepareBailian(ctx context.Context, in account.Input, verify bool, existing *account.Account) (account.Input, error) {
+	wantsVerify := verify || strings.TrimSpace(in.Credential.BailianAccessKeyID) != "" || strings.TrimSpace(in.Credential.BailianAccessKeySecret) != ""
+	if existing != nil && in.ProviderID == "" {
+		in.ProviderID = existing.ProviderID
+	}
+	if wantsVerify && in.ProviderID != "bailian.cn.subscribe.token-plan" {
+		return account.Input{}, apperr.New(apperr.InvalidRequest, "百炼认证验证仅支持 bailian.cn.subscribe.token-plan")
+	}
+	if in.ProviderID != "bailian.cn.subscribe.token-plan" {
+		return in, nil
+	}
+	in.Credential.BailianAccessKeyID = strings.TrimSpace(in.Credential.BailianAccessKeyID)
+	in.Credential.BailianAccessKeySecret = strings.TrimSpace(in.Credential.BailianAccessKeySecret)
+	if existing != nil && existing.ProviderID == in.ProviderID {
+		if in.Credential.Kind == "" {
+			in.Credential = existing.Credential
+		} else if in.Credential.Kind == provider.CredAPIKey && existing.Credential.Kind == provider.CredAPIKey {
+			in.Credential = account.MergeAPIKeyCredential(in.Credential, existing.Credential)
+		}
+	}
+	if wantsVerify {
+		if h.Quota == nil {
+			return account.Input{}, apperr.New(apperr.QuotaUnavailable, "百炼认证验证不可用")
+		}
+		cred, err := h.Quota.VerifyBailian(ctx, in.Credential)
+		if err != nil {
+			return account.Input{}, err
+		}
+		in.Credential = cred
 	}
 	return in, nil
 }
@@ -101,6 +142,11 @@ func (h handler) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	in, err = h.prepareBailian(r.Context(), in, req.VerifyBailian, nil)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	acc, err := h.Accounts.Create(r.Context(), in)
 	if err != nil {
 		writeError(w, err)
@@ -120,6 +166,16 @@ func (h handler) updateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	in, err := req.input(name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	existing, err := h.Accounts.Get(r.Context(), name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	in, err = h.prepareBailian(r.Context(), in, req.VerifyBailian, &existing)
 	if err != nil {
 		writeError(w, err)
 		return

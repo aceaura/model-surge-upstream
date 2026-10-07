@@ -192,10 +192,33 @@ func mergeAPIKeyCredential(in, existing credential.Credential) credential.Creden
 	if in.WebRefreshToken == "" {
 		in.WebRefreshToken = existing.WebRefreshToken
 	}
-	if strings.TrimSpace(in.ConsoleAccessToken) == "" {
+	if strings.TrimSpace(in.BailianAccessKeyID) == "" {
+		in.BailianAccessKeyID = existing.BailianAccessKeyID
+	}
+	if strings.TrimSpace(in.BailianAccessKeySecret) == "" {
+		in.BailianAccessKeySecret = existing.BailianAccessKeySecret
+	}
+	keysUnchanged := in.BailianAccessKeyID == existing.BailianAccessKeyID &&
+		in.BailianAccessKeySecret == existing.BailianAccessKeySecret
+	if !keysUnchanged {
+		// HTTP strips submitted timestamps before verification; a nonzero
+		// timestamp here is backend-owned. Mint may return the same token.
+		if in.ConsoleVerifiedAt.IsZero() || strings.TrimSpace(in.ConsoleAccessToken) == "" {
+			in.ConsoleAccessToken = ""
+			in.ConsoleVerifiedAt = time.Time{}
+		}
+	} else if strings.TrimSpace(in.ConsoleAccessToken) == "" {
 		in.ConsoleAccessToken = existing.ConsoleAccessToken
+		in.ConsoleVerifiedAt = existing.ConsoleVerifiedAt
+	} else if in.ConsoleAccessToken == existing.ConsoleAccessToken && in.ConsoleVerifiedAt.IsZero() {
+		in.ConsoleVerifiedAt = existing.ConsoleVerifiedAt
 	}
 	return in
+}
+
+// 调用方须先清除客户端提交的认证时间。
+func MergeAPIKeyCredential(in, existing credential.Credential) credential.Credential {
+	return mergeAPIKeyCredential(in, existing)
 }
 
 func mergeKiroCredential(in, existing credential.Credential) credential.Credential {
@@ -212,8 +235,9 @@ func mergeKiroCredential(in, existing credential.Credential) credential.Credenti
 	return in
 }
 
-// UpdateCredential 只回写凭据字段:OAuth 续期产物(access_token/expiry/轮换
-// 的 refresh_token)落库,其余字段不动。续期单飞在 oauth 包内,这里不做去重。
+// UpdateCredential persists runtime credential rotations only (OAuth tokens or
+// Bailian console token/verification state), leaving all account settings intact.
+// Refresh serialization belongs to the calling service.
 func (r *Repo) UpdateCredential(ctx context.Context, name string, cred credential.Credential) error {
 	acc, err := r.Get(ctx, name)
 	if err != nil {

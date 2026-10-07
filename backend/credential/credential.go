@@ -33,14 +33,16 @@ type Credential struct {
 	// 网关可查,API key 拿不到),api_key 形态账号的可选附加项;配额
 	// 查询链用它换短效 access_token,令牌本体不落库轮换(上游无硬轮换)。
 	WebRefreshToken string `json:"web_refresh_token,omitempty"`
-	// ConsoleAccessToken 是百炼 CLI 的控制台 access_token,仅用于个人
-	// Token Plan 额度查询;不同于推理 API key,不自动续期。
-	ConsoleAccessToken string `json:"console_access_token,omitempty"`
-	ProfileARN         string `json:"profile_arn,omitempty"`
-	Region             string `json:"region,omitempty"`
-	APIRegion          string `json:"api_region,omitempty"`
-	ClientID           string `json:"client_id,omitempty"`
-	ClientSecret       string `json:"client_secret,omitempty"`
+	// 额度 Token 与推理 Key 分离，AK/SK 用于二进制内置续期。
+	ConsoleAccessToken     string    `json:"console_access_token,omitempty"`
+	BailianAccessKeyID     string    `json:"bailian_access_key_id,omitempty"`
+	BailianAccessKeySecret string    `json:"bailian_access_key_secret,omitempty"`
+	ConsoleVerifiedAt      time.Time `json:"console_verified_at,omitzero"`
+	ProfileARN             string    `json:"profile_arn,omitempty"`
+	Region                 string    `json:"region,omitempty"`
+	APIRegion              string    `json:"api_region,omitempty"`
+	ClientID               string    `json:"client_id,omitempty"`
+	ClientSecret           string    `json:"client_secret,omitempty"`
 }
 
 // Decode 两步解码：先取 kind，再按 kind 校验具体字段。
@@ -84,6 +86,9 @@ func (c Credential) Validate() error {
 	case provider.CredAPIKey:
 		if strings.TrimSpace(c.APIKey) == "" {
 			return fmt.Errorf("credential api_key is required for kind %q", provider.CredAPIKey)
+		}
+		if (strings.TrimSpace(c.BailianAccessKeyID) == "") != (strings.TrimSpace(c.BailianAccessKeySecret) == "") {
+			return fmt.Errorf("bailian access key ID and secret must be provided together")
 		}
 		return nil
 	case provider.CredOAuthRefresh:
@@ -152,41 +157,47 @@ func (c Credential) Redact() Redacted {
 		refresh = maskConsoleToken(c.RefreshToken)
 	}
 	return Redacted{
-		Kind:               c.Kind,
-		APIKey:             Mask(c.APIKey),
-		RefreshToken:       refresh,
-		AccountID:          c.AccountID,
-		WebRefreshToken:    Mask(c.WebRefreshToken),
-		ConsoleAccessToken: maskConsoleToken(c.ConsoleAccessToken),
-		ProfileARN:         c.ProfileARN,
-		Region:             c.Region,
-		APIRegion:          c.APIRegion,
-		ClientID:           c.ClientID,
-		ClientSecret:       maskConsoleToken(c.ClientSecret),
+		Kind:                   c.Kind,
+		APIKey:                 Mask(c.APIKey),
+		RefreshToken:           refresh,
+		AccountID:              c.AccountID,
+		WebRefreshToken:        Mask(c.WebRefreshToken),
+		ConsoleAccessToken:     maskConsoleToken(c.ConsoleAccessToken),
+		BailianAccessKeyID:     maskConsoleToken(c.BailianAccessKeyID),
+		BailianAccessKeySecret: maskConsoleToken(c.BailianAccessKeySecret),
+		ConsoleVerifiedAt:      c.ConsoleVerifiedAt,
+		ProfileARN:             c.ProfileARN,
+		Region:                 c.Region,
+		APIRegion:              c.APIRegion,
+		ClientID:               c.ClientID,
+		ClientSecret:           maskConsoleToken(c.ClientSecret),
 	}
 }
 
 // String 保证凭据不会因日志格式化而泄露。
 func (c Credential) String() string {
 	v := c.Redact()
-	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s WebRefreshToken:%s ConsoleAccessToken:%s ClientSecret:%s}",
-		c.Kind, v.APIKey, v.RefreshToken, maskConsoleToken(c.AccessToken), v.WebRefreshToken, v.ConsoleAccessToken, v.ClientSecret)
+	return fmt.Sprintf("Credential{Kind:%q APIKey:%s RefreshToken:%s AccessToken:%s WebRefreshToken:%s ConsoleAccessToken:%s BailianAccessKeyID:%s BailianAccessKeySecret:%s ClientSecret:%s}",
+		c.Kind, v.APIKey, v.RefreshToken, maskConsoleToken(c.AccessToken), v.WebRefreshToken, v.ConsoleAccessToken, v.BailianAccessKeyID, v.BailianAccessKeySecret, v.ClientSecret)
 }
 
 // Redacted 脱敏视图。AccessToken 是短效续期产物,不下发;AccountID 是标识
 // 不是秘密,明文下发(管理面展示授权归属)。
 type Redacted struct {
-	Kind               provider.CredentialKind `json:"kind"`
-	APIKey             string                  `json:"api_key,omitempty"`
-	RefreshToken       string                  `json:"refresh_token,omitempty"`
-	AccountID          string                  `json:"account_id,omitempty"`
-	WebRefreshToken    string                  `json:"web_refresh_token,omitempty"`
-	ConsoleAccessToken string                  `json:"console_access_token,omitempty"`
-	ProfileARN         string                  `json:"profile_arn,omitempty"`
-	Region             string                  `json:"region,omitempty"`
-	APIRegion          string                  `json:"api_region,omitempty"`
-	ClientID           string                  `json:"client_id,omitempty"`
-	ClientSecret       string                  `json:"client_secret,omitempty"`
+	Kind                   provider.CredentialKind `json:"kind"`
+	APIKey                 string                  `json:"api_key,omitempty"`
+	RefreshToken           string                  `json:"refresh_token,omitempty"`
+	AccountID              string                  `json:"account_id,omitempty"`
+	WebRefreshToken        string                  `json:"web_refresh_token,omitempty"`
+	ConsoleAccessToken     string                  `json:"console_access_token,omitempty"`
+	BailianAccessKeyID     string                  `json:"bailian_access_key_id,omitempty"`
+	BailianAccessKeySecret string                  `json:"bailian_access_key_secret,omitempty"`
+	ConsoleVerifiedAt      time.Time               `json:"console_verified_at,omitzero"`
+	ProfileARN             string                  `json:"profile_arn,omitempty"`
+	Region                 string                  `json:"region,omitempty"`
+	APIRegion              string                  `json:"api_region,omitempty"`
+	ClientID               string                  `json:"client_id,omitempty"`
+	ClientSecret           string                  `json:"client_secret,omitempty"`
 }
 
 // 控制台令牌不保留任何前后缀,避免暴露 JWT 片段。

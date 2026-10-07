@@ -290,6 +290,85 @@ func TestMergeAPIKeyCredentialConsoleAccessToken(t *testing.T) {
 	}
 }
 
+func TestMergeBailianAuthKeys(t *testing.T) {
+	existing := apiKey("sk-inference")
+	existing.BailianAccessKeyID, existing.BailianAccessKeySecret = "old-id", "old-secret"
+	existing.ConsoleAccessToken = "old-token"
+	existing.ConsoleVerifiedAt = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for _, blank := range []string{"", "   "} {
+		in := credential.Credential{Kind: provider.CredAPIKey, BailianAccessKeyID: blank, BailianAccessKeySecret: blank}
+		if got := mergeAPIKeyCredential(in, existing); got != existing {
+			t.Fatal("blank edit must preserve all authentication fields")
+		}
+		in.APIKey = "new-inference-key"
+		got := mergeAPIKeyCredential(in, existing)
+		if got.APIKey != in.APIKey || got.ConsoleAccessToken != existing.ConsoleAccessToken || !got.ConsoleVerifiedAt.Equal(existing.ConsoleVerifiedAt) {
+			t.Fatal("inference key changes must not invalidate console authentication")
+		}
+	}
+	for _, change := range []string{"id", "secret"} {
+		in := credential.Credential{Kind: provider.CredAPIKey, ConsoleAccessToken: "unverified-token"}
+		if change == "id" {
+			in.BailianAccessKeyID = "new-id"
+		} else {
+			in.BailianAccessKeySecret = "new-secret"
+		}
+		got := mergeAPIKeyCredential(in, existing)
+		if got.ConsoleAccessToken != "" || !got.ConsoleVerifiedAt.IsZero() || got.APIKey != existing.APIKey {
+			t.Fatal("changed AK/SK must discard unverified token and timestamp")
+		}
+		in.ConsoleAccessToken, in.ConsoleVerifiedAt = "backend-new-token", existing.ConsoleVerifiedAt.Add(time.Hour)
+		got = mergeAPIKeyCredential(in, existing)
+		if got.ConsoleAccessToken != in.ConsoleAccessToken || !got.ConsoleVerifiedAt.Equal(in.ConsoleVerifiedAt) {
+			t.Fatal("backend verification must survive changed-key merge")
+		}
+		in.ConsoleAccessToken = existing.ConsoleAccessToken
+		got = mergeAPIKeyCredential(in, existing)
+		if got.ConsoleAccessToken != existing.ConsoleAccessToken || !got.ConsoleVerifiedAt.Equal(in.ConsoleVerifiedAt) {
+			t.Fatal("successful backend verification may mint the same token value")
+		}
+	}
+}
+
+func TestBailianCredentialJSONBRoundTrip(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+	in := input("bl", "bailian.cn.subscribe.token-plan")
+	in.Credential.BailianAccessKeyID, in.Credential.BailianAccessKeySecret = "stored-id", "stored-secret"
+	in.Credential.ConsoleAccessToken = "first-token"
+	in.Credential.ConsoleVerifiedAt = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	if _, err := repo.Create(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	cred := in.Credential
+	cred.ConsoleAccessToken = "rotated-token"
+	cred.ConsoleVerifiedAt = cred.ConsoleVerifiedAt.Add(time.Hour)
+	if err := repo.UpdateCredential(ctx, in.Name, cred); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh repo with no Redis account cache must restore from JSONB.
+	fresh := NewRepo(repo.pool, cache.New(nil, time.Minute))
+	got, err := fresh.Get(ctx, in.Name)
+	if err != nil || got.Credential != cred {
+		t.Fatalf("restart restoration: %v", err)
+	}
+	updated, err := fresh.Update(ctx, Input{Name: in.Name, Credential: credential.Credential{Kind: provider.CredAPIKey}, Enabled: true})
+	if err != nil || updated.Credential != cred {
+		t.Fatalf("blank edit: %v", err)
+	}
+	if updated.View().Credential.BailianAccessKeyID != "***" || updated.View().Credential.BailianAccessKeySecret != "***" {
+		t.Fatal("account view must mask persisted AK/SK")
+	}
+	cred.ConsoleAccessToken, cred.ConsoleVerifiedAt = "", time.Time{}
+	if err := fresh.UpdateCredential(ctx, in.Name, cred); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := fresh.List(ctx)
+	if err != nil || len(persisted) != 1 || persisted[0].Credential != cred {
+		t.Fatalf("cleared authentication must persist without dropping keys: %v", err)
+	}
+}
+
 func TestUpdateConsoleAccessToken(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()

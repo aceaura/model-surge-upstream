@@ -64,6 +64,16 @@ func (s *stubAccounts) Get(_ context.Context, name string) (account.Account, err
 	return acc, nil
 }
 
+func (s *stubAccounts) UpdateCredential(ctx context.Context, name string, cred credential.Credential) error {
+	acc, err := s.Get(ctx, name)
+	if err != nil {
+		return err
+	}
+	acc.Credential = cred
+	s.data[name] = acc
+	return nil
+}
+
 func (s *stubAccounts) List(context.Context) ([]account.Account, error) {
 	out := []account.Account{}
 	seen := map[string]bool{}
@@ -203,12 +213,24 @@ func (s *stubModels) Delete(_ context.Context, id string) error {
 }
 
 type stubQuota struct {
-	report   quota.Report
-	err      error
-	forgot   []string
-	queries  int
-	cached   quota.Report
-	hasCache bool
+	report    quota.Report
+	err       error
+	forgot    []string
+	queries   int
+	cached    quota.Report
+	hasCache  bool
+	verified  []credential.Credential
+	verifyErr error
+}
+
+func (s *stubQuota) VerifyBailian(_ context.Context, cred credential.Credential) (credential.Credential, error) {
+	s.verified = append(s.verified, cred)
+	if s.verifyErr != nil {
+		return credential.Credential{}, s.verifyErr
+	}
+	cred.ConsoleAccessToken = "console-backend-minted"
+	cred.ConsoleVerifiedAt = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	return cred, nil
 }
 
 func (s *stubQuota) Query(context.Context, string) (quota.Report, error) {
@@ -354,6 +376,150 @@ func codeOf(t *testing.T, rec *httptest.ResponseRecorder) apperr.Code {
 }
 
 // ---- 鉴权 ----
+
+func TestBailianVerifyAndSaveCRUD(t *testing.T) {
+	f := newFixture(t)
+	body := `{"name":"bl","provider_id":"bailian.cn.subscribe.token-plan","credential":{"kind":"api_key","api_key":"sk-inference","bailian_access_key_id":"private-id","bailian_access_key_secret":"private-secret","console_access_token":"user-token","console_verified_at":"2099-01-01T00:00:00Z"}}`
+	rec := f.do(t, "POST", "/admin/accounts", adminKey, body)
+	if rec.Code != http.StatusCreated || len(f.quota.verified) != 1 {
+		t.Fatalf("create verify/save: %d %s", rec.Code, rec.Body.String())
+	}
+	if !f.quota.verified[0].ConsoleVerifiedAt.IsZero() {
+		t.Fatal("user timestamp reached verifier")
+	}
+	persisted := f.accounts.data["bl"].Credential
+	if persisted.ConsoleAccessToken != "console-backend-minted" || persisted.ConsoleVerifiedAt.Year() != 2026 {
+		t.Fatal("must persist server-produced authentication only")
+	}
+	for _, path := range []string{"/admin/accounts", "/admin/accounts/bl"} {
+		view := f.do(t, "GET", path, adminKey, "").Body.String()
+		for _, secret := range []string{"private-id", "private-secret", persisted.ConsoleAccessToken} {
+			if strings.Contains(view, secret) {
+				t.Fatal("management view leaked a secret")
+			}
+		}
+		if !strings.Contains(view, `"bailian_access_key_id":"***"`) || !strings.Contains(view, `"bailian_access_key_secret":"***"`) || !strings.Contains(view, `"console_verified_at":"2026-10-07T12:00:00Z"`) {
+			t.Fatal("redacted presence and timestamp missing from account view")
+		}
+	}
+	blank := `{"credential":{"kind":"api_key","api_key":" ","bailian_access_key_id":" ","bailian_access_key_secret":" ","console_verified_at":"2099-01-01T00:00:00Z"}}`
+	rec = f.do(t, "PUT", "/admin/accounts/bl", adminKey, blank)
+	if rec.Code != http.StatusOK || f.accounts.data["bl"].Credential != persisted || len(f.quota.verified) != 1 {
+		t.Fatal("blank edit must preserve verified credentials without re-verifying")
+	}
+	rec = f.do(t, "PUT", "/admin/accounts/bl", adminKey, `{"verify_bailian":true}`)
+	if rec.Code != http.StatusOK || len(f.quota.verified) != 2 || f.quota.verified[1].APIKey != "sk-inference" || f.quota.verified[1].BailianAccessKeySecret != "private-secret" {
+		t.Fatal("explicit verify must resolve all existing credentials")
+	}
+	rec = f.do(t, "PUT", "/admin/accounts/bl", adminKey, `{"credential":{"kind":"api_key","bailian_access_key_id":"new-private-id"}}`)
+	last := f.quota.verified[len(f.quota.verified)-1]
+	if rec.Code != http.StatusOK || last.APIKey != "sk-inference" || last.BailianAccessKeySecret != "private-secret" || last.BailianAccessKeyID != "new-private-id" || !last.ConsoleVerifiedAt.IsZero() || last.ConsoleAccessToken != "" {
+		t.Fatal("partial AK edit must preserve SK/inference key and invalidate old authentication before verification")
+	}
+	before := f.accounts.data["bl"]
+	f.quota.verifyErr = apperr.New(apperr.QuotaUnavailable, "verification failed")
+	rec = f.do(t, "PUT", "/admin/accounts/bl", adminKey, `{"enabled":false,"api_key":"sk-new-inference","verify_bailian":true}`)
+	if rec.Code != http.StatusBadGateway || f.accounts.data["bl"].Credential != before.Credential || f.accounts.data["bl"].Enabled != before.Enabled {
+		t.Fatal("failed verification must not save any mutation")
+	}
+	rec = f.do(t, "POST", "/admin/accounts", adminKey, strings.Replace(body, `"bl"`, `"failed-create"`, 1))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatal("failed create verification must fail")
+	}
+	if _, exists := f.accounts.data["failed-create"]; exists {
+		t.Fatal("failed verification created an account")
+	}
+}
+
+func TestBailianVerificationCannotBeForgedOrUsedForOtherProviders(t *testing.T) {
+	f := newFixture(t)
+	body := `{"name":"bl","provider_id":"bailian.cn.subscribe.token-plan","credential":{"kind":"api_key","api_key":"sk-inference","console_access_token":"user-token","console_verified_at":"2099-01-01T00:00:00Z"}}`
+	if rec := f.do(t, "POST", "/admin/accounts", adminKey, body); rec.Code != http.StatusCreated {
+		t.Fatal(rec.Body.String())
+	}
+	if !f.accounts.data["bl"].Credential.ConsoleVerifiedAt.IsZero() || len(f.quota.verified) != 0 {
+		t.Fatal("user timestamp must never grant verified state")
+	}
+	if rec := f.do(t, "PUT", "/admin/accounts/bl", adminKey, `{"credential":{"kind":"api_key","console_access_token":"another-user-token","console_verified_at":"2099-01-01T00:00:00Z"}}`); rec.Code != http.StatusOK {
+		t.Fatal(rec.Body.String())
+	}
+	if !f.accounts.data["bl"].Credential.ConsoleVerifiedAt.IsZero() {
+		t.Fatal("edit timestamp must be server-owned")
+	}
+	for _, body := range []string{`{"verify_bailian":true}`, `{"credential":{"kind":"api_key","bailian_access_key_id":"id","bailian_access_key_secret":"secret"}}`} {
+		rec := f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, body)
+		if rec.Code != http.StatusBadRequest || len(f.quota.verified) != 0 || f.accounts.data["kimi-1"].Credential.APIKey != secret {
+			t.Fatal("Bailian verification must be provider-restricted without saving")
+		}
+	}
+}
+
+type bailianHTTPTransport func(*http.Request) (*http.Response, error)
+
+func (f bailianHTTPTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestBailianCRUDWithBuiltinVerifierIntegration(t *testing.T) {
+	mints := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/modelstudio/cli/generateAccessToken" {
+			mints++
+			if !strings.Contains(r.Header.Get("Authorization"), "Credential=private-id,") {
+				t.Error("built-in verifier did not sign using account AK")
+			}
+			_, _ = w.Write([]byte(`{"cliAccessToken":"integration-console-token"}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer integration-console-token" {
+			t.Error("quota must not use inference key")
+		}
+		payload := `{"per5HourPercentage":0.5}`
+		if strings.HasSuffix(r.URL.Query().Get("api"), "/subscription") {
+			payload = `{"specCode":"pro"}`
+		}
+		if strings.HasSuffix(r.URL.Query().Get("api"), "/quota-config") {
+			payload = `{"pro":{"five_hour":100}}`
+		}
+		_, _ = w.Write([]byte(`{"data":{"success":true,"DataV2":{"data":{"success":true,"code":"SUCCESS","data":` + payload + `}}}}`))
+	}))
+	defer upstream.Close()
+	f := newFixture(t)
+	q := quota.New(f.accounts, time.Minute)
+	client := &http.Client{Transport: bailianHTTPTransport(func(r *http.Request) (*http.Response, error) {
+		clone := r.Clone(r.Context())
+		clone.URL.Scheme, clone.URL.Host = "http", strings.TrimPrefix(upstream.URL, "http://")
+		return http.DefaultTransport.RoundTrip(clone)
+	})}
+	q.SetClient(client)
+	f.server = NewServer(Deps{Accounts: f.accounts, Quota: q, UpstreamModels: f.upstream, AdminKey: adminKey})
+	body := `{"name":"bl","provider_id":"bailian.cn.subscribe.token-plan","api_key":"sk-inference","verify_bailian":true,"credential":{"kind":"api_key","api_key":"sk-inference","bailian_access_key_id":"private-id","bailian_access_key_secret":"private-secret"}}`
+	rec := f.do(t, "POST", "/admin/accounts", adminKey, body)
+	if rec.Code != http.StatusCreated || mints != 1 || f.accounts.data["bl"].Credential.ConsoleVerifiedAt.IsZero() {
+		t.Fatalf("built-in CRUD verification: %d %s", rec.Code, rec.Body.String())
+	}
+	// Simulate process restart: restore serialized account secrets, new service,
+	// no quota cache or CLI configuration. GET still exposes only masked state.
+	raw, _ := json.Marshal(f.accounts.data)
+	var restored map[string]account.Account
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	f.accounts = &stubAccounts{data: restored}
+	q = quota.New(f.accounts, time.Minute)
+	q.SetClient(client)
+	f.server = NewServer(Deps{Accounts: f.accounts, Quota: q, UpstreamModels: f.upstream, AdminKey: adminKey})
+	view := f.do(t, "GET", "/admin/accounts/bl", adminKey, "")
+	if view.Code != http.StatusOK || !strings.Contains(view.Body.String(), "console_verified_at") || strings.Contains(view.Body.String(), "integration-console-token") {
+		t.Fatal("restart lost verified metadata or exposed token")
+	}
+	rec = f.do(t, "PUT", "/admin/accounts/bl", adminKey, `{"credential":{"kind":"api_key"}}`)
+	if rec.Code != http.StatusOK || f.accounts.data["bl"].Credential.APIKey != "sk-inference" {
+		t.Fatal("blank edit lost inference key")
+	}
+	rec = f.do(t, "GET", "/admin/accounts/bl/quota", adminKey, "")
+	if rec.Code != http.StatusOK || mints != 1 || !strings.Contains(rec.Body.String(), `"remaining":50`) {
+		t.Fatalf("restart restored account auth: %d %s", rec.Code, rec.Body.String())
+	}
+}
 
 func TestKeysAreNotInterchangeable(t *testing.T) {
 	f := newFixture(t)
