@@ -168,7 +168,6 @@ class Account {
     this.accountId = '',
     this.needsReauth = false,
     this.maskedWebRefreshToken = '',
-    this.maskedConsoleAccessToken = '',
     this.profileArn = '',
     this.region = 'us-east-1',
     this.apiRegion = '',
@@ -204,9 +203,6 @@ class Account {
   /// 空串表示未配置,额度查询不出「本月」计量。
   final String maskedWebRefreshToken;
 
-  /// 百炼控制台额度查询 token(服务端仅回纯星号);不参与推理鉴权。
-  final String maskedConsoleAccessToken;
-
   /// Kiro 登录态:Profile 可由 Desktop 刷新回填;认证区与推理区分离。
   final String profileArn;
   final String region;
@@ -233,8 +229,6 @@ class Account {
       accountId: credential['account_id'] as String? ?? '',
       needsReauth: json['needs_reauth'] as bool? ?? false,
       maskedWebRefreshToken: credential['web_refresh_token'] as String? ?? '',
-      maskedConsoleAccessToken:
-          credential['console_access_token'] as String? ?? '',
       profileArn: credential['profile_arn'] as String? ?? '',
       region: credential['region'] as String? ?? 'us-east-1',
       apiRegion: credential['api_region'] as String? ?? '',

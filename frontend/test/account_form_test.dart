@@ -170,7 +170,6 @@ final accountBailian = Account.fromJson(const {
   'credential': {
     'kind': 'api_key',
     'api_key': 'sk-b***n',
-    'console_access_token': '********',
   },
   'enabled': true,
 });
@@ -571,7 +570,6 @@ void main() {
     expect(credential['region'], 'us-east-1');
     expect(file.readAsStringSync(), before);
     expect(debugCodexHomeOverride, isNull);
-    expect(debugBailianHomeOverride, isNull);
   });
 
   test('Kiro local SSO import matches hash registration with direct fields taking priority', () {
@@ -864,193 +862,190 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  test('Account parses masked console token and defaults missing token to empty',
-      () {
-    expect(accountBailian.maskedConsoleAccessToken, '********');
-    expect(account.maskedConsoleAccessToken, isEmpty);
-    expect(Account.fromJson({'name': 'minimal'}).maskedConsoleAccessToken,
-        isEmpty);
+  test('bailian Token Plan provider declares quota queryable', () {
     expect(providers.firstWhere((p) => p.id == 'bailian.cn.subscribe.token-plan').quotaQueryable,
         isTrue);
   });
 
-  test('bailian parser selects console token only and follows active_config', () {
-    expect(
-        parseBailianConsoleToken(
-            '{"access_token":" console-token ","api_key":"do-not-import"}'),
-        'console-token');
-    expect(
-        parseBailianConsoleToken('{"active_config":"work",'
-            '"access_token":"default-token",'
-            '"work":{"access_token":"work-token","api_key":"wrong"}}'),
-        'work-token');
-    expect(
-        parseBailianConsoleToken('{"active_config":"default",'
-            '"access_token":"default-token"}'),
-        'default-token');
-    for (final text in [
-      '{"api_key":"secret-api-key"}',
-      '{"access_token":"  "}',
-      '{"access_token":123}',
-      '{"access_token":"********"}',
-      '{"access_token":"bad token"}',
-      '{"active_config":"missing","access_token":"not-active"}',
-      '{"profiles":{"default":{"access_token":"not-supported"}}}',
-      '[{"access_token":"wrong-shape"}]',
-      'secret-invalid-json',
-    ]) {
-      expect(() => parseBailianConsoleToken(text),
-          throwsA(isA<FormatException>().having(
-              (e) => e.message, 'sanitized error', isNot(contains('secret')))));
-    }
+  testWidgets('bailian create payload carries only the API key', (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester, client: recordingClient(captured));
+    await selectCascade(tester,
+        vendor: '百炼', billing: '订阅', region: '中国', plan: 'Token Plan');
+    await tester.enterText(find.byKey(const ValueKey('account-name')), 'bl-new');
+    await tester.enterText(
+        find.byKey(const ValueKey('account-api-key')), ' sk-create ');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['provider_id'], 'bailian.cn.subscribe.token-plan');
+    expect(body.containsKey('api_key'), isFalse);
+    expect(body['credential'], {
+      'kind': 'api_key',
+      'api_key': 'sk-create',
+    });
   });
 
-  testWidgets('bailian optional console field is absent for other providers',
+  testWidgets('bailian edit payload leaves blank API key for backend merge',
       (tester) async {
-    for (final editing in [account, accountKimi, accountOAuth]) {
+    final captured = <String>[];
+    await pumpForm(tester,
+        editing: accountBailian, client: recordingClient(captured));
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    final body = jsonDecode(captured.single) as Map<String, dynamic>;
+    expect(body['credential'], {
+      'kind': 'api_key',
+      'api_key': '',
+    }, reason: '编辑时留空按字段保留,不会把掩码提交给后端');
+  });
+
+  final whereCmd = Platform.isWindows ? 'where' : 'which';
+
+  test('bl ensure+login installs missing CLI then validates AK/SK', () async {
+    final calls = <String>[];
+    debugBlExecOverride = (exe, args) async {
+      calls.add([exe, ...args].join(' '));
+      final missing = exe == whereCmd && args.first == 'bl';
+      return ProcessResult(1, missing ? 1 : 0, '', '');
+    };
+    addTearDown(() => debugBlExecOverride = null);
+    final error = await ensureBlAndLogin('ak-id', 'ak-secret');
+    expect(error, isNull);
+    expect(calls, [
+      '$whereCmd bl',
+      '$whereCmd npm',
+      'npm install -g bailian-cli',
+      'bl auth login --open-api --access-key-id ak-id'
+          ' --access-key-secret ak-secret',
+      'bl auth generate-access-token',
+    ]);
+  });
+
+  test('bl ensure+login skips install when CLI already present', () async {
+    final calls = <String>[];
+    debugBlExecOverride = (exe, args) async {
+      calls.add([exe, ...args].join(' '));
+      return ProcessResult(1, 0, '', '');
+    };
+    addTearDown(() => debugBlExecOverride = null);
+    expect(await ensureBlAndLogin('ak-id', 'ak-secret'), isNull);
+    expect(calls, hasLength(3));
+    expect(calls.first, '$whereCmd bl');
+    expect(calls.any((c) => c.startsWith('npm ')), isFalse);
+  });
+
+  test('bl ensure+login reports missing Node.js when neither tool exists',
+      () async {
+    debugBlExecOverride =
+        (exe, args) async => ProcessResult(1, 1, '', 'not found');
+    addTearDown(() => debugBlExecOverride = null);
+    final error = await ensureBlAndLogin('ak-id', 'ak-secret');
+    expect(error, contains('Node.js'));
+  });
+
+  test('bl ensure+login sanitizes AK/SK out of failure output', () async {
+    debugBlExecOverride = (exe, args) async {
+      if (exe == 'bl') {
+        return ProcessResult(1, 1, '', 'invalid ak-id / ak-secret pair');
+      }
+      return ProcessResult(1, 0, '', '');
+    };
+    addTearDown(() => debugBlExecOverride = null);
+    final error = await ensureBlAndLogin('ak-id', 'ak-secret');
+    expect(error, contains('AccessKey 未通过 bl 验证'));
+    expect(error, isNot(contains('ak-id')));
+    expect(error, isNot(contains('ak-secret')));
+    expect(error, contains('***'));
+  });
+
+  test('bl ensure+login surfaces token mint failure after successful login',
+      () async {
+    debugBlExecOverride = (exe, args) async {
+      final mint = exe == 'bl' && args.contains('generate-access-token');
+      return ProcessResult(1, mint ? 1 : 0, '', mint ? 'pop denied' : '');
+    };
+    addTearDown(() => debugBlExecOverride = null);
+    final error = await ensureBlAndLogin('ak-id', 'ak-secret');
+    expect(error, contains('签发额度 token 失败'));
+    expect(error, contains('pop denied'));
+  });
+
+  Future<void> expandQuotaSection(WidgetTester tester) async {
+    await tester.ensureVisible(find.text('额度查询'));
+    await tester.tap(find.text('额度查询'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('bailian quota section shows AK fields and install button',
+      (tester) async {
+    await pumpForm(tester, editing: accountBailian);
+    await expandQuotaSection(tester);
+    final secretFinder = find.byKey(const ValueKey('bailian-access-key-secret'));
+    expect(find.byKey(const ValueKey('bailian-access-key-id')), findsOneWidget);
+    expect(secretFinder, findsOneWidget);
+    expect(find.byKey(const ValueKey('bailian-bl-install')), findsOneWidget);
+    final input =
+        find.descendant(of: secretFinder, matching: find.byType(TextField));
+    expect(tester.widget<TextField>(input).obscureText, isTrue,
+        reason: 'Secret 默认纯星号,眼睛才亮');
+  });
+
+  testWidgets('bailian AK fields are absent for other providers',
+      (tester) async {
+    for (final editing in [account, accountKimi]) {
       await pumpForm(tester, editing: editing);
-      expect(find.byKey(const ValueKey('account-console-access-token')),
-          findsNothing);
-      expect(find.byKey(const ValueKey('bailian-autofill-cli')), findsNothing);
+      await expandQuotaSection(tester);
+      expect(find.byKey(const ValueKey('bailian-access-key-id')), findsNothing);
+      expect(
+          find.byKey(const ValueKey('bailian-access-key-secret')), findsNothing);
+      expect(find.byKey(const ValueKey('bailian-bl-install')), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
     }
   });
 
-  testWidgets('bailian edit leaves console token empty with pure-star hints',
+  testWidgets('bl button requires both AK fields before running',
       (tester) async {
+    var ran = false;
+    debugBlExecOverride = (exe, args) async {
+      ran = true;
+      return ProcessResult(1, 0, '', '');
+    };
+    addTearDown(() => debugBlExecOverride = null);
     await pumpForm(tester, editing: accountBailian);
-    final finder = find.byKey(const ValueKey('account-console-access-token'));
-    final input = find.descendant(of: finder, matching: find.byType(TextField));
-    var field = tester.widget<TextField>(input);
-    expect(field.controller!.text, isEmpty);
-    expect(field.obscureText, isTrue);
-    expect(field.decoration!.hintText, '************');
-    expect(find.textContaining('仅用于查询百炼控制台额度,不影响推理'), findsOneWidget);
-    expect(find.textContaining('编辑时留空保留原值'), findsOneWidget);
-    expect(find.byKey(const ValueKey('bailian-autofill-cli')), findsOneWidget);
-    await tester.ensureVisible(finder);
-    await tester.tap(find.descendant(of: finder, matching: find.byTooltip('显示')));
-    await tester.pump();
-    field = tester.widget<TextField>(input);
-    expect(field.obscureText, isFalse);
-    expect(field.decoration!.hintText, '********',
-        reason: '后端只给纯星号,眼睛模式也不能回显真实 token');
-    expect(field.controller!.text, isEmpty);
-  });
-
-  for (final token in ['', ' console-create ']) {
-    testWidgets('bailian create payload has optional console token "$token"',
-        (tester) async {
-      final captured = <String>[];
-      await pumpForm(tester, client: recordingClient(captured));
-      await selectCascade(tester,
-          vendor: '百炼', billing: '订阅', region: '中国', plan: 'Token Plan');
-      await tester.enterText(find.byKey(const ValueKey('account-name')), 'bl-new');
-      await tester.enterText(
-          find.byKey(const ValueKey('account-api-key')), ' sk-create ');
-      await tester.enterText(
-          find.byKey(const ValueKey('account-console-access-token')), token);
-      await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
-      await tester.tap(find.widgetWithText(FilledButton, '创建'));
-      await tester.pumpAndSettle();
-      final body = jsonDecode(captured.single) as Map<String, dynamic>;
-      expect(body['provider_id'], 'bailian.cn.subscribe.token-plan');
-      expect(body.containsKey('api_key'), isFalse);
-      expect(body['credential'], {
-        'kind': 'api_key',
-        'api_key': 'sk-create',
-        'console_access_token': token.trim(),
-      });
-    });
-  }
-
-  for (final token in ['', ' console-replacement ']) {
-    testWidgets('bailian edit payload preserves blank fields or replaces token "$token"',
-        (tester) async {
-      final captured = <String>[];
-      await pumpForm(tester,
-          editing: accountBailian, client: recordingClient(captured));
-      await tester.enterText(
-          find.byKey(const ValueKey('account-console-access-token')), token);
-      await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
-      await tester.tap(find.widgetWithText(FilledButton, '保存'));
-      await tester.pumpAndSettle();
-      final body = jsonDecode(captured.single) as Map<String, dynamic>;
-      expect(body['credential'], {
-        'kind': 'api_key',
-        'api_key': '',
-        'console_access_token': token.trim(),
-      }, reason: '编辑时留空按字段保留,不会把掩码提交给后端');
-    });
-  }
-
-  Directory useBailianTempHome() {
-    final dir = Directory.systemTemp.createTempSync('msu-bailian-test');
-    debugBailianHomeOverride = dir.path;
-    addTearDown(() {
-      debugBailianHomeOverride = null;
-      dir.deleteSync(recursive: true);
-    });
-    return dir;
-  }
-
-  testWidgets('bailian CLI autofill reads temporary config without importing API key',
-      (tester) async {
-    final home = useBailianTempHome();
-    expect(bailianCliConfigPath(),
-        '${home.path}${Platform.pathSeparator}.bailian${Platform.pathSeparator}config.json');
-    expect(debugCodexHomeOverride, isNull,
-        reason: '百炼测试覆写与 Codex 来源隔离');
-    final file = File(bailianCliConfigPath());
-    file.parent.createSync(recursive: true);
-    const content = '{"access_token":"cli-console", "api_key":"cli-secret-key"}';
-    file.writeAsStringSync(content);
-    await pumpForm(tester, editing: accountBailian);
-    await tester.enterText(find.byKey(const ValueKey('account-api-key')), 'manual-key');
-    final button = find.byKey(const ValueKey('bailian-autofill-cli'));
+    await expandQuotaSection(tester);
+    final button = find.byKey(const ValueKey('bailian-bl-install'));
     await tester.ensureVisible(button);
     await tester.tap(button);
     await tester.pump();
-    expect(fieldText(tester, 'account-console-access-token'), 'cli-console');
-    expect(fieldText(tester, 'account-api-key'), 'manual-key');
-    expect(file.readAsStringSync(), content, reason: '自动填充只读,不修改 CLI 配置');
-    expect(find.text('已填入百炼 CLI 的额度查询 Token'), findsOneWidget);
+    expect(ran, isFalse);
+    expect(find.text('请先填入 AccessKey ID 与 Secret'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });
 
-  for (final content in <String?>[
-    null,
-    '{"access_token":"secret-invalid-json"',
-    '{"api_key":"secret-api-key"}',
-    '{"access_token":" "}',
-  ]) {
-    testWidgets('bailian CLI error is fixed and sanitized for "$content"',
-        (tester) async {
-      final home = useBailianTempHome();
-      if (content != null) {
-        final file = File(bailianCliConfigPath());
-        file.parent.createSync(recursive: true);
-        file.writeAsStringSync(content);
-      }
-      await pumpForm(tester, editing: accountBailian);
-      await tester.enterText(
-          find.byKey(const ValueKey('account-console-access-token')), 'keep-manual');
-      final button = find.byKey(const ValueKey('bailian-autofill-cli'));
-      await tester.ensureVisible(button);
-      await tester.tap(button);
-      await tester.pump();
-      expect(find.text(content == null
-          ? '无法读取百炼 CLI 配置'
-          : '百炼 CLI 配置无效或缺少额度查询 Token'), findsOneWidget);
-      expect(find.text('请先运行 bl auth login --console'), findsOneWidget);
-      expect(find.textContaining('secret-'), findsNothing);
-      expect(find.textContaining(home.path), findsNothing);
-      expect(fieldText(tester, 'account-console-access-token'), 'keep-manual');
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
-    });
-  }
+  testWidgets('bl button validates filled keys and reports success',
+      (tester) async {
+    debugBlExecOverride =
+        (exe, args) async => ProcessResult(1, 0, '', '');
+    addTearDown(() => debugBlExecOverride = null);
+    await pumpForm(tester, editing: accountBailian);
+    await expandQuotaSection(tester);
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-id')), 'ak-id');
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-secret')), 'ak-secret');
+    final button = find.byKey(const ValueKey('bailian-bl-install'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('AccessKey 验证通过'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
 
   testWidgets('copy prefills config but keeps create semantics', (tester) async {
     await pumpForm(tester, copyFrom: account);
@@ -1812,6 +1807,11 @@ void main() {
         .writeAsStringSync('noise"$token"noise');
     await pumpForm(tester, editing: accountKimi);
 
+    // 网页 token 字段在额度查询分栏里,kimi 样本无节奏配置分栏初始收起,
+    // 先展开再点按钮(折叠态被 ClipRect 裁到零高,点不中)。
+    await tester.ensureVisible(find.text('额度查询'));
+    await tester.tap(find.text('额度查询'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const ValueKey('kimi-autofill-desktop')));
     await tester.tap(find.byKey(const ValueKey('kimi-autofill-desktop')));
     await tester.pump();

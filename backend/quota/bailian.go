@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ const (
 // bailianMeters 聚合三接口出窗口计量。任一接口失败整份报告不可用:
 // 窗口总额依赖 subscription/quota-config,缺一就会报错数字。
 func bailianMeters(ctx context.Context, q *Quota, spec provider.Spec, acc account.Account) ([]Meter, error) {
-	token := strings.TrimSpace(acc.Credential.ConsoleAccessToken)
+	token := bailianConsoleToken(acc)
 	if token == "" {
 		return nil, apperr.New(apperr.InvalidRequest,
 			"缺少百炼控制台 access_token，请从百炼 CLI 获取并配置 console_access_token（不是推理 API Key）")
@@ -40,6 +41,25 @@ func bailianMeters(ctx context.Context, q *Quota, spec provider.Spec, acc accoun
 		payloads[i] = p
 	}
 	return bailianMetersOf(payloads[0], payloads[1], payloads[2])
+}
+
+// bailianConsoleToken 取控制台 access_token:MSU_BAILIAN_CLI_CONFIG 指向
+// bl CLI 的 config.json 时优先读它——bl 撞到过期会用已存 AK/SK 自动续期
+// 并写回该文件,直读它就永远拿到新鲜 token;读不到回落账号落库值。
+func bailianConsoleToken(acc account.Account) string {
+	if p := strings.TrimSpace(os.Getenv("MSU_BAILIAN_CLI_CONFIG")); p != "" {
+		if raw, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				AccessToken string `json:"access_token"`
+			}
+			if json.Unmarshal(raw, &cfg) == nil {
+				if t := strings.TrimSpace(cfg.AccessToken); t != "" {
+					return t
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(acc.Credential.ConsoleAccessToken)
 }
 
 // bailianCall 调一个逻辑接口并拆双层信封:外层 data.success 与内层

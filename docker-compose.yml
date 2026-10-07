@@ -37,6 +37,12 @@ services:
       MSU_ADMIN_KEY: ${MSU_ADMIN_KEY:?MSU_ADMIN_KEY is required}
       MSU_DELIVERY_KEY: ${MSU_DELIVERY_KEY:?MSU_DELIVERY_KEY is required}
       MSU_LISTEN: ":8080"
+      # 百炼 CLI config 直读:bl 撞过期自动续期写回该文件,额度查询优先
+      # 取其中 access_token,免去人工重导。宿主路径可用 MSU_BAILIAN_CLI_DIR
+      # 覆盖,默认 Windows 本机位置。
+      MSU_BAILIAN_CLI_CONFIG: /run/bailian-cli/config.json
+    volumes:
+      - ${MSU_BAILIAN_CLI_DIR:-C:/Users/User/.bailian}:/run/bailian-cli:ro
     ports:
       - "8080:8080"
       # 代理转发面默认端口。该端口运行期可在管理面修改；改成非默认值时

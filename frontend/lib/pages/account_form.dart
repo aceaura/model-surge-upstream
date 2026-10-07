@@ -24,43 +24,6 @@ String codexCliAuthPath() {
   return '$home${Platform.pathSeparator}.codex${Platform.pathSeparator}auth.json';
 }
 
-/// 百炼 CLI 配置路径;只读文件,不调用会自动更新的 bl。
-String bailianCliConfigPath() {
-  final home = debugBailianHomeOverride ?? userHomeDir();
-  return '$home${Platform.pathSeparator}.bailian${Platform.pathSeparator}config.json';
-}
-
-@visibleForTesting
-String? debugBailianHomeOverride;
-
-/// CLI 默认配置的 access_token 位于顶层;命名配置由 active_config 指向
-/// 同级对象(不是 profiles)。只采控制台 token,绝不采 api_key。
-String parseBailianConsoleToken(String text) {
-  dynamic decoded;
-  try {
-    decoded = jsonDecode(text);
-  } on FormatException {
-    throw const FormatException('百炼 CLI 配置格式无效');
-  }
-  dynamic config = decoded;
-  if (decoded is Map) {
-    final active = decoded['active_config'];
-    if (active != null && active != '' && active != 'default') {
-      config = active is String ? decoded[active] : null;
-    }
-  }
-  final token = config is Map ? config['access_token'] : null;
-  if (token is String) {
-    final trimmed = token.trim();
-    if (trimmed.isNotEmpty &&
-        !RegExp(r'[\s\x00-\x1f\x7f]').hasMatch(trimmed) &&
-        !RegExp(r'^\*+$').hasMatch(trimmed)) {
-      return trimmed;
-    }
-  }
-  throw const FormatException('百炼 CLI 配置缺少有效的额度查询 Token');
-}
-
 /// Codex App 登录态路径:桌面应用的 ChatGPT 订阅登录由 CC Switch 保管。
 String codexAppAuthPath() {
   final home = debugCodexHomeOverride ?? userHomeDir();
@@ -376,6 +339,65 @@ String parseKimiWebRefreshToken(Iterable<List<int>> blobs) {
   return best;
 }
 
+/// 测试覆写:替换进程执行,避免测试真跑 npm/bl。
+@visibleForTesting
+Future<ProcessResult> Function(String exe, List<String> args)?
+    debugBlExecOverride;
+
+/// 百炼 AK/SK 引导:确保本机装有 bl(缺失时用 npm 全局静默安装),随后
+/// 用填入的 AK/SK 登录并即签一个控制台 access_token——签得出即验证通过,
+/// config.json 里的新鲜 token 立刻可被后端额度链使用,之后撞过期 bl 会
+/// 自动续签。返回 null 表示成功,否则为已脱敏的错误文案(绝不回显 AK/SK)。
+Future<String?> ensureBlAndLogin(
+    String accessKeyId, String accessKeySecret) async {
+  final exec = debugBlExecOverride ??
+      (String exe, List<String> args) =>
+          Process.run(exe, args, runInShell: true);
+  String sanitize(Object? text) => '$text'
+      .replaceAll(accessKeyId, '***')
+      .replaceAll(accessKeySecret, '***')
+      .trim();
+  Future<bool> toolExists(String name) async {
+    try {
+      final r = await exec(Platform.isWindows ? 'where' : 'which', [name]);
+      return r.exitCode == 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  try {
+    if (!await toolExists('bl')) {
+      if (!await toolExists('npm')) {
+        return '未检测到 bl 与 npm;请先安装 Node.js,再点本按钮自动安装 bl';
+      }
+      final install = await exec('npm', ['install', '-g', 'bailian-cli']);
+      if (install.exitCode != 0) {
+        return 'bl 自动安装失败:${sanitize(install.stderr)}';
+      }
+    }
+    final login = await exec('bl', [
+      'auth',
+      'login',
+      '--open-api',
+      '--access-key-id',
+      accessKeyId,
+      '--access-key-secret',
+      accessKeySecret,
+    ]);
+    if (login.exitCode != 0) {
+      return 'AccessKey 未通过 bl 验证:${sanitize(login.stderr)}';
+    }
+    final mint = await exec('bl', ['auth', 'generate-access-token']);
+    if (mint.exitCode != 0) {
+      return 'AccessKey 已写入 bl,但签发额度 token 失败:${sanitize(mint.stderr)}';
+    }
+    return null;
+  } catch (e) {
+    return '无法执行 bl:${sanitize(e)}';
+  }
+}
+
 /// 账号创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
 /// 侧边栏保持可见;不用居中弹窗)。
 /// editing 非空时为编辑：密钥留空表示保留原凭据。
@@ -419,8 +441,11 @@ class _AccountFormState extends State<AccountForm> {
   // kimi 网页会话 token(api_key 形态的可选附加凭据):会员月总额度只在
   // 网页网关可查,API key 拿不到;永不下发明文,编辑态留空表示保留。
   late final TextEditingController _webRefreshToken = TextEditingController();
-  // 百炼可选控制台凭据只用于查额度,编辑态留空由服务端保留。
-  late final TextEditingController _consoleAccessToken = TextEditingController();
+  // 百炼 AK/SK:一次性引导本机 bl 登录验证,不随账号提交。
+  late final TextEditingController _bailianAkId = TextEditingController();
+  late final TextEditingController _bailianAkSecret = TextEditingController();
+  bool _revealAkSecret = false;
+  bool _blBusy = false;
   late final TextEditingController _profileArn = TextEditingController(
       text: widget.editing?.profileArn ?? widget.copyFrom?.profileArn ?? '');
   late final TextEditingController _authRegion = TextEditingController(
@@ -479,7 +504,8 @@ class _AccountFormState extends State<AccountForm> {
     _refreshToken.dispose();
     _accountId.dispose();
     _webRefreshToken.dispose();
-    _consoleAccessToken.dispose();
+    _bailianAkId.dispose();
+    _bailianAkSecret.dispose();
     _profileArn.dispose();
     _authRegion.dispose();
     _apiRegion.dispose();
@@ -583,7 +609,6 @@ class _AccountFormState extends State<AccountForm> {
       return {
         'kind': 'api_key',
         'api_key': _apiKey.text.trim(),
-        'console_access_token': _consoleAccessToken.text.trim(),
       };
     }
     if (providerVendor(_providerId ?? '') == 'kimi') {
@@ -866,10 +891,6 @@ class _AccountFormState extends State<AccountForm> {
             const SizedBox(height: 20),
             _kimiWebTokenField(),
           ],
-          if (providerVendor(_providerId ?? '') == 'bailian') ...[
-            const SizedBox(height: 20),
-            _bailianConsoleTokenField(),
-          ],
         ],
       ),
     );
@@ -911,65 +932,6 @@ class _AccountFormState extends State<AccountForm> {
         },
       ),
     );
-  }
-
-  Widget _bailianConsoleTokenField() {
-    final masked = widget.editing?.maskedConsoleAccessToken ??
-        widget.copyFrom?.maskedConsoleAccessToken ??
-        '';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        LabeledField(
-          label: '额度查询 Token',
-          hint: '可选;仅用于查询百炼控制台额度,不影响推理。'
-              '${_isEdit ? '编辑时留空保留原值' : ''}',
-          child: TextFormField(
-            key: const ValueKey('account-console-access-token'),
-            controller: _consoleAccessToken,
-            obscureText: !_revealKey,
-            decoration: InputDecoration(
-              hintText: (_isEdit || widget.copyFrom != null)
-                  ? _revealKey
-                      ? masked
-                      : '************'
-                  : null,
-              border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                tooltip: _revealKey ? '隐藏' : '显示',
-                icon: Icon(_revealKey
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined),
-                onPressed: () => setState(() => _revealKey = !_revealKey),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          key: const ValueKey('bailian-autofill-cli'),
-          icon: const Icon(Icons.terminal_outlined, size: 18),
-          label: const Text('从百炼 CLI 获取'),
-          onPressed: _fillBailianConsoleToken,
-        ),
-      ],
-    );
-  }
-
-  void _fillBailianConsoleToken() {
-    const loginHint = '请先运行 bl auth login --console';
-    try {
-      final token = parseBailianConsoleToken(
-          File(bailianCliConfigPath()).readAsStringSync());
-      setState(() => _consoleAccessToken.text = token);
-      TopToast.show(context, '已填入百炼 CLI 的额度查询 Token');
-    } on FileSystemException {
-      TopToast.show(context, '无法读取百炼 CLI 配置;$loginHint', error: true);
-    } on FormatException {
-      // 不回显 JSON/解码异常原文,其中可能含凭据。
-      TopToast.show(context, '百炼 CLI 配置无效或缺少额度查询 Token;$loginHint',
-          error: true);
-    }
   }
 
   /// kimi 网页会话 token:月度会员额度查询链的凭据。与密钥同款交互——
@@ -1378,9 +1340,83 @@ class _AccountFormState extends State<AccountForm> {
               ),
             ],
           ),
+          if (providerVendor(_providerId ?? '') == 'bailian') ...[
+            const SizedBox(height: 20),
+            _bailianBlFields(),
+          ],
         ],
       ),
     );
+  }
+
+  /// 百炼 AK/SK 引导区:把 AK/SK 交给本机 bl CLI 保管后,额度查询 token
+  /// 撞过期由 bl 自动续签(后端直读 bl 的 config.json)。两个框只做一次性
+  /// 引导,不随账号保存;Secret 框默认纯星号、眼睛切换。
+  Widget _bailianBlFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LabeledField(
+          label: 'AccessKey ID',
+          hint: '仅用于本机 bl 登录验证,不随账号保存;验证通过后额度 token 自动续期。',
+          child: TextFormField(
+            key: const ValueKey('bailian-access-key-id'),
+            controller: _bailianAkId,
+            decoration: const InputDecoration(border: OutlineInputBorder()),
+          ),
+        ),
+        const SizedBox(height: 12),
+        LabeledField(
+          label: 'AccessKey Secret',
+          child: TextFormField(
+            key: const ValueKey('bailian-access-key-secret'),
+            controller: _bailianAkSecret,
+            obscureText: !_revealAkSecret,
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                tooltip: _revealAkSecret ? '隐藏' : '显示',
+                icon: Icon(_revealAkSecret
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined),
+                onPressed: () =>
+                    setState(() => _revealAkSecret = !_revealAkSecret),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          key: const ValueKey('bailian-bl-install'),
+          icon: _blBusy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.terminal_outlined, size: 18),
+          label: Text(_blBusy ? '正在安装/验证 bl…' : '安装 bl 并验证'),
+          onPressed: _blBusy ? null : _ensureBl,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _ensureBl() async {
+    final id = _bailianAkId.text.trim();
+    final secret = _bailianAkSecret.text.trim();
+    if (id.isEmpty || secret.isEmpty) {
+      TopToast.show(context, '请先填入 AccessKey ID 与 Secret', error: true);
+      return;
+    }
+    setState(() => _blBusy = true);
+    final error = await ensureBlAndLogin(id, secret);
+    if (!mounted) return;
+    setState(() => _blBusy = false);
+    if (error == null) {
+      TopToast.show(context, 'bl 已就绪,AccessKey 验证通过;额度查询 token 将自动续期');
+    } else {
+      TopToast.show(context, error, error: true);
+    }
   }
 
   /// 分钟数值框校验:留空表示沿用后端默认,填了须是范围内的整数。
