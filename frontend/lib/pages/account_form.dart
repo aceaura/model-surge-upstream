@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:sqlite3/sqlite3.dart' hide Row;
 
 import '../api_client.dart';
 import '../models.dart';
@@ -169,121 +168,6 @@ Map<String, String> importKiroCredentialJson(String text) {
 
 Map<String, String> loadKiroAppCredentials() => importKiroCredentialJson(
     jsonEncode(_readKiroCacheDocument('kiro-auth-token.json')));
-
-/// kiro-cli 登录态数据库候选路径;只读探测,绝不写回。
-List<String> kiroCliDbCandidates() {
-  final home = debugKiroHomeOverride ?? userHomeDir();
-  if (home.isEmpty) throw const FormatException('无法定位用户目录');
-  final sep = Platform.pathSeparator;
-  return [
-    [home, '.local', 'share', 'kiro-cli', 'data.sqlite3'].join(sep),
-    [home, '.local', 'share', 'amazon-q', 'data.sqlite3'].join(sep),
-    [home, 'AppData', 'Local', 'kiro-cli', 'data.sqlite3'].join(sep),
-  ];
-}
-
-/// kiro-cli SQLite(auth_kv/state 表) → 后端 credential。复刻 KiroaaS 的
-/// 加载逻辑:token key 优先级 social > odic > 旧 codewhisperer;设备注册与
-/// state 表 profile ARN 仅作缺失字段兜底;直接字段优先。
-Map<String, String> loadKiroCliCredentials() {
-  final candidates = kiroCliDbCandidates();
-  String? path;
-  for (final candidate in candidates) {
-    if (File(candidate).existsSync()) {
-      path = candidate;
-      break;
-    }
-  }
-  if (path == null) {
-    throw FormatException(
-        '未找到 kiro-cli 登录态数据库(已探测 ${candidates.length} 个默认位置)');
-  }
-  final db = sqlite3.open(path, mode: OpenMode.readOnly);
-  try {
-    String? valueOf(String table, String key) {
-      final rows = db.select('SELECT value FROM $table WHERE key = ?', [key]);
-      if (rows.isEmpty) return null;
-      final value = rows.first['value'];
-      return value is String ? value : null;
-    }
-
-    Map<String, dynamic>? jsonValue(String table, String key) {
-      final raw = valueOf(table, key);
-      if (raw == null) return null;
-      try {
-        final decoded = jsonDecode(raw);
-        return decoded is Map<String, dynamic> ? decoded : null;
-      } on FormatException {
-        return null;
-      }
-    }
-
-    Map<String, dynamic>? token;
-    for (final key in const [
-      'kirocli:social:token',
-      'kirocli:odic:token',
-      'codewhisperer:odic:token',
-    ]) {
-      token = jsonValue('auth_kv', key);
-      if (token != null) break;
-    }
-    if (token == null) {
-      throw const FormatException('kiro-cli 数据库里没有有效的登录态');
-    }
-
-    Map<String, dynamic>? registration;
-    for (final key in const [
-      'kirocli:odic:device-registration',
-      'codewhisperer:odic:device-registration',
-    ]) {
-      registration = jsonValue('auth_kv', key);
-      if (registration != null) break;
-    }
-
-    String profileArn = '';
-    String apiRegion = '';
-    try {
-      final profile = jsonValue('state', 'api.codewhisperer.profile');
-      final arn = profile?['arn'];
-      if (arn is String) {
-        profileArn = arn.trim();
-        final parts = profileArn.split(':');
-        if (parts.length >= 4 &&
-            RegExp(r'^[a-z]+-[a-z]+-\d+$').hasMatch(parts[3])) {
-          apiRegion = parts[3];
-        }
-      }
-    } on SqliteException {
-      // state 表不存在时忽略,凭 token 字段继续。
-    }
-
-    String field(Map<String, dynamic>? source, String name) {
-      final value = source?[name];
-      return value is String ? value.trim() : '';
-    }
-
-    // kiro-cli 的 expires_at 可达纳秒精度,截断到微秒再交给 DateTime 解析。
-    final expiry = field(token, 'expires_at')
-        .replaceFirstMapped(RegExp(r'(\.\d{6})\d+'), (m) => m[1]!);
-
-    return parseKiroCredentialJson(jsonEncode({
-      'accessToken': field(token, 'access_token'),
-      'refreshToken': field(token, 'refresh_token'),
-      'profileArn': field(token, 'profile_arn').isNotEmpty
-          ? field(token, 'profile_arn')
-          : profileArn,
-      'region': field(token, 'region').isNotEmpty
-          ? field(token, 'region')
-          : field(registration, 'region'),
-      'apiRegion': apiRegion,
-      'clientId': field(registration, 'client_id'),
-      'clientSecret': field(registration, 'client_secret'),
-      'expiresAt': expiry,
-    }));
-  } finally {
-    db.close();
-  }
-}
 
 /// kimi-desktop 本地存储目录(leveldb 里存着网页会话的 refresh/access token)。
 String kimiDesktopLeveldbDir() {
@@ -455,7 +339,6 @@ class _AccountFormState extends State<AccountForm> {
   late final TextEditingController _clientId = TextEditingController(
       text: widget.editing?.clientId ?? widget.copyFrom?.clientId ?? '');
   final _clientSecret = TextEditingController();
-  final _kiroCredentialJson = TextEditingController();
   final _revealedKiroFields = <String>{};
   String _kiroAccessToken = '';
   String _kiroExpiry = '';
@@ -511,7 +394,6 @@ class _AccountFormState extends State<AccountForm> {
     _apiRegion.dispose();
     _clientId.dispose();
     _clientSecret.dispose();
-    _kiroCredentialJson.dispose();
     _baseUrl.dispose();
     _quotaInterval.dispose();
     _quotaStopInterval.dispose();
@@ -887,10 +769,6 @@ class _AccountFormState extends State<AccountForm> {
             ..._oauthFields()
           else
             _apiKeyField(),
-          if (providerVendor(_providerId ?? '') == 'kimi') ...[
-            const SizedBox(height: 20),
-            _kimiWebTokenField(),
-          ],
         ],
       ),
     );
@@ -1104,36 +982,11 @@ class _AccountFormState extends State<AccountForm> {
       const SizedBox(height: 12),
       Align(
         alignment: Alignment.centerLeft,
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            OutlinedButton.icon(
-              key: const ValueKey('kiro-autofill-app'),
-              icon: const Icon(Icons.desktop_windows_outlined, size: 18),
-              label: const Text('从 Kiro App 获取'),
-              onPressed: _fillKiroApp,
-            ),
-            OutlinedButton.icon(
-              key: const ValueKey('kiro-autofill-cli'),
-              icon: const Icon(Icons.terminal_outlined, size: 18),
-              label: const Text('从 kiro-cli 获取'),
-              onPressed: _fillKiroCli,
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 20),
-      _kiroField('kiro-credential-json', 'Kiro credential JSON', _kiroCredentialJson,
-          secret: true, hint: '手动粘贴 Kiro 缓存 JSON 后点击导入;不会写回本机文件'),
-      const SizedBox(height: 12),
-      Align(
-        alignment: Alignment.centerLeft,
         child: OutlinedButton.icon(
-          key: const ValueKey('kiro-import-json'),
-          icon: const Icon(Icons.file_download_outlined, size: 18),
-          label: const Text('导入 Kiro JSON'),
-          onPressed: _importKiroJson,
+          key: const ValueKey('kiro-autofill-app'),
+          icon: const Icon(Icons.desktop_windows_outlined, size: 18),
+          label: const Text('从 Kiro App 获取'),
+          onPressed: _fillKiroApp,
         ),
       ),
     ];
@@ -1149,7 +1002,6 @@ class _AccountFormState extends State<AccountForm> {
       _clientSecret.text = credential['client_secret']!;
       _kiroAccessToken = credential['access_token']!;
       _kiroExpiry = credential['expiry']!;
-      _kiroCredentialJson.clear();
       _revealedKiroFields.clear();
     });
     TopToast.show(context, '已填入 Kiro 登录态');
@@ -1160,26 +1012,6 @@ class _AccountFormState extends State<AccountForm> {
       _applyKiroCredentials(loadKiroAppCredentials());
     } on FileSystemException {
       TopToast.show(context, '无法读取 Kiro App 缓存,请先登录 Kiro App', error: true);
-    } on FormatException catch (e) {
-      TopToast.show(context, e.message.toString(), error: true);
-    }
-  }
-
-  void _fillKiroCli() {
-    try {
-      _applyKiroCredentials(loadKiroCliCredentials());
-    } on SqliteException {
-      TopToast.show(context, '无法读取 kiro-cli 数据库,请先登录 kiro-cli', error: true);
-    } on FormatException catch (e) {
-      TopToast.show(context, e.message.toString(), error: true);
-    }
-  }
-
-  void _importKiroJson() {
-    try {
-      _applyKiroCredentials(importKiroCredentialJson(_kiroCredentialJson.text));
-    } on FileSystemException {
-      TopToast.show(context, '无法读取 Kiro SSO 注册缓存,请先登录 Kiro App', error: true);
     } on FormatException catch (e) {
       TopToast.show(context, e.message.toString(), error: true);
     }
@@ -1340,6 +1172,10 @@ class _AccountFormState extends State<AccountForm> {
               ),
             ],
           ),
+          if (providerVendor(_providerId ?? '') == 'kimi') ...[
+            const SizedBox(height: 20),
+            _kimiWebTokenField(),
+          ],
           if (providerVendor(_providerId ?? '') == 'bailian') ...[
             const SizedBox(height: 20),
             _bailianBlFields(),

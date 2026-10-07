@@ -10,7 +10,6 @@ import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/account_form.dart';
 import 'package:msu_admin/theme.dart';
 import 'package:msu_admin/ui/styled_dropdown.dart';
-import 'package:sqlite3/sqlite3.dart' hide Row;
 
 final providers = [
   ProviderSpec.fromJson(const {
@@ -287,32 +286,6 @@ void main() {
     return file;
   }
 
-  /// 在临时 home 的默认候选位置造 kiro-cli fixture 库(可写创建,
-  /// 导入路径必须只读)。kv 键值写入 auth_kv,state 键值写入 state 表。
-  File writeKiroCliDb(
-    Directory home,
-    Map<String, Map<String, dynamic>> kv, {
-    Map<String, Map<String, dynamic>> state = const {},
-  }) {
-    final file = File(
-        '${home.path}${Platform.pathSeparator}.local${Platform.pathSeparator}share'
-        '${Platform.pathSeparator}kiro-cli${Platform.pathSeparator}data.sqlite3');
-    file.parent.createSync(recursive: true);
-    final db = sqlite3.open(file.path);
-    db.execute('CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT)');
-    db.execute('CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)');
-    for (final entry in kv.entries) {
-      db.execute('INSERT INTO auth_kv (key, value) VALUES (?, ?)',
-          [entry.key, jsonEncode(entry.value)]);
-    }
-    for (final entry in state.entries) {
-      db.execute('INSERT INTO state (key, value) VALUES (?, ?)',
-          [entry.key, jsonEncode(entry.value)]);
-    }
-    db.close();
-    return file;
-  }
-
   Future<void> enterKiroField(WidgetTester tester, String key, String text) async {
     final field = find.byKey(ValueKey(key));
     await tester.ensureVisible(field);
@@ -540,14 +513,15 @@ void main() {
     'account-client-id', 'account-client-secret']) {
     testWidgets('Kiro imported access token is discarded after changing $field',
         (tester) async {
-      final captured = <String>[];
-      await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
-      await enterKiroField(tester, 'kiro-credential-json', jsonEncode({
+      useKiroTempHome();
+      writeKiroCache('kiro-auth-token.json', {
         'refreshToken': 'import-refresh', 'clientId': 'import-client',
         'clientSecret': 'import-secret', 'accessToken': 'import-access',
         'expiresAt': '2030-01-01T00:00:00Z',
-      }));
-      await clickKiroButton(tester, 'kiro-import-json');
+      });
+      final captured = <String>[];
+      await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
+      await clickKiroButton(tester, 'kiro-autofill-app');
       await enterKiroField(tester, field,
           field == 'account-auth-region' ? 'eu-west-1' : 'changed');
       await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
@@ -661,76 +635,6 @@ void main() {
     expect(body['credential']['client_id'], 'local-client');
   });
 
-  testWidgets('Kiro JSON button maps fields and clears sensitive pasted JSON',
-      (tester) async {
-    final captured = <String>[];
-    await pumpForm(tester, client: recordingClient(captured));
-    await selectCascade(tester, vendor: 'Kiro', billing: '订阅', region: '全球');
-    await enterKiroField(tester, 'account-name', 'kiro-import');
-    await enterKiroField(tester, 'kiro-credential-json', jsonEncode({
-      'refreshToken': 'json-refresh', 'profileArn': 'arn:json:profile',
-      'region': 'eu-west-1', 'apiRegion': 'eu-central-1',
-      'clientId': 'json-client', 'clientSecret': 'json-secret',
-      'accessToken': 'json-access', 'expiresAt': '2030-01-01T00:00:00Z',
-    }));
-    await clickKiroButton(tester, 'kiro-import-json');
-    expect(fieldText(tester, 'kiro-credential-json'), isEmpty);
-    expect(fieldText(tester, 'account-refresh-token'), 'json-refresh');
-    expect(fieldText(tester, 'account-profile-arn'), 'arn:json:profile');
-    expect(fieldText(tester, 'account-auth-region'), 'eu-west-1');
-    expect(fieldText(tester, 'account-api-region'), 'eu-central-1');
-    expect(fieldText(tester, 'account-client-id'), 'json-client');
-    expect(fieldText(tester, 'account-client-secret'), 'json-secret');
-    await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pumpAndSettle();
-    final credential = jsonDecode(captured.single)['credential'];
-    expect(credential['access_token'], 'json-access');
-    expect(credential['expiry'], '2030-01-01T00:00:00.000Z');
-  });
-
-  testWidgets('Kiro pasted SSO hash imports only matching cache registration',
-      (tester) async {
-    useKiroTempHome();
-    writeKiroCache('abc123.json', {
-      'clientId': 'registered-client', 'clientSecret': 'registered-secret',
-    });
-    // 没有 token 缓存:手动导入不得依赖或探测 App token 文件。
-    await pumpForm(tester, editing: accountKiro);
-    await enterKiroField(tester, 'kiro-credential-json', jsonEncode({
-      'refreshToken': 'pasted-refresh', 'clientIdHash': 'abc123',
-    }));
-    await clickKiroButton(tester, 'kiro-import-json');
-    expect(fieldText(tester, 'account-refresh-token'), 'pasted-refresh');
-    expect(fieldText(tester, 'account-client-id'), 'registered-client');
-    expect(fieldText(tester, 'account-client-secret'), 'registered-secret');
-    expect(fieldText(tester, 'kiro-credential-json'), isEmpty);
-  });
-
-  for (final text in ['sensitive-invalid-json', '{"accessToken":"sensitive-value"}']) {
-    testWidgets('Kiro failed manual import leaves existing fields untouched: $text',
-        (tester) async {
-      await pumpForm(tester, editing: accountKiro);
-      await enterKiroField(tester, 'account-refresh-token', 'keep-refresh');
-      await enterKiroField(tester, 'kiro-credential-json', text);
-      final button = find.byKey(const ValueKey('kiro-import-json'));
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(button);
-      await tester.pumpAndSettle();
-      await tester.tap(button);
-      await tester.pump();
-      expect(find.text(text.startsWith('{')
-          ? 'Kiro credential 缺少 Refresh Token'
-          : 'Kiro credential JSON 格式无效'), findsOneWidget);
-      expect(find.byWidgetPredicate((w) =>
-          w is Text && (w.data?.contains('sensitive-') ?? false)), findsNothing);
-      expect(fieldText(tester, 'account-refresh-token'), 'keep-refresh');
-      expect(fieldText(tester, 'account-profile-arn'), 'arn:profile:existing');
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
-    });
-  }
-
   testWidgets('Kiro missing App cache is sanitized and does not scan other files',
       (tester) async {
     final home = useKiroTempHome();
@@ -743,121 +647,6 @@ void main() {
     expect(find.text('无法读取 Kiro App 缓存,请先登录 Kiro App'), findsOneWidget);
     expect(find.textContaining(home.path), findsNothing);
     expect(fieldText(tester, 'account-refresh-token'), isEmpty);
-    await tester.pump(const Duration(seconds: 3));
-    await tester.pumpAndSettle();
-  });
-
-  test('Kiro CLI import maps social token fields from sqlite', () {
-    final home = useKiroTempHome();
-    final file = writeKiroCliDb(home, {
-      'kirocli:social:token': {
-        'access_token': 'cli-access',
-        'refresh_token': 'cli-refresh',
-        'profile_arn': 'arn:aws:codewhisperer:us-east-1:123:profile/p1',
-        'region': 'us-east-1',
-        'expires_at': '2030-01-01T00:00:00.123456789Z',
-        'scopes': ['codewhisperer:conversations'],
-      },
-    });
-    final before = file.readAsBytesSync();
-    final credential = loadKiroCliCredentials();
-    expect(credential['kind'], 'kiro_refresh');
-    expect(credential['refresh_token'], 'cli-refresh');
-    expect(credential['access_token'], 'cli-access');
-    expect(credential['profile_arn'],
-        'arn:aws:codewhisperer:us-east-1:123:profile/p1');
-    expect(credential['region'], 'us-east-1');
-    expect(credential['expiry'], '2030-01-01T00:00:00.123456Z');
-    expect(credential['client_id'], isEmpty);
-    expect(credential['client_secret'], isEmpty);
-    expect(file.readAsBytesSync(), before);
-  });
-
-  test('Kiro CLI import fills OIDC registration and ARN fallbacks', () {
-    final home = useKiroTempHome();
-    writeKiroCliDb(
-      home,
-      {
-        'kirocli:odic:token': {
-          'access_token': 'oidc-access',
-          'refresh_token': 'oidc-refresh',
-          'expires_at': '2030-06-01T00:00:00Z',
-        },
-        'kirocli:odic:device-registration': {
-          'client_id': 'cli-client',
-          'client_secret': 'cli-secret',
-          'region': 'eu-west-1',
-        },
-      },
-      state: {
-        'api.codewhisperer.profile': {
-          'arn': 'arn:aws:codewhisperer:eu-central-1:123:profile/p2',
-        },
-      },
-    );
-    final credential = loadKiroCliCredentials();
-    expect(credential['refresh_token'], 'oidc-refresh');
-    expect(credential['client_id'], 'cli-client');
-    expect(credential['client_secret'], 'cli-secret');
-    expect(credential['region'], 'eu-west-1');
-    expect(credential['profile_arn'],
-        'arn:aws:codewhisperer:eu-central-1:123:profile/p2');
-    expect(credential['api_region'], 'eu-central-1');
-  });
-
-  test('Kiro CLI import prefers social token over OIDC token', () {
-    final home = useKiroTempHome();
-    writeKiroCliDb(home, {
-      'kirocli:social:token': {'refresh_token': 'social-refresh'},
-      'kirocli:odic:token': {'refresh_token': 'odic-refresh'},
-    });
-    expect(loadKiroCliCredentials()['refresh_token'], 'social-refresh');
-  });
-
-  test('Kiro CLI import fails closed on missing db or token', () {
-    final home = useKiroTempHome();
-    expect(() => loadKiroCliCredentials(), throwsA(isA<FormatException>()));
-    writeKiroCliDb(home, {'unrelated:key': {'refresh_token': 'no'}});
-    expect(() => loadKiroCliCredentials(), throwsA(isA<FormatException>()));
-  });
-
-  testWidgets('Kiro CLI button imports sqlite credentials and submits them',
-      (tester) async {
-    final home = useKiroTempHome();
-    writeKiroCliDb(home, {
-      'kirocli:social:token': {
-        'access_token': 'btn-access',
-        'refresh_token': 'btn-refresh',
-        'region': 'us-east-1',
-        'expires_at': '2030-01-01T00:00:00Z',
-      },
-    });
-    final captured = <String>[];
-    await pumpForm(tester, editing: accountKiro, client: recordingClient(captured));
-    await clickKiroButton(tester, 'kiro-autofill-cli');
-    expect(fieldText(tester, 'account-refresh-token'), 'btn-refresh');
-    expect(fieldText(tester, 'account-auth-region'), 'us-east-1');
-    expect(fieldText(tester, 'account-client-id'), isEmpty);
-    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
-    await tester.tap(find.widgetWithText(FilledButton, '保存'));
-    await tester.pumpAndSettle();
-    final body = jsonDecode(captured.single) as Map<String, dynamic>;
-    expect(body['credential']['refresh_token'], 'btn-refresh');
-    expect(body['credential']['access_token'], 'btn-access');
-    expect(body['credential']['client_id'], isEmpty);
-    expect(body['credential']['client_secret'], isEmpty);
-  });
-
-  testWidgets('Kiro CLI button reports missing db without touching fields',
-      (tester) async {
-    useKiroTempHome();
-    await pumpForm(tester, editing: accountKiro);
-    final button = find.byKey(const ValueKey('kiro-autofill-cli'));
-    await tester.ensureVisible(button);
-    await tester.tap(button);
-    await tester.pump();
-    expect(find.textContaining('未找到 kiro-cli 登录态数据库'), findsOneWidget);
-    expect(fieldText(tester, 'account-profile-arn'), 'arn:profile:existing');
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
   });
