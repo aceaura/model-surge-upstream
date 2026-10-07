@@ -198,8 +198,14 @@ func TestRound28WireNetworkRetryBoundary(t *testing.T) {
 					request.Header.Del(HeaderProvider)
 				}
 				resp, err := NewTransport(broken).RoundTrip(request)
-				if resp != nil || err != wrapped || !errors.Is(err, tc.cause) {
+				// 超时类错误被刻意附加 ErrUpstreamTimeout 标记(转发面据此
+				// 判 504),不再保持原错误标识;其余错误仍须原样透传。
+				timeoutMarked := kiro && tc.name == "timeout"
+				if resp != nil || !errors.Is(err, tc.cause) || timeoutMarked != errors.Is(err, ErrUpstreamTimeout) {
 					t.Fatalf("security/network error was changed or swallowed: resp=%v err=%v", resp, err)
+				}
+				if !timeoutMarked && err != wrapped {
+					t.Fatalf("non-timeout error identity changed: %v", err)
 				}
 				wantCalls := 1
 				if kiro && tc.retry {

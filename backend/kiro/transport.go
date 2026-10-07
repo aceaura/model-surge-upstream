@@ -68,6 +68,29 @@ var retryBackoff = func(attempt int) time.Duration {
 	return time.Duration(1<<attempt) * time.Second
 }
 
+// ErrUpstreamTimeout 标记超时类失败(连接/读取超时与首 token 耗尽),
+// 对齐 network_errors.py 的 TIMEOUT 分类:转发面据此回 504 而非 502。
+var ErrUpstreamTimeout = errors.New("kiro: upstream timeout")
+
+// upstreamTimeoutError 保持原消息文本,仅附加超时分类标记。
+type upstreamTimeoutError struct{ err error }
+
+func (e upstreamTimeoutError) Error() string { return e.err.Error() }
+func (e upstreamTimeoutError) Unwrap() error { return e.err }
+func (e upstreamTimeoutError) Is(target error) bool {
+	return target == ErrUpstreamTimeout
+}
+
+// markUpstreamTimeout 给超时类网络错误附加 ErrUpstreamTimeout 标记,
+// 其余错误原样返回(network_errors.py: TimeoutException→504,其余→502)。
+func markUpstreamTimeout(err error) error {
+	var netErr net.Error
+	if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return upstreamTimeoutError{err}
+	}
+	return err
+}
+
 // Headers supplies native authentication and identity. The two routing headers
 // are consumed locally and never sent to AWS.
 func Headers(token, profileARN string) map[string]string {
@@ -268,7 +291,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				resp, err = t.kiroBase.RoundTrip(upstream)
 				if err != nil {
 					if !retryableNetErr(err) || attempt >= maxRetryAttempts-1 {
-						return nil, nil, err
+						return nil, nil, markUpstreamTimeout(err)
 					}
 					if !sleepBeforeRetry(ctx, retryBackoff(attempt)) {
 						return nil, nil, ctx.Err()
@@ -299,11 +322,11 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			case errors.Is(err, errFirstTokenTimeout):
 				resp.Body.Close()
 				if ft >= firstTokenMaxAttempts-1 {
-					return nil, nil, fmt.Errorf("kiro: model did not respond within %s after %d attempts",
-						firstTokenTimeout(options.effort), firstTokenMaxAttempts)
+					return nil, nil, upstreamTimeoutError{fmt.Errorf("kiro: model did not respond within %s after %d attempts",
+						firstTokenTimeout(options.effort), firstTokenMaxAttempts)}
 				}
 			default:
-				return nil, nil, err
+				return nil, nil, markUpstreamTimeout(err)
 			}
 		}
 		if resp.Body == nil {

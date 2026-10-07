@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -418,6 +419,12 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadRequest, 0, time.Since(start))
 			return
 		}
+		// network_errors.py: 超时类网络错误(含首 token 耗尽)回 504。
+		if errors.Is(err, kiro.ErrUpstreamTimeout) {
+			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream request timed out", err))
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
+			return
+		}
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
 		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 		return
@@ -450,6 +457,11 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		}
 		if err != nil {
 			ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s: %v", target.ModelID, err))
+			if errors.Is(err, kiro.ErrUpstreamTimeout) {
+				writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream retry timed out", err))
+				h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
+				return
+			}
 			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream retry failed", err))
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 			return

@@ -20,6 +20,12 @@ func str(v any) string      { s, _ := v.(string); return s }
 func list(v any) []any      { a, _ := v.([]any); return a }
 func jsonText(v any) string { b, _ := EncodeJSON(v); return string(b) }
 
+// pyTrimSpace 复刻 Python str.strip() 的空白类:Go unicode.IsSpace 之外
+// 还含 \x1c-\x1f(FS/GS/RS/US,str.isspace() 为真而 Go 不算空白)。
+func pyTrimSpace(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) })
+}
+
 func DecodeJSON(raw []byte) (map[string]any, error) {
 	return decodeObject(string(raw))
 }
@@ -771,7 +777,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		name := aliasToolName(original)
 		spec["name"] = name
 		toolOriginalNames[name] = original
-		if strings.TrimSpace(str(spec["description"])) == "" {
+		if pyTrimSpace(str(spec["description"])) == "" {
 			spec["description"] = "Tool: " + name
 		}
 	}
@@ -836,7 +842,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		lastWasTool = protocol == "openai" && role == "tool"
 	}
 	if len(systemMsgs) > 0 {
-		system = strings.TrimSpace(strings.Join(systemMsgs, "\n"))
+		system = pyTrimSpace(strings.Join(systemMsgs, "\n"))
 	}
 	if len(messages) == 0 {
 		return fail(fmt.Errorf("messages must contain a user or assistant turn"))
@@ -1883,8 +1889,8 @@ func pydanticFloat(v any) (float64, bool) {
 // 时的文本化渲染,上行前由 stripArgsText 剔除(converters_core.py:965-981)。
 func toolUse(id, name, input any) object {
 	if s, ok := input.(string); ok {
-		parsed, err := decodeObject(s)
-		if err == nil {
+		// converters_core.py:872: 先按 Python 空白类 strip 再 json.loads。
+		if parsed, err := decodeObject(pyTrimSpace(s)); err == nil {
 			input = parsed
 		}
 	}

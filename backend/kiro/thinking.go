@@ -119,12 +119,12 @@ func extractThinking(root object, protocol string) thinkingConfig {
 			effort = "medium"
 		}
 	} else {
-		effort = strings.TrimSpace(str(obj(root["output_config"])["effort"]))
+		effort = pyTrimSpace(str(obj(root["output_config"])["effort"]))
 		if effort == "" {
 			effort = str(root["reasoning_effort"])
 		}
 	}
-	effort = strings.ToLower(strings.TrimSpace(effort))
+	effort = strings.ToLower(pyTrimSpace(effort))
 	if protocol == "openai" && effort == "minimal" {
 		effort = "low"
 	}

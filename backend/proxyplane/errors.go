@@ -24,6 +24,7 @@ var statusByCode = map[apperr.Code]int{
 	apperr.InvalidRequest:      http.StatusBadRequest,
 	apperr.QuotaUnavailable:    http.StatusBadGateway,
 	apperr.UpstreamUnavailable: http.StatusBadGateway,
+	apperr.UpstreamTimeout:     http.StatusGatewayTimeout,
 	apperr.StorageError:        http.StatusInternalServerError,
 }
 
@@ -84,7 +85,7 @@ func anthropicErrorType(status int) string {
 		return "not_found_error"
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"
-	case http.StatusBadGateway, http.StatusInternalServerError:
+	case http.StatusBadGateway, http.StatusGatewayTimeout, http.StatusInternalServerError:
 		return "api_error"
 	default:
 		return "invalid_request_error"
@@ -95,7 +96,7 @@ func openaiErrorType(status int) string {
 	switch status {
 	case http.StatusUnauthorized:
 		return "authentication_error"
-	case http.StatusBadGateway, http.StatusInternalServerError:
+	case http.StatusBadGateway, http.StatusGatewayTimeout, http.StatusInternalServerError:
 		return "server_error"
 	default:
 		return "invalid_request_error"
@@ -110,7 +111,7 @@ func geminiErrorStatus(status int) string {
 		return "NOT_FOUND"
 	case http.StatusConflict:
 		return "ABORTED"
-	case http.StatusBadGateway:
+	case http.StatusBadGateway, http.StatusGatewayTimeout:
 		return "UNAVAILABLE"
 	case http.StatusInternalServerError:
 		return "INTERNAL"

@@ -20,7 +20,9 @@ const (
 	QuotaUnavailable  Code = "quota_unavailable"
 	// UpstreamUnavailable 表示调用上游自身接口（如模型列举）失败。
 	UpstreamUnavailable Code = "upstream_unavailable"
-	StorageError        Code = "storage_error"
+	// UpstreamTimeout 表示上游调用超时（network_errors.py TIMEOUT 分类 → 504）。
+	UpstreamTimeout Code = "upstream_timeout"
+	StorageError    Code = "storage_error"
 )
 
 type Error struct {

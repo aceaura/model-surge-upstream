@@ -31,6 +31,7 @@ var statusByCode = map[apperr.Code]int{
 	apperr.InvalidRequest:      http.StatusBadRequest,
 	apperr.QuotaUnavailable:    http.StatusBadGateway,
 	apperr.UpstreamUnavailable: http.StatusBadGateway,
+	apperr.UpstreamTimeout:     http.StatusGatewayTimeout,
 	apperr.StorageError:        http.StatusInternalServerError,
 }
 
