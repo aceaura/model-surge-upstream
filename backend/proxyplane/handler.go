@@ -177,6 +177,12 @@ func familyOf(path string) (family, bool) {
 // authorized 接受各协议客户端放密钥的原生位置：Bearer（OpenAI）、
 // x-api-key（Anthropic）、x-goog-api-key 或 ?key=（Gemini）。
 func (h *Handler) authorized(r *http.Request) bool {
+	if fam, _ := familyOf(r.URL.Path); fam == familyAnthropic {
+		key := r.Header.Get("x-api-key")
+		if key != "" && subtle.ConstantTimeCompare([]byte(key), h.key) == 1 {
+			return true
+		}
+	}
 	presented := bearerToken(r)
 	if presented == "" {
 		presented = r.Header.Get("x-api-key")

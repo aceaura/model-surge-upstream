@@ -125,6 +125,38 @@ func TestKiroModelsForbiddenRefresh(t *testing.T) {
 	}
 }
 
+func TestRound29KiroModelsWrappedSecurityErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+	}{
+		{"TLS", errors.New("remote error: TLS: handshake failure")},
+		{"SSL", errors.New("SSL handshake failed")},
+		{"certificate", errors.New("x509: certificate signed by unknown authority")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := fmt.Errorf("upstream: %w", &net.OpError{Op: "dial", Net: "tcp", Err: tc.cause})
+			if kiroRetryable(wrapped, 0) {
+				t.Error("wrapped security error classified as retryable")
+			}
+			a := kiroAccount("https://kiro.invalid")
+			l := New(fakeAccounts{a.Name: a}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
+			calls := 0
+			l.SetClient(&http.Client{Transport: kiroRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.URL.Path != "/ListAvailableModels" || r.Header.Get("Authorization") != "Bearer live-token" {
+					t.Error("model request lost path/auth")
+				}
+				return nil, wrapped
+			})})
+			got, err := l.List(context.Background(), a.Name)
+			if err != nil || calls != 1 || !got.Queryable || len(got.Models) != len(kiroFallbackModels) {
+				t.Fatalf("calls=%d models=%d queryable=%v err=%v", calls, len(got.Models), got.Queryable, err)
+			}
+		})
+	}
+}
+
 func TestKiroListRetryClassification(t *testing.T) {
 	for _, cause := range []error{
 		&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}},

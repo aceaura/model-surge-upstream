@@ -68,6 +68,10 @@ func kiroRetryable(err error, status int) bool {
 			errors.As(err, &hostnameErr) || errors.As(err, &invalidErr) || errors.As(err, &recordErr) {
 			return false
 		}
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "ssl") || strings.Contains(message, "tls") || strings.Contains(message, "certificate") {
+			return false
+		}
 		var netErr net.Error
 		if errors.As(err, &netErr) {
 			return true

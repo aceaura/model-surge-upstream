@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,6 +38,219 @@ func kiroTestFrame(event, payload string) []byte {
 	crc := make([]byte, 4)
 	binary.BigEndian.PutUint32(crc, crc32.ChecksumIEEE(frame))
 	return append(frame, crc...)
+}
+
+type round29ByteBody struct{ io.ReadCloser }
+
+func (b round29ByteBody) Read(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	return b.ReadCloser.Read(p)
+}
+
+type round29RoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f round29RoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRound29KiroUnicodeOutputHTTP(t *testing.T) {
+	const text, thought, toolID = "A中😀Bé界", "想法😀é", "调用_中😀"
+	wantArgs := map[string]any{"city": "中😀é", "escaped": "\\ud800", "pair": "😀"}
+	for _, protocol := range []string{provider.ProtocolAnthropic, provider.ProtocolChatCompletions} {
+		for _, stream := range []bool{false, true} {
+			for _, strict := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%v/strict=%v", protocol, stream, strict), func(t *testing.T) {
+					calls := 0
+					up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						var payload struct {
+							ConversationState struct {
+								CurrentMessage struct {
+									UserInputMessage struct {
+										UserInputMessageContext struct {
+											Tools []struct{ ToolSpecification struct{ Name string } }
+										}
+									}
+								}
+							}
+						}
+						if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+							t.Error(err)
+							return
+						}
+						tools := payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools
+						if len(tools) != 1 {
+							t.Errorf("native tools=%d", len(tools))
+							return
+						}
+						w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+						_, _ = w.Write(kiroTestFrame("reasoningContentEvent", `{"text":"想法\ud83d\ude00é"}`))
+						_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"A中\ud83d\ude00Bé界"}`))
+						data, _ := json.Marshal(map[string]any{"name": tools[0].ToolSpecification.Name, "toolUseId": toolID, "input": `{"city":"中😀é","escaped":"\\ud800","pair":"\ud83d\ude00"}`, "stop": true})
+						_, _ = w.Write(kiroTestFrame("toolUseEvent", string(data)))
+						_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":1}`))
+					}))
+					defer up.Close()
+					name := "round29.工具." + up.URL
+					target := resolve.ResolvedTarget{ModelID: "kiro-r29-unicode", ProviderID: kiro.ProviderID, Protocol: protocol, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("upstream-access", "")}
+					h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+					base := http.DefaultTransport.(*http.Transport).Clone()
+					defer base.CloseIdleConnections()
+					h.client.Transport = kiro.NewTransport(round29RoundTripFunc(func(r *http.Request) (*http.Response, error) {
+						resp, err := base.RoundTrip(r)
+						if err == nil {
+							resp.Body = round29ByteBody{resp.Body}
+						}
+						return resp, err
+					}))
+					path := "/v1/messages"
+					var choice any = map[string]any{"type": "auto"}
+					if strict {
+						choice = map[string]any{"type": "any"}
+					}
+					if protocol == provider.ProtocolChatCompletions {
+						path, choice = "/v1/chat/completions", "auto"
+						if strict {
+							choice = "required"
+						}
+					}
+					body, _ := json.Marshal(map[string]any{"model": target.ModelID, "max_tokens": 1024, "stream": stream, "tool_choice": choice, "messages": []any{map[string]any{"role": "user", "content": "q"}}, "tools": []any{map[string]any{"name": name, "input_schema": map[string]any{}}}})
+					proxy := httptest.NewServer(h)
+					defer proxy.Close()
+					r, _ := http.NewRequest(http.MethodPost, proxy.URL+path, strings.NewReader(string(body)))
+					r.Header.Set("Authorization", "Bearer "+testKey)
+					resp, err := proxy.Client().Do(r)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					if err != nil || resp.StatusCode != 200 || calls != 1 {
+						t.Fatalf("status=%d calls=%d read=%v body=%s", resp.StatusCode, calls, err, data)
+					}
+					var gotText, gotThought, args strings.Builder
+					var gotArgs map[string]any
+					gotID, gotName := "", ""
+					var visit func(any)
+					visit = func(value any) {
+						switch value := value.(type) {
+						case []any:
+							for _, part := range value {
+								visit(part)
+							}
+						case map[string]any:
+							for key, part := range value {
+								s, _ := part.(string)
+								switch key {
+								case "content", "text":
+									gotText.WriteString(s)
+								case "thinking", "reasoning_content":
+									gotThought.WriteString(s)
+								case "id":
+									if s == toolID {
+										gotID = s
+									}
+								case "name":
+									gotName = s
+								case "arguments", "partial_json":
+									args.WriteString(s)
+								case "input":
+									if input, ok := part.(map[string]any); ok && len(input) > 0 {
+										gotArgs = input
+									}
+									continue
+								}
+								visit(part)
+							}
+						}
+					}
+					events := []string{string(data)}
+					if stream {
+						events = nil
+						for _, line := range strings.Split(string(data), "\n") {
+							if strings.HasPrefix(line, "data: ") && line != "data: [DONE]" {
+								events = append(events, strings.TrimPrefix(line, "data: "))
+							}
+						}
+					}
+					for _, event := range events {
+						var value any
+						if err := json.Unmarshal([]byte(event), &value); err != nil {
+							t.Fatal(err)
+						}
+						visit(value)
+					}
+					if args.Len() > 0 {
+						if err := json.Unmarshal([]byte(args.String()), &gotArgs); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if gotText.String() != text || gotThought.String() != thought || gotID != toolID || gotName != name || !reflect.DeepEqual(gotArgs, wantArgs) {
+						t.Fatalf("text=%q thought=%q id=%q name=%q args=%v", gotText.String(), gotThought.String(), gotID, gotName, gotArgs)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRound29KiroAnthropicAuthenticationHTTP(t *testing.T) {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens"} {
+		for _, tc := range []struct {
+			name, bearer, key string
+			allowed           bool
+		}{
+			{"native only", "", testKey, true},
+			{"bearer only", testKey, "", true},
+			{"both valid", testKey, testKey, true},
+			{"valid native stale bearer", "stale-client-key", testKey, true},
+			{"valid bearer stale native", testKey, "stale-client-key", true},
+			{"both wrong", "stale-client-key", "wrong-key", false},
+			{"missing", "", "", false},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				calls := 0
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					if r.Header.Get("Authorization") != "Bearer upstream-access" || r.Header.Get("x-api-key") != "" {
+						t.Error("client authentication escaped upstream")
+					}
+					_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+					_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":1}`))
+				}))
+				defer up.Close()
+				target := resolve.ResolvedTarget{ModelID: "kiro-r29-auth", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolAnthropic, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("upstream-access", "")}
+				h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+				r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"kiro-r29-auth","max_tokens":1024,"messages":[{"role":"user","content":"q"}]}`))
+				if tc.bearer != "" {
+					r.Header.Set("Authorization", "Bearer "+tc.bearer)
+				}
+				r.Header.Set("x-api-key", tc.key)
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				wantStatus, wantCalls := http.StatusUnauthorized, 0
+				if tc.allowed {
+					wantStatus = http.StatusOK
+					if path == "/v1/messages" {
+						wantCalls = 1
+					}
+				}
+				if w.Code != wantStatus || calls != wantCalls {
+					t.Fatalf("status=%d want=%d calls=%d want=%d", w.Code, wantStatus, calls, wantCalls)
+				}
+			})
+		}
+	}
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1beta/models/example:generateContent"} {
+		h := NewHandler(testKey, nil, nil)
+		r := httptest.NewRequest(http.MethodPost, path, nil)
+		r.Header.Set("Authorization", "Bearer wrong-key")
+		r.Header.Set("x-api-key", testKey)
+		r.Header.Set("x-goog-api-key", testKey)
+		if h.authorized(r) {
+			t.Errorf("non-Anthropic credential precedence changed: %s", path)
+		}
+	}
 }
 
 func TestRound28KiroSelectedAliasHTTP(t *testing.T) {
