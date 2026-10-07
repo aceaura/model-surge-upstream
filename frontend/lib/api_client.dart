@@ -227,6 +227,14 @@ class ApiClient {
         .toList();
   }
 
+  Future<UpstreamModelListing> listUpstreamModels(String account) async {
+    final body = await _send(
+      'GET',
+      '/admin/accounts/${Uri.encodeComponent(account)}/upstream-models',
+    );
+    return UpstreamModelListing.fromJson(body);
+  }
+
   Future<UpstreamModel> createModel({
     required String id,
     required String account,

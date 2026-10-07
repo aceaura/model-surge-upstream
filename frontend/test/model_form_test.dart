@@ -95,6 +95,185 @@ Finder jsonBox(String fieldKey) => find.descendant(
 );
 
 void main() {
+  for (final mode in ['create', 'edit', 'copy']) {
+    testWidgets(
+      '$mode selects upstream ID and submits only the intended field',
+      (tester) async {
+        Map<String, dynamic>? submitted;
+        String? method;
+        final source = UpstreamModel.fromJson(const {
+          'id': 'kimi-1/existing',
+          'account': 'kimi-1',
+          'native_model': 'old-model',
+          'protocol': 'anthropic',
+          'context_window': 128000,
+          'defaults': {'temperature': 0.6},
+          'overrides': {'max_tokens': 8192},
+          'compact': {'mode': 'passive'},
+          'efforts': [
+            {'name': '1', 'value': 'high'},
+          ],
+          'effort_format': 'chat_completions',
+          'enabled': false,
+        });
+        final client = ApiClient(
+          baseUrl: 'http://127.0.0.1:8080',
+          adminKey: 'adm',
+          httpClient: MockClient((request) async {
+            if (request.url.path.endsWith('/upstream-models')) {
+              expect(
+                request.url.path,
+                '/admin/accounts/kimi-1/upstream-models',
+              );
+              return http.Response(
+                jsonEncode({
+                  'queryable': true,
+                  'models': [
+                    {'id': 'qwen3.8-max', 'display_name': '千问 Max'},
+                  ],
+                }),
+                200,
+                headers: {'content-type': 'application/json'},
+              );
+            }
+            method = request.method;
+            submitted =
+                jsonDecode(utf8.decode(request.bodyBytes))
+                    as Map<String, dynamic>;
+            return http.Response(
+              jsonEncode({
+                'model': {'id': source.id, ...submitted!},
+              }),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }),
+        );
+        await pumpForm(
+          tester,
+          client: client,
+          editing: mode == 'edit' ? source : null,
+          copyFrom: mode == 'copy' ? source : null,
+        );
+        if (mode == 'create') {
+          await tester.enterText(
+            find.byKey(const ValueKey('model-id')),
+            'kimi-1/new',
+          );
+        }
+        final oldContextPosition = tester.getTopLeft(find.text('上下文限制'));
+        await tester.tap(find.byKey(const ValueKey('upstream-model-fetch')));
+        await tester.pumpAndSettle();
+        expect(tester.getTopLeft(find.text('上下文限制')), oldContextPosition);
+        await tester.enterText(
+          find.byKey(const ValueKey('upstream-model-search')),
+          '千问',
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('upstream-model-option-qwen3.8-max')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('upstream-model-panel')),
+          findsNothing,
+        );
+        expect(
+          tester
+              .widget<TextFormField>(find.byKey(const ValueKey('model-native')))
+              .controller!
+              .text,
+          'qwen3.8-max',
+        );
+        if (mode == 'copy') {
+          expect(
+            tester
+                .widget<TextFormField>(find.byKey(const ValueKey('model-id')))
+                .controller!
+                .text,
+            'kimi-1/existing-copy',
+          );
+        }
+        await tester.tap(
+          find.widgetWithText(FilledButton, mode == 'edit' ? '保存' : '创建'),
+        );
+        await tester.pumpAndSettle();
+        expect(method, mode == 'edit' ? 'PUT' : 'POST');
+        expect(submitted!['native_model'], 'qwen3.8-max');
+        expect(submitted!['account'], 'kimi-1');
+        expect(submitted!['protocol'], 'anthropic');
+        if (mode != 'create') {
+          expect(submitted!['context_window'], 128000);
+          expect(submitted!['defaults'], {'temperature': 0.6});
+          expect(submitted!['overrides'], {'max_tokens': 8192});
+          expect(submitted!['efforts'], [
+            {'name': '1', 'value': 'high'},
+          ]);
+          expect(submitted!['effort_format'], 'chat_completions');
+          expect(submitted!['enabled'], isFalse);
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('upstream list follows the account selected in the form', (
+    tester,
+  ) async {
+    final queried = <String>[];
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        queried.add(request.url.path);
+        return http.Response(
+          jsonEncode({
+            'queryable': true,
+            'models': [
+              {'id': 'gpt-account-model'},
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    await pumpForm(tester, client: client);
+    await tester.enterText(
+      find.byKey(const ValueKey('model-native')),
+      'manual-model',
+    );
+    await tester.tap(dropdownIn('model-account-field'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('oa-1').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('upstream-model-fetch')));
+    await tester.pumpAndSettle();
+    expect(queried, ['/admin/accounts/oa-1/upstream-models']);
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const ValueKey('model-native')))
+          .controller!
+          .text,
+      'manual-model',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('upstream-model-option-gpt-account-model')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const ValueKey('model-native')))
+          .controller!
+          .text,
+      'gpt-account-model',
+    );
+    expect(
+      find.text('oa-1 · chat_completions · gpt-account-model'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('protocol options come from the selected account provider', (
     tester,
   ) async {

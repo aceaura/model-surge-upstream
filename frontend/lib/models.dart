@@ -263,6 +263,34 @@ class Account {
   }
 }
 
+class UpstreamModelOption {
+  const UpstreamModelOption({required this.id, this.displayName = ''});
+
+  final String id;
+  final String displayName;
+
+  factory UpstreamModelOption.fromJson(Map<String, dynamic> json) =>
+      UpstreamModelOption(
+        id: json['id'] as String,
+        displayName: json['display_name'] as String? ?? '',
+      );
+}
+
+class UpstreamModelListing {
+  const UpstreamModelListing({required this.queryable, required this.models});
+
+  final bool queryable;
+  final List<UpstreamModelOption> models;
+
+  factory UpstreamModelListing.fromJson(Map<String, dynamic> json) =>
+      UpstreamModelListing(
+        queryable: json['queryable'] as bool? ?? false,
+        models: (json['models'] as List<dynamic>? ?? const [])
+            .map((e) => UpstreamModelOption.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
+      );
+}
+
 class UpstreamModel {
   const UpstreamModel({
     required this.id,

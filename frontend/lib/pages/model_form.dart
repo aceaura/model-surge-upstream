@@ -8,6 +8,7 @@ import '../ui/form_page.dart';
 import '../ui/json_field.dart';
 import '../ui/provider_avatar.dart';
 import '../ui/styled_dropdown.dart';
+import '../ui/upstream_model_picker.dart';
 
 /// 模型创建与编辑整页表单(CC Switch 式:页内内联替换列表,不推根路由,
 /// 侧边栏保持可见;不用居中弹窗)。
@@ -341,15 +342,28 @@ class _ModelFormState extends State<ModelForm> {
           const SizedBox(height: 20),
           LabeledField(
             label: '上游模型名',
-            child: TextFormField(
-              key: const ValueKey('model-native'),
-              controller: _nativeModel,
-              decoration: const InputDecoration(
-                hintText: 'kimi-k2-turbo',
-                border: OutlineInputBorder(),
+            child: UpstreamModelPicker(
+              client: widget.client,
+              account: _account,
+              value: _nativeModel.text,
+              enabled: !_busy,
+              onSelected: (value) => setState(() {
+                _nativeModel.value = TextEditingValue(
+                  text: value,
+                  selection: TextSelection.collapsed(offset: value.length),
+                );
+              }),
+              child: TextFormField(
+                key: const ValueKey('model-native'),
+                controller: _nativeModel,
+                decoration: const InputDecoration(
+                  hintText: '输入模型名，或从上游列表中选择',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? '上游模型名不能为空' : null,
               ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? '上游模型名不能为空' : null,
             ),
           ),
         ],

@@ -13,14 +13,109 @@ ApiClient clientReturning(
 }) {
   final mock = MockClient((request) async {
     inspect?.call(request);
-    return http.Response(body, status,
-        headers: {'content-type': 'application/json'});
+    return http.Response(
+      body,
+      status,
+      headers: {'content-type': 'application/json'},
+    );
   });
   return ApiClient(
-      baseUrl: 'http://127.0.0.1:8080', adminKey: 'adm', httpClient: mock);
+    baseUrl: 'http://127.0.0.1:8080',
+    adminKey: 'adm',
+    httpClient: mock,
+  );
 }
 
 void main() {
+  test(
+    'upstream models uses account endpoint and parses selectable IDs',
+    () async {
+      Uri? seen;
+      final client = clientReturning(
+        200,
+        jsonEncode({
+          'account': '团队 + test',
+          'queryable': true,
+          'models': [
+            {
+              'id': 'qwen3.8-max',
+              'display_name': '千问 Max',
+              'efforts': ['high'],
+            },
+            {'id': 'qwen3-coder-plus'},
+          ],
+          'at': '2026-10-07T10:00:00Z',
+        }),
+        inspect: (request) {
+          seen = request.url;
+          expect(request.method, 'GET');
+          expect(request.headers['Authorization'], 'Bearer adm');
+        },
+      );
+      final report = await client.listUpstreamModels('团队 + test');
+      expect(seen!.pathSegments, [
+        'admin',
+        'accounts',
+        '团队 + test',
+        'upstream-models',
+      ]);
+      expect(seen!.query, isEmpty);
+      expect(report.queryable, isTrue);
+      expect(report.models.map((e) => e.id), [
+        'qwen3.8-max',
+        'qwen3-coder-plus',
+      ]);
+      expect(report.models.first.displayName, '千问 Max');
+      expect(report.models.last.displayName, isEmpty);
+    },
+  );
+
+  test(
+    'upstream model listing preserves unsupported and empty states',
+    () async {
+      for (final queryable in [false, true]) {
+        final client = clientReturning(
+          200,
+          jsonEncode({'queryable': queryable, 'models': []}),
+        );
+        final report = await client.listUpstreamModels('kimi-1');
+        expect(report.queryable, queryable);
+        expect(report.models, isEmpty);
+      }
+    },
+  );
+
+  test(
+    'upstream model errors preserve HTTP authentication and server message',
+    () async {
+      final unauthorized = clientReturning(401, '{}');
+      expect(
+        unauthorized.listUpstreamModels('kimi-1'),
+        throwsA(isA<UnauthorizedException>()),
+      );
+      final unavailable = clientReturning(
+        502,
+        jsonEncode({
+          'error': {
+            'code': 'upstream_unavailable',
+            'message': '上游模型列表获取失败',
+            'status': 502,
+          },
+        }),
+      );
+      expect(
+        unavailable.listUpstreamModels('kimi-1'),
+        throwsA(
+          isA<ValidationException>().having(
+            (e) => e.message,
+            'message',
+            '上游模型列表获取失败',
+          ),
+        ),
+      );
+    },
+  );
+
   test('unauthorized maps to UnauthorizedException', () async {
     final client = clientReturning(401, '{"error":{"code":"unauthorized"}}');
     expect(client.listAccounts(), throwsA(isA<UnauthorizedException>()));
