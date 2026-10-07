@@ -289,28 +289,12 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// pydantic bool lax 强迫:true/false/1/0/yes/no/on/off/t/f/y/n(大小写
 	// 不敏感)接受,其余 422。count_tokens 模型无 stream 字段(extra 忽略)。
 	if !countTokens {
-		switch v := root["stream"].(type) {
-		case nil:
-		case bool:
-			opts.stream = v
-		case json.Number:
-			switch v.String() {
-			case "1":
-				opts.stream = true
-			case "0":
-			default:
+		if v, has := root["stream"]; has {
+			var ok bool
+			opts.stream, ok = pydanticBool(v)
+			if !ok {
 				return fail(fmt.Errorf("stream must be boolean"))
 			}
-		case string:
-			switch strings.ToLower(v) {
-			case "true", "1", "yes", "on", "t", "y":
-				opts.stream = true
-			case "false", "0", "no", "off", "f", "n":
-			default:
-				return fail(fmt.Errorf("stream must be boolean"))
-			}
-		default:
-			return fail(fmt.Errorf("stream must be boolean"))
 		}
 	}
 	// models_anthropic.py:393-395: temperature/top_p ∈ [0,1]、top_k ≥ 0,
@@ -376,11 +360,26 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				}
 			}
 		}
-		for _, key := range []string{"n", "max_tokens", "max_completion_tokens"} {
+		for _, key := range []string{"n", "max_tokens", "max_completion_tokens", "top_logprobs", "seed"} {
 			if v := root[key]; v != nil {
 				if f, ok := pydanticFloat(v); !ok || f != float64(int64(f)) {
 					return fail(fmt.Errorf("%s must be an integer", key))
 				}
+			}
+		}
+		for _, key := range []string{"logprobs", "parallel_tool_calls"} {
+			if v := root[key]; v != nil {
+				if _, ok := pydanticBool(v); !ok {
+					return fail(fmt.Errorf("%s must be boolean", key))
+				}
+			}
+		}
+		if v := root["stream_options"]; v != nil && obj(v) == nil {
+			return fail(fmt.Errorf("stream_options must be an object"))
+		}
+		if v := root["user"]; v != nil {
+			if _, ok := v.(string); !ok {
+				return fail(fmt.Errorf("user must be a string"))
 			}
 		}
 		// models_openai.py:163/177: stop 为 Union[str, List[str]]、
@@ -1050,6 +1049,11 @@ func parseMessage(m object, protocol string) (message, error) {
 		return result, fmt.Errorf("content is required")
 	}
 	if protocol == "openai" {
+		if v := m["tool_calls"]; v != nil {
+			if _, ok := v.([]any); !ok {
+				return result, fmt.Errorf("tool_calls must be an array")
+			}
+		}
 		// models_openai.py:80-82: tool_call_id/name 为 Optional[str],
 		// pydantic v2 lax 不强迫非字符串,整请求 422;缺省与 null 合法。
 		for _, key := range []string{"tool_call_id", "name"} {
@@ -1329,6 +1333,26 @@ func pythonicString(v any) string {
 		return x
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+func pydanticBool(v any) (bool, bool) {
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case json.Number:
+		f, err := x.Float64()
+		if err == nil && (f == 0 || f == 1) {
+			return f == 1, true
+		}
+	case string:
+		switch strings.ToLower(x) {
+		case "true", "1", "yes", "on", "t", "y":
+			return true, true
+		case "false", "0", "no", "off", "f", "n":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // pydanticFloat 复刻 pydantic v2 lax 模式的 float 强迫:数字、数值字符串、

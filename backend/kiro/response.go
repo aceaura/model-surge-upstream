@@ -40,11 +40,12 @@ type pendingTool struct {
 // 与上行参数都用它,parsers.py 的 json.dumps(json.loads(raw)) 保序语义),
 // invalid 对应 parsers.py 的 _arguments_invalid。
 type finishedTool struct {
-	id, name string
-	args     string
-	input    any
-	invalid  bool
-	bracket  bool
+	id, name  string
+	args      string
+	input     any
+	invalid   bool
+	truncated bool
+	bracket   bool
 }
 
 // normalizeOrderedJSON 把合法 JSON 重编码为 Python json.dumps 风格文本:
@@ -262,6 +263,7 @@ type responseState struct {
 	parser                        *thinkingParser
 	fullText                      strings.Builder
 	fullThinking                  strings.Builder
+	fullContentForBracket         strings.Builder
 	fullTextOverflow              bool
 	outputRunes, collectedBytes   int
 	inputTokens, outputTokens     int
@@ -368,10 +370,16 @@ func (s *responseState) emitBlock(kind, text string, fake bool) error {
 			s.fullTextOverflow = true
 			s.fullText.Reset()
 			s.fullThinking.Reset()
-		} else if kind == "thinking" {
-			s.fullThinking.WriteString(text)
+			s.fullContentForBracket.Reset()
 		} else {
-			s.fullText.WriteString(text)
+			if kind == "thinking" {
+				s.fullThinking.WriteString(text)
+			} else {
+				s.fullText.WriteString(text)
+			}
+			if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) {
+				s.fullContentForBracket.WriteString(text)
+			}
 		}
 	}
 	if !s.options.stream {
@@ -428,25 +436,7 @@ func (s *responseState) finishTool() error {
 		args = "{}"
 	}
 	norm, ok := normalizeOrderedJSON(args, true)
-	if !ok && looksTruncatedJSON(args) && s.registersTruncation() {
-		// parsers.py: truncated arguments are diagnosed and replaced with {};
-		// the truncation notice is injected into the next request.
-		saveToolTruncation(t.id, t.name)
-	}
-	if s.options.policyMode != "" {
-		// validate_tool_choice_result 先验白名单再验 arguments
-		// (streaming_core.py:161-165);named 模式白名单只含被点名工具
-		// (converters_core.py:144-145 filter_tools →
-		// converters_anthropic.py:384 allowed_names),调用其他已声明
-		// 工具同样报 disallowed。
-		if s.options.forbidTools || !s.options.allowedTools[t.name] ||
-			(s.options.policyMode == "named" && t.name != s.options.policyTool) {
-			return &toolViolation{msg: "response returned disallowed tool '" + t.name + "'"}
-		}
-		if !ok {
-			return &toolViolation{msg: "tool '" + t.name + "' returned malformed JSON arguments"}
-		}
-	}
+	truncated := !ok && looksTruncatedJSON(args)
 	invalid := false
 	if !ok {
 		norm, invalid = "{}", true
@@ -454,14 +444,16 @@ func (s *responseState) finishTool() error {
 	if s.toolCount >= 1024 {
 		return fmt.Errorf("kiro: response exceeds 1024 tool calls")
 	}
-	input := any(object{})
-	if decoded, err := decodeObject(norm); err == nil {
-		input = decoded
+	var input any
+	decoder := json.NewDecoder(strings.NewReader(norm))
+	decoder.UseNumber()
+	if err := decoder.Decode(&input); err != nil {
+		return err
 	}
 	// streaming_core.py:362-368: 原生工具事件在参考实现里只在全部字节
 	// 消费完后由 get_tool_calls(parsers.py:589-591,无条件去重)统一交出,
 	// 发块在 finalize 按协议矩阵进行。
-	s.tools = append(s.tools, &finishedTool{id: t.id, name: t.name, args: norm, input: input, invalid: invalid})
+	s.tools = append(s.tools, &finishedTool{id: t.id, name: t.name, args: norm, input: input, invalid: invalid, truncated: truncated})
 	s.toolCount++
 	if !s.options.stream {
 		s.collectedBytes += len(norm)
@@ -663,16 +655,17 @@ func (s *responseState) finalize() error {
 			return err
 		}
 	}
+	if err := s.finishTool(); err != nil {
+		return err
+	}
+	s.tools = dedupTools(s.tools)
 	// Some models answer with [Called name with args: {...}] text instead of
 	// native tool events; those become real tool blocks after the text.
 	if !s.fullTextOverflow {
-		// 括号扫描输入:流式两协议与 openai 非流式(复用流式生成器)只扫
-		// 正文(streaming_openai.py:283、streaming_anthropic.py:550);
-		// anthropic 非流式走 collect_stream_to_result,正文+思考一起扫
-		// (streaming_core.py:478-484)。
+		// 收集路径按事件顺序扫描正文与思考，普通生成器只扫描正文。
 		scan := s.fullText.String()
-		if s.options.protocol == "anthropic" && !s.options.stream {
-			scan += s.fullThinking.String()
+		if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) {
+			scan = s.fullContentForBracket.String()
 		}
 		calls := parseBracketToolCalls(scan)
 		for _, call := range calls {
@@ -681,14 +674,11 @@ func (s *responseState) finalize() error {
 			}
 		}
 	}
-	if err := s.finishTool(); err != nil {
-		return err
-	}
 	// 去重矩阵(parsers.py:151-211 及各调用点):原生工具经 get_tool_calls
 	// (parsers.py:589-591)无条件去重,四路径皆然;openai 流收尾与括号恢复
 	// 合并后再去重(streaming_openai.py:283-284、streaming_core.py:499-501);
 	// 仅 anthropic 流式的括号恢复块追加不去重(streaming_anthropic.py:570-612)。
-	if s.options.protocol == "anthropic" && s.options.stream {
+	if s.options.protocol == "anthropic" && s.options.stream && s.options.policyMode == "" {
 		var native, bracket []*finishedTool
 		for _, ft := range s.tools {
 			if ft.bracket {
@@ -702,6 +692,23 @@ func (s *responseState) finalize() error {
 		s.finalTools = dedupTools(s.tools)
 	}
 	s.toolCount = len(s.finalTools)
+	for _, ft := range s.finalTools {
+		if s.options.policyMode != "" {
+			if ft.name == "" || s.options.forbidTools || !s.options.allowedTools[ft.name] ||
+				(s.options.policyMode == "named" && ft.name != s.options.policyTool) {
+				return &toolViolation{msg: "response returned disallowed tool '" + ft.name + "'"}
+			}
+			if ft.invalid {
+				return &toolViolation{msg: "tool '" + ft.name + "' returned malformed JSON arguments"}
+			}
+			if obj(ft.input) == nil {
+				return &toolViolation{msg: "tool '" + ft.name + "' arguments must be a JSON object"}
+			}
+		}
+		if ft.truncated && s.registersTruncation() {
+			saveToolTruncation(ft.id, ft.name)
+		}
+	}
 	if s.options.stream && s.options.protocol == "anthropic" {
 		// streaming_core.py:362-368 + streaming_anthropic.py:346-363/505-539:
 		// anthropic 流式的工具块在正文全部流完之后统一发出;openBlock 先闭
@@ -774,7 +781,6 @@ func (s *responseState) finalize() error {
 		// request; the notice is injected into the next one.
 		switch {
 		case s.toolCount > 0:
-			// Tool-call truncation was already recorded by finishTool.
 		case s.meaningful:
 			s.stopReason = "max_tokens"
 			s.stopSequence = ""
@@ -812,14 +818,6 @@ func (s *responseState) emitBracketTool(call object) error {
 	if raw := str(call["raw"]); raw != "" {
 		if norm, ok := normalizeOrderedJSON(raw, true); ok {
 			canonical = norm
-		}
-	}
-	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result):
-	// named 模式白名单只含被点名工具,调用其他已声明工具同样报 disallowed。
-	if s.options.policyMode != "" {
-		if s.options.forbidTools || !s.options.allowedTools[name] ||
-			(s.options.policyMode == "named" && name != s.options.policyTool) {
-			return &toolViolation{msg: "response returned disallowed tool '" + name + "'"}
 		}
 	}
 	s.tools = append(s.tools, &finishedTool{id: id, name: name, args: canonical, input: input, bracket: true})

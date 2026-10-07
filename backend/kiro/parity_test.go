@@ -1011,7 +1011,10 @@ func TestRound15Fixes(t *testing.T) {
 		}}
 		s.tool = &pendingTool{id: "1", name: "other"}
 		s.tool.args.WriteString("{}")
-		err := s.finishTool()
+		if err := s.finishTool(); err != nil {
+			t.Fatal(err)
+		}
+		err := s.finalize()
 		v, ok := err.(*toolViolation)
 		if !ok || v.msg != "response returned disallowed tool 'other'" {
 			t.Fatalf("err=%v", err)
@@ -1329,6 +1332,163 @@ func TestRound18Fixes(t *testing.T) {
 		blocks := list(parseResult(t, data)["content"])
 		if len(blocks) != 1 || str(obj(blocks[0])["thinking"]) != "ab" || str(obj(blocks[0])["signature"]) != "sig-two" {
 			t.Fatalf("blocks=%v", blocks)
+		}
+	})
+}
+
+func TestRound19Fixes(t *testing.T) {
+	t.Run("strict validates deduplicated tools", func(t *testing.T) {
+		for _, firstName := range []string{"lookup", "forbidden"} {
+			for _, stream := range []bool{false, true} {
+				wire := joinedFrames(
+					frame("toolUseEvent", object{"name": firstName, "toolUseId": "r19-healed", "input": `{"x":`, "stop": true}),
+					frame("toolUseEvent", object{"name": "lookup", "toolUseId": "r19-healed", "input": `{"x":1}`, "stop": true}), endFrame())
+				var calls int
+				server := seqStub(t, [][]byte{wire}, func(n int, _ object) { calls = n + 1 })
+				resp, err := NewTransport(nil).RoundTrip(strictRequest(t, server.URL, "openai", stream, "required"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil || resp.StatusCode != 200 || calls != 1 || !strings.Contains(string(data), "lookup") {
+					t.Fatalf("name=%s stream=%v status=%d calls=%d data=%s err=%v", firstName, stream, resp.StatusCode, calls, data, err)
+				}
+			}
+		}
+	})
+	t.Run("strict rejects nonobject arguments and recovers", func(t *testing.T) {
+		for _, args := range []string{`[]`, `null`, `1`, `"text"`, `true`} {
+			bad := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "input": args, "stop": true}), endFrame())
+			good := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "input": `{"x":1}`, "stop": true}), endFrame())
+			var calls int
+			var recovery string
+			server := seqStub(t, [][]byte{bad, good}, func(n int, payload object) {
+				calls = n + 1
+				if n == 1 {
+					recovery = currentContent(t, payload)
+				}
+			})
+			resp, err := NewTransport(nil).RoundTrip(strictRequest(t, server.URL, "openai", false, "required"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil || resp.StatusCode != 200 || calls != 2 || !strings.Contains(recovery, "must be a JSON object") {
+				t.Fatalf("args=%s calls=%d recovery=%s data=%s err=%v", args, calls, recovery, data, err)
+			}
+		}
+	})
+	t.Run("ordinary tool arguments preserve JSON values", func(t *testing.T) {
+		for _, args := range []string{`[1, 2]`, `null`, `1`, `"text"`, `true`} {
+			wire := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "input": args, "stop": true}), endFrame())
+			server := stub(t, wire, nil)
+			_, data, err := do(t, server.URL, "anthropic", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blocks := list(parseResult(t, data)["content"])
+			if len(blocks) != 1 || jsonText(obj(blocks[0])["input"]) != strings.ReplaceAll(args, " ", "") {
+				t.Fatalf("args=%s blocks=%v", args, blocks)
+			}
+		}
+	})
+	t.Run("pending native precedes bracket tools", func(t *testing.T) {
+		for _, stream := range []bool{false, true} {
+			s := newResponseState(requestOptions{protocol: "anthropic", stream: stream})
+			if err := s.accept(wireEvent{kind: "toolUseEvent", data: object{"name": "lookup", "toolUseId": "native", "input": `{"x":1}`}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.emitBlock("text", `[Called lookup with args: {"x":1}]`, false); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if stream {
+				want = 2
+			}
+			if len(s.finalTools) != want || s.finalTools[0].id != "native" {
+				t.Fatalf("stream=%v tools=%v", stream, s.finalTools)
+			}
+		}
+	})
+	t.Run("collect scans thinking and text in event order", func(t *testing.T) {
+		for _, protocol := range []string{"openai", "anthropic"} {
+			for _, stream := range []bool{false, true} {
+				for _, policy := range []string{"", "required"} {
+					s := newResponseState(requestOptions{protocol: protocol, stream: stream, policyMode: policy, allowedTools: map[string]bool{"lookup": true}})
+					if err := s.emitBlock("thinking", `[Called lookup with args: {`, false); err != nil {
+						t.Fatal(err)
+					}
+					if err := s.emitBlock("text", `"x":1}]`, false); err != nil {
+						t.Fatal(err)
+					}
+					if err := s.finalize(); err != nil {
+						t.Fatal(err)
+					}
+					want := 0
+					if policy != "" || protocol == "anthropic" && !stream {
+						want = 1
+					}
+					if len(s.finalTools) != want {
+						t.Fatalf("protocol=%s stream=%v policy=%s tools=%v", protocol, stream, policy, s.finalTools)
+					}
+				}
+			}
+		}
+	})
+	t.Run("strict anthropic stream deduplicates bracket tools", func(t *testing.T) {
+		s := newResponseState(requestOptions{protocol: "anthropic", stream: true, policyMode: "required", allowedTools: map[string]bool{"lookup": true}})
+		if err := s.emitBlock("text", `[Called lookup with args: {"x":1}] [Called lookup with args: {"x":1}]`, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.finalize(); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.finalTools) != 1 {
+			t.Fatalf("tools=%v", s.finalTools)
+		}
+	})
+	t.Run("healed tool does not register truncation", func(t *testing.T) {
+		for _, protocol := range []string{"openai", "anthropic"} {
+			id := "r19-truncation-" + protocol
+			popToolTruncation(id)
+			s := newResponseState(requestOptions{protocol: protocol, stream: true})
+			for _, args := range []string{`{"x":`, `{"x":1}`} {
+				if err := s.toolEvent(object{"name": "lookup", "toolUseId": id, "input": args, "stop": true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			if popToolTruncation(id) {
+				t.Fatalf("healed %s tool registered truncation", protocol)
+			}
+		}
+	})
+	t.Run("request field types", func(t *testing.T) {
+		for field, value := range map[string]any{"stream": nil, "logprobs": "bad", "parallel_tool_calls": object{}, "stream_options": "bad", "user": json.Number("1"), "seed": json.Number("1.5"), "top_logprobs": json.Number("1.5")} {
+			root := object{"model": "claude-sonnet-4-6", "messages": []any{object{"role": "user", "content": "hi"}}, field: value}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "openai", ""); err == nil {
+				t.Fatalf("field=%s value=%v accepted", field, value)
+			}
+		}
+		for _, value := range []any{json.Number("0.0"), json.Number("1.0")} {
+			root := object{"model": "claude-sonnet-4-6", "stream": value, "messages": []any{object{"role": "user", "content": "hi"}}, "logprobs": nil, "parallel_tool_calls": nil, "stream_options": nil, "user": nil}
+			_, opts := convert(t, root, "openai")
+			if opts.stream != (value == json.Number("1.0")) {
+				t.Fatalf("value=%v stream=%v", value, opts.stream)
+			}
+		}
+		for _, role := range []string{"user", "assistant", "system", "tool"} {
+			root := object{"model": "claude-sonnet-4-6", "messages": []any{object{"role": role, "content": "hi", "tool_calls": object{}}}}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "openai", ""); err == nil {
+				t.Fatalf("role=%s accepted object tool_calls", role)
+			}
 		}
 	})
 }
