@@ -141,7 +141,7 @@ func TestKiroModelsFailures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected fallback, error = %v", err)
 			}
-			if len(got.Models) != len(kiroFallbackModels) || got.Models[0].ID != "claude-sonnet-4" {
+			if len(got.Models) != len(kiroFallbackModels) || got.Models[0].ID != "auto-kiro" {
 				t.Fatalf("fallback = %v", got.Models)
 			}
 			if _, cached := l.lookup("kiro-1"); !cached {

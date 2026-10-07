@@ -674,17 +674,27 @@ func TestImageLeniency(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
-	// models_anthropic.py: ContentBlock 联合不含 image_url,边界 400。
-	bad := object{"model": "claude-sonnet-4-6", "max_tokens": 64, "messages": []any{object{"role": "user", "content": []any{
+	// extensions/server_tool_blocks.py:121-131: 宽化联合以 UnknownContentBlock
+	// 兜底,消息级 image_url 被接受并静默忽略——不再 422,图片也不上行。
+	ignored := object{"model": "claude-sonnet-4-6", "max_tokens": 64, "messages": []any{object{"role": "user", "content": []any{
 		object{"type": "image_url", "image_url": object{"url": "https://example.invalid/y.png"}},
 	}}}}
-	req, _ = http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(bad)))
+	server2 := stub(t, joinedFrames(frame("assistantResponseEvent", object{"content": "ok"}), endFrame()), func(_ *http.Request, p object) {
+		images := list(obj(obj(obj(p["conversationState"])["currentMessage"])["userInputMessage"])["images"])
+		if len(images) != 0 {
+			t.Errorf("images=%v", images)
+		}
+	})
+	req, _ = http.NewRequest("POST", server2.URL+"/v1/messages", strings.NewReader(jsonText(ignored)))
 	for k, v := range Headers("native-token", "") {
 		req.Header.Set(k, v)
 	}
-	if _, err := NewTransport(nil).RoundTrip(req); err == nil {
-		t.Fatal("anthropic image_url accepted")
+	resp2, err := NewTransport(nil).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
 	}
+	io.Copy(io.Discard, resp2.Body)
+	resp2.Body.Close()
 }
 
 func TestLenientToolFrames(t *testing.T) {

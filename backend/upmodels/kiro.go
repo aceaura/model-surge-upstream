@@ -27,8 +27,11 @@ const kiroMaxAttempts = 3
 
 // kiroFallbackModels 对齐 config.py FALLBACK_MODELS:列表拉取失败时回退的
 // 静态已知模型表,保证基础功能可用(部分模型可能不在当前套餐内)。
-// config.py HIDDEN_FROM_LIST=["auto"]: auto 只经 auto-kiro 别名直达,不入列表。
+// config.py:276 FALLBACK_MODELS 含 auto,经 model_resolver 隐藏 auto、
+// 补别名 auto-kiro——回退列表与动态路径(下方 190 行改名)一样露出
+// auto-kiro。
 var kiroFallbackModels = []string{
+	"auto-kiro",
 	"claude-sonnet-4", "claude-sonnet-4.5", "claude-sonnet-4.6",
 	"claude-haiku-4.5",
 	"claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.7", "claude-opus-4.8", "claude-opus-5",

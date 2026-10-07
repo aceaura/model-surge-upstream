@@ -440,7 +440,7 @@ func (s *responseState) finishTool() error {
 		}
 		norm, invalid = "{}", true
 	}
-	if s.options.forbidTools || !s.options.allowedTools[t.name] {
+	if s.options.forbidTools || !s.options.allowedTools[lookupToolAlias(t.name)] {
 		if s.options.policyMode != "" {
 			return &toolViolation{msg: "response returned disallowed tool '" + t.name + "'"}
 		}
@@ -493,7 +493,7 @@ func (s *responseState) toolEvent(d object) error {
 			// parsers.py:395: 仅键缺省时生成 call_+8 hex;空串原样保留。
 			id = "call_" + strings.ReplaceAll(newID(), "-", "")[:8]
 		}
-		s.tool = &pendingTool{id: id, name: str(d["name"])}
+		s.tool = &pendingTool{id: id, name: restoreToolName(str(d["name"]))}
 	} else if s.tool == nil {
 		// parsers.py:408-427: 无开启工具的碎片帧静默忽略。
 		return nil
@@ -740,7 +740,7 @@ func (s *responseState) emitBracketTool(call object) error {
 	if s.toolCount >= 1024 {
 		return fmt.Errorf("kiro: response exceeds 1024 tool calls")
 	}
-	id, name := str(call["toolUseId"]), str(call["name"])
+	id, name := str(call["toolUseId"]), restoreToolName(str(call["name"]))
 	input := obj(call["input"])
 	canonical := jsonText(input)
 	// parsers.py:142: 括号工具 arguments 同走 json.dumps(json.loads) 归一;
@@ -752,7 +752,7 @@ func (s *responseState) emitBracketTool(call object) error {
 	}
 	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result)。
 	if s.options.policyMode != "" {
-		if s.options.forbidTools || !s.options.allowedTools[name] {
+		if s.options.forbidTools || !s.options.allowedTools[lookupToolAlias(name)] {
 			return &toolViolation{msg: "response returned disallowed tool '" + name + "'"}
 		}
 		if s.options.policyMode == "named" && name != s.options.policyTool {

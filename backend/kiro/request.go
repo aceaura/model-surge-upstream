@@ -361,9 +361,35 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		if err != nil {
 			return fail(err)
 		}
+		// extensions/billing_header_strip.py:42-62(app_entry 恒装,默认开):
+		// 剥掉 Claude Code 注入的系统提示首行 billing 归属(cch 每请求随机,
+		// 会毒化上游缓存前缀)。
+		system = stripBillingHeader(system)
 	}
 	var tools []any
 	var toolDocs []string
+	// extensions/tool_name_alias.py:68-78(app_entry 恒装):先登记本轮全部
+	// 工具名——合法名进保留集防止被长名别名抢占,非法/超长名取
+	// t_<sha256[:12]>_<suffix> 别名上行,响应侧恢复原名。
+	var toolNames []string
+	for _, v := range list(root["tools"]) {
+		t := obj(v)
+		if protocol == "openai" {
+			if typ := str(t["type"]); typ != "" && typ != "function" {
+				continue
+			}
+			if fn := obj(t["function"]); fn != nil {
+				t = fn
+			} else if str(t["name"]) == "" {
+				continue
+			}
+		}
+		if n, ok := t["name"].(string); ok {
+			toolNames = append(toolNames, n)
+		}
+	}
+	registerToolNames(toolNames)
+	seenTools := map[string]bool{}
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
 		flat := false
@@ -383,13 +409,19 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				continue
 			}
 		}
-		name := str(t["name"])
-		if name == "" || utf8.RuneCountInString(name) > 64 {
-			return fail(fmt.Errorf("tool name must contain 1..64 characters"))
+		name, nameOK := t["name"].(string)
+		if !nameOK {
+			// models_anthropic.py / models_openai.py: 工具 name 必填字符串。
+			return fail(fmt.Errorf("tool name is required"))
 		}
-		if opts.allowedTools[name] {
+		if seenTools[name] {
 			return fail(fmt.Errorf("duplicate tool %q", name))
 		}
+		seenTools[name] = true
+		// tool_name_alias.py:126-143: 宽化部署不再拒绝超长/非法名,统一
+		// 换别名上行;描述占位与长描述迁移段也用别名(参考实现先别名后
+		// 转换)。
+		name = aliasToolName(name)
 		opts.allowedTools[name] = true
 		schema := t["input_schema"]
 		if protocol == "openai" && !flat {
@@ -503,16 +535,19 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				return fail(fmt.Errorf("role is required"))
 			}
 		}
-		// models_anthropic.py:229: role 是 Literal["user","assistant"],其他
-		// 角色(含 system)在参考实现里直接被 422 拒绝。
-		if protocol == "anthropic" && role != "user" && role != "assistant" {
-			return fail(fmt.Errorf("role must be user or assistant"))
+		// models_anthropic.py:229 + extensions/role_widening.py:44-46(app_entry
+		// 部署恒装):role 宽化为 Literal["user","assistant","system"],新版
+		// Claude Code 的内联 system 消息(system-reminder 等)被接受,经
+		// normalize_message_roles 折为 user;其余角色仍被 422 拒绝。
+		if protocol == "anthropic" && role != "user" && role != "assistant" && role != "system" {
+			return fail(fmt.Errorf("role must be user, assistant or system"))
 		}
-		// converters_openai.py:169-175: 只有 system 进系统提示,多条 "\n"
-		// 连接并整体 strip;developer 等未知角色按 user 解析,但归一化在
-		// 合并之后(converters_core.py:1728-1740: merge → 首条 user →
-		// normalize → alternating)。
-		if role == "system" {
+		// converters_openai.py:169-175: 只有 openai 的 system 进系统提示,
+		// 多条 "\n" 连接并整体 strip;developer 等未知角色按 user 解析,但
+		// 归一化在合并之后(converters_core.py:1728-1740: merge → 首条
+		// user → normalize → alternating)。anthropic 内联 system 不进系统
+		// 提示(系统提示只读 root.system),作为普通消息走流水线。
+		if protocol == "openai" && role == "system" {
 			s, e := textOnly(m["content"])
 			if e != nil {
 				return fail(e)
@@ -523,7 +558,12 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")
 		if !parseable {
-			m["role"] = "user"
+			// anthropic 内联 system 保留原角色:提取门控只认 user/assistant
+			// (converters_anthropic.py:297-319),system 消息只贡献文本,
+			// 且合并分组按原始角色(system 不与相邻 user 合并)。
+			if protocol != "anthropic" || role != "system" {
+				m["role"] = "user"
+			}
 		}
 		msg, e := parseMessage(m, protocol)
 		if e != nil {
@@ -876,6 +916,23 @@ func textOnly(v any) (string, error) {
 // systemPromptText 是顶层 system 字段的提取:字符串原样,块列表只收
 // type=text 的块"\n"连接,其余块静默跳过(converters_anthropic.py:105-117),
 // 标量按 Python str() 收场。
+// billingHeaderLine 对齐 billing_header_strip.py:42-44:只匹配系统提示首行
+// 的 billing 归属行及其换行,大小写不敏感。
+var billingHeaderLine = regexp.MustCompile(`(?i)^x-anthropic-billing-header:[^\n]*\n?`)
+
+// stripBillingHeader 剥掉首行 billing 归属;有剥离时再去掉顶部残留空行
+// (billing_header_strip.py:54-62)。
+func stripBillingHeader(s string) string {
+	if s == "" {
+		return s
+	}
+	stripped := billingHeaderLine.ReplaceAllString(s, "")
+	if stripped != s {
+		return strings.TrimLeft(stripped, "\n")
+	}
+	return s
+}
+
 func systemPromptText(v any) (string, error) {
 	if v == nil {
 		return "", nil
@@ -963,14 +1020,16 @@ func parseMessage(m object, protocol string) (message, error) {
 						return result, fmt.Errorf("thinking block requires a string thinking field")
 					}
 				}
-			// models_anthropic.py:205-212: ContentBlock 联合类型不含
-			// redacted_thinking,参考实现对它 422——落入 default 报错。
+			// extensions/server_tool_blocks.py:121-131: 宽化联合以
+			// UnknownContentBlock 兜底,redacted_thinking 等未列名块型
+			// 被接受并静默忽略——落入 default 分支。
 			case "tool_reference": // Claude Code 延迟工具标记(models_anthropic.py:128),Kiro 无对应物,忽略。
 			case "image", "image_url":
-				// models_anthropic.py: ContentBlock 联合只含 image;
-				// image_url 出现在 anthropic 请求里 422。
+				// UnknownContentBlock 兜底(server_tool_blocks.py:81-98)同样
+				// 接住 anthropic 消息级的 image_url:接受并忽略,不再 422。
+				// (tool_result 内层联合未被宽化,那里仍是 422。)
 				if protocol == "anthropic" && str(b["type"]) == "image_url" {
-					return result, fmt.Errorf("unsupported content block %q", "image_url")
+					continue
 				}
 				// models_anthropic.py:200-201: source 必填且为 base64/url
 				// 联合,缺省或异型 422(pydantic 先于角色过滤)。
@@ -1013,7 +1072,7 @@ func parseMessage(m object, protocol string) (message, error) {
 				if id == "" || name == "" {
 					continue
 				}
-				u := toolUse(id, name, b["input"])
+				u := toolUse(id, aliasToolName(name), b["input"])
 				// converters_anthropic.py:254: unified arguments 恒为 coerce 后
 				// 的 dict,文本化渲染取其 Python repr。
 				u["argsText"] = pyRepr(u["input"])
@@ -1045,12 +1104,19 @@ func parseMessage(m object, protocol string) (message, error) {
 				result.results = append(result.results, toolResult(id, text))
 			default:
 				// extract_text_content: openai 未知块带 text 键则收割,
-				// 否则跳过;anthropic 未知块 422。
+				// 否则跳过。
 				if protocol == "openai" {
 					result.text += str(b["text"])
 					continue
 				}
-				return result, fmt.Errorf("unsupported content block %q", str(b["type"]))
+				// extensions/server_tool_blocks.py:81-98(app_entry 恒装):
+				// UnknownContentBlock 兜底接受任何带字符串 type 的块
+				// (server_tool_use/web_search_tool_result 等),转换层只读
+				// text/tool_use/tool_result,未知块静默忽略;type 缺失或非
+				// 字符串仍 422。
+				if _, ok := b["type"].(string); !ok {
+					return result, fmt.Errorf("content block type is required")
+				}
 			}
 		}
 	}
@@ -1066,7 +1132,7 @@ func parseMessage(m object, protocol string) (message, error) {
 		// converters_openai.py:137-145: 只读 id 与 function,不校验
 		// type 字段;id/name/arguments 缺省分别按 ""/""/"{}" 保留。
 		f := obj(tc["function"])
-		u := toolUse(str(tc["id"]), str(f["name"]), f["arguments"])
+		u := toolUse(str(tc["id"]), aliasToolName(str(f["name"])), f["arguments"])
 		// 文本化渲染用 unified arguments 原文:字符串 verbatim,缺省
 		// "{}",非标量(dict 等,models_openai.py:81 List[Any] 无校验)
 		// 取 Python repr。

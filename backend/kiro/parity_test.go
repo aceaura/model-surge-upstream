@@ -422,9 +422,10 @@ func TestToolPairingRepair(t *testing.T) {
 		}
 	})
 	t.Run("anthropic rejects non-user-assistant roles", func(t *testing.T) {
-		// models_anthropic.py:229: role 是 Literal["user","assistant"],
-		// 其他角色(含 system/developer)参考实现 422。
-		for _, role := range []string{"system", "developer", "function", "tool"} {
+		// models_anthropic.py:229 + extensions/role_widening.py:44-46:
+		// 宽化后 role 是 Literal["user","assistant","system"],其余角色
+		// (developer/function/tool)参考部署仍 422。
+		for _, role := range []string{"developer", "function", "tool"} {
 			root := object{"model": "claude-sonnet-4.6", "max_tokens": 1024, "messages": []any{
 				object{"role": role, "content": "x"},
 				object{"role": "user", "content": "hello"},
@@ -715,6 +716,99 @@ func TestUpstreamRetry(t *testing.T) {
 		resp.Body.Close()
 		if attempts != 1 || resp.StatusCode != 400 {
 			t.Fatalf("attempts=%d status=%d", attempts, resp.StatusCode)
+		}
+	})
+}
+
+func TestDeploymentWidening(t *testing.T) {
+	t.Run("inline system folds to user", func(t *testing.T) {
+		// extensions/role_widening.py:44-46: 内联 system 消息被接受,只贡献
+		// 文本(converters_anthropic.py:297-303 门控),经 normalize 折为
+		// user 进 history。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+			object{"role": "system", "content": "reminder-xyz"},
+			object{"role": "user", "content": "hello"},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		content := currentContent(t, payload)
+		if !strings.Contains(content, "hello") || strings.Contains(content, "reminder-xyz") {
+			t.Fatalf("content=%q", content)
+		}
+		if !strings.Contains(jsonText(obj(payload["conversationState"])["history"]), "reminder-xyz") {
+			t.Fatalf("history lost reminder: %v", payload)
+		}
+	})
+	t.Run("unknown blocks accepted and ignored", func(t *testing.T) {
+		// extensions/server_tool_blocks.py:81-98: UnknownContentBlock 兜底
+		// 接受任何带字符串 type 的块,转换层静默忽略。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+			object{"role": "user", "content": []any{
+				object{"type": "server_tool_use", "id": "s1", "name": "web_search", "input": object{}},
+				object{"type": "web_search_tool_result", "tool_use_id": "s1", "content": "results"},
+				object{"type": "redacted_thinking", "data": "blob"},
+				object{"type": "text", "text": "hi"},
+			}},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		if !strings.Contains(currentContent(t, payload), "hi") {
+			t.Fatalf("payload=%v", payload)
+		}
+		// type 缺失或非字符串的块仍在边界拒绝。
+		bad := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+			object{"role": "user", "content": []any{object{"foo": "bar"}}},
+		}}
+		if _, _, err := convertRequest([]byte(jsonText(bad)), "anthropic", ""); err == nil {
+			t.Fatal("type-less block accepted")
+		}
+	})
+	t.Run("billing header stripped", func(t *testing.T) {
+		// extensions/billing_header_strip.py:42-62: 系统提示首行 billing
+		// 归属被剥离,其余行保留。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "system": []any{
+			object{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.0; cch=abcde;"},
+			object{"type": "text", "text": "real system"},
+		}, "messages": []any{object{"role": "user", "content": "hi"}}}
+		payload, _ := convert(t, root, "anthropic")
+		raw := jsonText(payload)
+		if strings.Contains(raw, "billing-header") || !strings.Contains(raw, "real system") {
+			t.Fatalf("payload=%v", payload)
+		}
+	})
+	t.Run("tool name alias roundtrip", func(t *testing.T) {
+		// extensions/tool_name_alias.py:27-60: 超长/非法名换
+		// t_<sha256[:12]>_<suffix> 别名上行,响应事件恢复原名
+		// (tool_name_alias.py:153-168)。
+		long := "mcp__filesystem__read_text_file_with_an_extremely_long_name_beyond_64"
+		alias := aliasToolName(long)
+		if alias == long || !strings.HasPrefix(alias, "t_") || len(alias) > 64 {
+			t.Fatalf("alias=%q", alias)
+		}
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "tools": []any{
+			object{"name": long, "description": "read", "input_schema": object{}},
+		}, "messages": []any{object{"role": "user", "content": "hi"}}}
+		payload, _ := convert(t, root, "anthropic")
+		ctx := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["userInputMessageContext"]
+		spec := obj(obj(list(obj(ctx)["tools"])[0])["toolSpecification"])
+		if str(spec["name"]) != alias {
+			t.Fatalf("upstream name=%q want %q", str(spec["name"]), alias)
+		}
+		wire := joinedFrames(frame("toolUseEvent", object{"name": alias, "toolUseId": "call_1", "input": object{}, "stop": true}), endFrame())
+		server := stub(t, wire, nil)
+		req, _ := http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(root)))
+		for k, v := range Headers("native-token", "") {
+			req.Header.Set(k, v)
+		}
+		resp, err := NewTransport(nil).RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"name":"`+long+`"`) || strings.Contains(string(data), alias) {
+			t.Fatalf("data=%s", data)
 		}
 	})
 }
