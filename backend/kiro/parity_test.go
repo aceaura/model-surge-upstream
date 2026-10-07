@@ -1225,3 +1225,110 @@ func TestRound17Fixes(t *testing.T) {
 		}
 	})
 }
+
+func TestRound18Fixes(t *testing.T) {
+	t.Run("anthropic stream defers tool blocks and dedups native", func(t *testing.T) {
+		// streaming_core.py:362-368: 原生工具事件只在全部字节消费完后
+		// 统一交出;get_tool_calls(parsers.py:589-591)无条件去重。
+		// 同 id 同参数的两帧收敛为一个块,且工具块在全部正文之后发出。
+		wire := joinedFrames(
+			frame("assistantResponseEvent", object{"content": "before"}),
+			frame("toolUseEvent", object{"name": "lookup", "toolUseId": "t1", "input": `{"x": 1}`, "stop": true}),
+			frame("toolUseEvent", object{"name": "lookup", "toolUseId": "t1", "input": `{"x": 1}`, "stop": true}),
+			frame("assistantResponseEvent", object{"content": "after"}),
+			endFrame())
+		server := stub(t, wire, nil)
+		_, data, err := do(t, server.URL, "anthropic", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(data)
+		if n := strings.Count(body, `"type":"tool_use"`); n != 1 {
+			t.Fatalf("tool blocks=%d: %s", n, body)
+		}
+		if strings.Index(body, "after") > strings.Index(body, `"type":"tool_use"`) {
+			t.Fatalf("tool block emitted before trailing text: %s", body)
+		}
+	})
+	t.Run("anthropic stream bracket tools not deduped", func(t *testing.T) {
+		// streaming_anthropic.py:570-612: 流式括号恢复块追加在原生工具
+		// 之后,不再去重。
+		wire := joinedFrames(
+			frame("assistantResponseEvent", object{"content": `[Called lookup with args: {"x": 1}] [Called lookup with args: {"x": 1}]`}),
+			endFrame())
+		server := stub(t, wire, nil)
+		_, data, err := do(t, server.URL, "anthropic", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(string(data), `"type":"tool_use"`); n != 2 {
+			t.Fatalf("bracket blocks=%d: %s", n, data)
+		}
+	})
+	t.Run("budget tokens beat effort none", func(t *testing.T) {
+		// converters_anthropic.py:423-430: budget 检查在 effort 之前,
+		// 命中预算即返回,effort="none" 不再禁用思考。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": json.Number("100"),
+			"thinking":      object{"type": "enabled", "budget_tokens": json.Number("5000")},
+			"output_config": object{"effort": "none"},
+			"messages":      []any{object{"role": "user", "content": "hi"}}}
+		payload, _ := convert(t, root, "anthropic")
+		if content := currentContent(t, payload); !strings.Contains(content, "<max_thinking_length>5000</max_thinking_length>") {
+			t.Fatalf("budget lost to effort=none: %s", content)
+		}
+		root2 := object{"model": "claude-sonnet-4.6", "max_tokens": json.Number("100"),
+			"output_config": object{"effort": "none"},
+			"messages":      []any{object{"role": "user", "content": "hi"}}}
+		payload2, _ := convert(t, root2, "anthropic")
+		if content := currentContent(t, payload2); strings.HasPrefix(content, "<thinking_mode>") {
+			t.Fatalf("effort=none did not disable: %s", content)
+		}
+	})
+	t.Run("anthropic scalar system rejected", func(t *testing.T) {
+		// models_anthropic.py:343: SystemPrompt=Union[str,List[Block],
+		// List[Dict]]——标量与列表内非对象项 422。
+		for _, sys := range []any{json.Number("5"), true, []any{"x"}, []any{json.Number("1")}} {
+			root := object{"model": "claude-sonnet-4.6", "max_tokens": json.Number("100"), "system": sys,
+				"messages": []any{object{"role": "user", "content": "hi"}}}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "anthropic", ""); err == nil {
+				t.Fatalf("system=%v accepted", sys)
+			}
+		}
+	})
+	t.Run("openai tool_call_id and name non-string rejected", func(t *testing.T) {
+		// models_openai.py:80-82: tool_call_id/name 为 Optional[str],
+		// pydantic lax 拒数字;缺省与 null 合法。
+		badID := object{"model": "gpt-5.5", "messages": []any{
+			object{"role": "assistant", "content": "x", "tool_calls": []any{object{"id": "c1", "type": "function", "function": object{"name": "lookup", "arguments": "{}"}}}},
+			object{"role": "tool", "tool_call_id": json.Number("5"), "content": "r"}}}
+		if _, _, err := convertRequest([]byte(jsonText(badID)), "openai", ""); err == nil {
+			t.Fatal("numeric tool_call_id accepted")
+		}
+		badName := object{"model": "gpt-5.5", "messages": []any{object{"role": "user", "content": "hi", "name": json.Number("5")}}}
+		if _, _, err := convertRequest([]byte(jsonText(badName)), "openai", ""); err == nil {
+			t.Fatal("numeric name accepted")
+		}
+		nullName := object{"model": "gpt-5.5", "messages": []any{object{"role": "user", "content": "hi", "name": nil}}}
+		if _, _, err := convertRequest([]byte(jsonText(nullName)), "openai", ""); err != nil {
+			t.Fatalf("null name rejected: %v", err)
+		}
+	})
+	t.Run("nonstream signature last wins", func(t *testing.T) {
+		// streaming_core.py:487-488: 多个签名帧覆盖赋值,合并后取最后者。
+		wire := joinedFrames(
+			frame("reasoningContentEvent", object{"text": "a"}),
+			frame("reasoningContentEvent", object{"signature": "sig-one"}),
+			frame("reasoningContentEvent", object{"text": "b"}),
+			frame("reasoningContentEvent", object{"signature": "sig-two"}),
+			endFrame())
+		server := stub(t, wire, nil)
+		_, data, err := do(t, server.URL, "anthropic", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocks := list(parseResult(t, data)["content"])
+		if len(blocks) != 1 || str(obj(blocks[0])["thinking"]) != "ab" || str(obj(blocks[0])["signature"]) != "sig-two" {
+			t.Fatalf("blocks=%v", blocks)
+		}
+	})
+}

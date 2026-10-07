@@ -997,8 +997,8 @@ func textOnly(v any) (string, error) {
 }
 
 // systemPromptText 是顶层 system 字段的提取:字符串原样,块列表只收
-// type=text 的块"\n"连接,其余块静默跳过(converters_anthropic.py:105-117),
-// 标量按 Python str() 收场。
+// type=text 的块"\n"连接,其余块静默跳过(converters_anthropic.py:105-117);
+// 标量与非对象块项由 pydantic 联合类型在边界拒绝(models_anthropic.py:343)。
 // billingHeaderLine 对齐 billing_header_strip.py:42-44:只匹配系统提示首行
 // 的 billing 归属行及其换行,大小写不敏感。
 var billingHeaderLine = regexp.MustCompile(`(?i)^x-anthropic-billing-header:[^\n]*\n?`)
@@ -1025,11 +1025,18 @@ func systemPromptText(v any) (string, error) {
 	}
 	a, ok := v.([]any)
 	if !ok {
-		return pythonicString(v), nil
+		// models_anthropic.py:343: SystemPrompt=Union[str,
+		// List[SystemContentBlock],List[Dict]]——标量系统提示 422。
+		return "", fmt.Errorf("system must be a string or a list of content blocks")
 	}
 	parts := []string{}
 	for _, v := range a {
-		if b := obj(v); b != nil && str(b["type"]) == "text" {
+		b := obj(v)
+		if b == nil {
+			// pydantic 联合类型的两个列表分支都只收字典项,非对象项 422。
+			return "", fmt.Errorf("system blocks must be objects")
+		}
+		if str(b["type"]) == "text" {
 			parts = append(parts, str(b["text"]))
 		}
 	}
@@ -1041,6 +1048,17 @@ func parseMessage(m object, protocol string) (message, error) {
 	// openai 侧 content 可缺省。
 	if protocol == "anthropic" && m["content"] == nil {
 		return result, fmt.Errorf("content is required")
+	}
+	if protocol == "openai" {
+		// models_openai.py:80-82: tool_call_id/name 为 Optional[str],
+		// pydantic v2 lax 不强迫非字符串,整请求 422;缺省与 null 合法。
+		for _, key := range []string{"tool_call_id", "name"} {
+			if v, has := m[key]; has && v != nil {
+				if _, ok := v.(string); !ok {
+					return result, fmt.Errorf("%s must be a string", key)
+				}
+			}
+		}
 	}
 	if result.role == "tool" {
 		result.role = "user"

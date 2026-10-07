@@ -99,10 +99,11 @@ func extractThinking(root object, protocol string) thinkingConfig {
 	if str(thinking["type"]) == "adaptive" {
 		cfg.adaptive = true
 	}
-	// converters_anthropic.py:420-462 优先级:disabled → budget_tokens →
-	// adaptive → output_config.effort → reasoning_effort;openai 侧只读
-	// reasoning_effort(converters_openai.py:321-353),minimal→low 别名也
-	// 只属 openai(config.py:526 OPENAI_EFFORT_ALIASES)。
+	// converters_anthropic.py:420-464 优先级:disabled → budget_tokens →
+	// adaptive → output_config.effort → reasoning_effort;budget 命中即返回,
+	// 不看 effort(即便 effort="none")。openai 侧只读 reasoning_effort
+	// (converters_openai.py:321-353),minimal→low 别名与 none→disabled 也
+	// 只属 openai 自己的提取路径(config.py:526 OPENAI_EFFORT_ALIASES)。
 	effort := ""
 	if protocol == "openai" {
 		raw := root["reasoning_effort"]
@@ -126,13 +127,16 @@ func extractThinking(root object, protocol string) thinkingConfig {
 	if effort != "" && !knownEffortTiers[effort] {
 		effort = "medium" // EFFORT_FALLBACK
 	}
-	if str(thinking["type"]) == "disabled" || effort == "none" {
+	if str(thinking["type"]) == "disabled" {
 		cfg.disabled = true
 		return cfg
 	}
 	if n, ok := absoluteTokens(thinking["budget_tokens"]); ok && n > 0 {
-		// budget_tokens 压过 effort:Python 命中预算即返回,不再看 effort。
 		cfg.budget = n
+		return cfg
+	}
+	if effort == "none" {
+		cfg.disabled = true
 		return cfg
 	}
 	cfg.effort = effort

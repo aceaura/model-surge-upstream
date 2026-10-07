@@ -421,9 +421,9 @@ func TestToolFragmentAssemblyAndDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := list(parseResult(t, data)["content"])
-	// streaming_core.py:499-501: anthropic 非流式无括号恢复命中不去重,
-	// 同 id 重复帧原样保留为两个 tool_use 块。
-	if len(blocks) != 2 || jsonText(obj(blocks[0])["input"]) != jsonText(input) || jsonText(obj(blocks[1])["input"]) != jsonText(input) {
+	// parsers.py:589-591: get_tool_calls 无条件去重,anthropic 非流式的
+	// 同 id 重复帧同样收敛为一个 tool_use 块(十八轮更正十轮矩阵)。
+	if len(blocks) != 1 || jsonText(obj(blocks[0])["input"]) != jsonText(input) {
 		t.Fatal(blocks)
 	}
 	conflicting := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": "id", "input": object{"x": 1}, "stop": true}), frame("toolUseEvent", object{"name": "lookup", "toolUseId": "id", "input": object{"x": 2}, "stop": true}), endFrame())

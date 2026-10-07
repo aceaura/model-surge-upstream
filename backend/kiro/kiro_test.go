@@ -285,7 +285,9 @@ func assertAnthropicStream(t *testing.T, es []object) {
 			final = e
 		}
 	}
-	if text != "hahathen" || len(open) != 4 || len(stopped) != 4 || types[1] != "tool_use" || ids[1] != "call_1" || ids[3] != "call_2" || arguments[1] != `{"x": 1}` || arguments[3] != `{"x": 2}` {
+	// streaming_core.py:362-368: 工具事件在流末尾统一交出,正文保持单个
+	// text 块,两个工具块依次收尾(十八轮更正,此前按逐工具实时发块断言)。
+	if text != "hahathen" || len(open) != 3 || len(stopped) != 3 || types[1] != "tool_use" || ids[1] != "call_1" || ids[2] != "call_2" || arguments[1] != `{"x": 1}` || arguments[2] != `{"x": 2}` {
 		t.Fatalf("text=%s indices=%v args=%v", text, types, arguments)
 	}
 	if obj(final["delta"])["stop_reason"] != "tool_use" || number(obj(final["usage"])["input_tokens"]) != 17 || number(obj(final["usage"])["output_tokens"]) != 9 {

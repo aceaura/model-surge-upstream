@@ -44,6 +44,7 @@ type finishedTool struct {
 	args     string
 	input    any
 	invalid  bool
+	bracket  bool
 }
 
 // normalizeOrderedJSON 把合法 JSON 重编码为 Python json.dumps 风格文本:
@@ -269,7 +270,6 @@ type responseState struct {
 	cacheReadAbs, cacheCreateAbs  bool
 	terminal, meaningful          bool
 	sentRole                      bool
-	bracketFound                  bool
 	stopReason                    string
 	stopSequence                  string
 	emit                          func(string, object)
@@ -458,10 +458,9 @@ func (s *responseState) finishTool() error {
 	if decoded, err := decodeObject(norm); err == nil {
 		input = decoded
 	}
-	// streaming_anthropic.py:505-540: anthropic 流式逐工具实时发块,全程不去重;
-	// openai 流收尾去重后聚合单 chunk(streaming_openai.py:284);非流式仅在
-	// 括号恢复命中时去重(streaming_core.py:499-501)。三者统一先入 tools,
-	// 去重在 finalize 按矩阵进行。
+	// streaming_core.py:362-368: 原生工具事件在参考实现里只在全部字节
+	// 消费完后由 get_tool_calls(parsers.py:589-591,无条件去重)统一交出,
+	// 发块在 finalize 按协议矩阵进行。
 	s.tools = append(s.tools, &finishedTool{id: t.id, name: t.name, args: norm, input: input, invalid: invalid})
 	s.toolCount++
 	if !s.options.stream {
@@ -469,21 +468,6 @@ func (s *responseState) finishTool() error {
 		if s.collectedBytes > maxResponseBytes {
 			return fmt.Errorf("kiro: response exceeds collection limit")
 		}
-	}
-	if s.options.stream && s.options.protocol == "anthropic" {
-		// streaming_anthropic.py:366: 空 toolUseId 回退 toolu_<24hex>
-		// (anthropic 客户端不接受空 id);openai 侧保留空串。
-		id := t.id
-		if id == "" {
-			id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
-		}
-		// streaming_anthropic.py:515-518: partial_json 用 ensure_ascii=False
-		// 的 UTF-8 形式,与存储的 ASCII arguments 分开渲染。
-		partial, _ := normalizeOrderedJSON(norm, false)
-		block := object{"type": "tool_use", "id": id, "name": t.name, "input": object{}}
-		s.openBlock("tool_use", block)
-		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": partial}})
-		s.closeBlock()
 	}
 	return nil
 }
@@ -691,7 +675,6 @@ func (s *responseState) finalize() error {
 			scan += s.fullThinking.String()
 		}
 		calls := parseBracketToolCalls(scan)
-		s.bracketFound = len(calls) > 0
 		for _, call := range calls {
 			if err := s.emitBracketTool(call); err != nil {
 				return err
@@ -701,23 +684,48 @@ func (s *responseState) finalize() error {
 	if err := s.finishTool(); err != nil {
 		return err
 	}
-	// 去重矩阵(parsers.py:151-210 及各调用点):openai 恒去重——流式收尾
-	// (streaming_openai.py:284),非流式复用流式生成器同一收口
-	// (collect_stream_response);anthropic 流实时发块不去重;anthropic
-	// 非流式仅在括号恢复命中时去重(streaming_core.py:499-501)。
-	switch {
-	case s.options.protocol == "anthropic" && (s.options.stream || !s.bracketFound):
-		s.finalTools = s.tools
-	default:
+	// 去重矩阵(parsers.py:151-211 及各调用点):原生工具经 get_tool_calls
+	// (parsers.py:589-591)无条件去重,四路径皆然;openai 流收尾与括号恢复
+	// 合并后再去重(streaming_openai.py:283-284、streaming_core.py:499-501);
+	// 仅 anthropic 流式的括号恢复块追加不去重(streaming_anthropic.py:570-612)。
+	if s.options.protocol == "anthropic" && s.options.stream {
+		var native, bracket []*finishedTool
+		for _, ft := range s.tools {
+			if ft.bracket {
+				bracket = append(bracket, ft)
+			} else {
+				native = append(native, ft)
+			}
+		}
+		s.finalTools = append(dedupTools(native), bracket...)
+	} else {
 		s.finalTools = dedupTools(s.tools)
 	}
 	s.toolCount = len(s.finalTools)
+	if s.options.stream && s.options.protocol == "anthropic" {
+		// streaming_core.py:362-368 + streaming_anthropic.py:346-363/505-539:
+		// anthropic 流式的工具块在正文全部流完之后统一发出;openBlock 先闭
+		// 合未闭合的 thinking/text 块。空 id 回退 toolu_<24hex>
+		// (streaming_anthropic.py:366);partial_json 用 ensure_ascii=False
+		// 的 UTF-8 形式(streaming_anthropic.py:518)。
+		for _, ft := range s.finalTools {
+			id := ft.id
+			if id == "" {
+				id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
+			}
+			partial, _ := normalizeOrderedJSON(ft.args, false)
+			s.openBlock("tool_use", object{"type": "tool_use", "id": id, "name": ft.name, "input": object{}})
+			s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": partial}})
+			s.closeBlock()
+		}
+	}
 	if !s.options.stream {
 		s.closeBlock()
 		if s.options.protocol == "anthropic" {
 			// streaming_anthropic.py:761-766: 非流式把全部 thinking 合并为
 			// 单块置首、全部 text 合并为单块,thinking 无签名帧时生成
-			// sig_ 占位;块顺序恒 thinking → text → tool_use。
+			// sig_ 占位;块顺序恒 thinking → text → tool_use。多个签名帧
+			// 最后者胜(streaming_core.py:487-488 覆盖赋值)。
 			var thinking, text strings.Builder
 			sig := ""
 			thinkingSeen, textSeen := false, false
@@ -727,8 +735,8 @@ func (s *responseState) finalize() error {
 				case "thinking":
 					thinkingSeen = true
 					thinking.WriteString(str(obj(b)["thinking"]))
-					if sig == "" {
-						sig = str(obj(b)["signature"])
+					if sg := str(obj(b)["signature"]); sg != "" {
+						sig = sg
 					}
 				case "text":
 					textSeen = true
@@ -814,22 +822,13 @@ func (s *responseState) emitBracketTool(call object) error {
 			return &toolViolation{msg: "response returned disallowed tool '" + name + "'"}
 		}
 	}
-	s.tools = append(s.tools, &finishedTool{id: id, name: name, args: canonical, input: input})
+	s.tools = append(s.tools, &finishedTool{id: id, name: name, args: canonical, input: input, bracket: true})
 	s.toolCount++
 	if !s.options.stream {
 		s.collectedBytes += len(canonical)
 		if s.collectedBytes > maxResponseBytes {
 			return fmt.Errorf("kiro: response exceeds collection limit")
 		}
-	}
-	// streaming_anthropic.py:571-613: 括号恢复的块在收尾实时追加,不去重;
-	// partial_json 用 ensure_ascii=False 的 UTF-8 形式。
-	if s.options.stream && s.options.protocol == "anthropic" {
-		partial, _ := normalizeOrderedJSON(canonical, false)
-		block := object{"type": "tool_use", "id": id, "name": name, "input": object{}}
-		s.openBlock("tool_use", block)
-		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": partial}})
-		s.closeBlock()
 	}
 	return nil
 }
