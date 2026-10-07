@@ -357,6 +357,11 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		out.TransferEncoding = nil
 		out.Trailer = nil
 		state := newResponseState(options)
+		if options.policyMode != "" && options.protocol == "anthropic" {
+			// 严格 Anthropic 先按非流语义收集:合并 thinking 置首,
+			// 保留全局末签名及 fallback,校验通过后再回放 SSE。
+			state.options.stream = false
+		}
 		if options.policyMode == "" {
 			body := ownedBody(rawBody, ctx, cancel)
 			if options.stream {
@@ -379,19 +384,21 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			return &out, nil
 		}
-		// 严格模式: SSE 先落缓冲,校验通过才回放给客户端。body 用子 ctx,
-		// 关闭它不会取消共享 ctx,恢复重试仍能复用 upstream。
+		// 严格模式:校验通过才回放给客户端;OpenAI SSE 先落缓冲,
+		// Anthropic 收集最终块。body 用子 ctx,关闭它不会取消共享 ctx,
+		// 恢复重试仍能复用 upstream。
 		var captured bytes.Buffer
-		if options.stream {
-			state.emit = func(name string, v object) {
-				data, _ := json.Marshal(v)
-				if name != "" {
-					captured.WriteString("event: " + name + "\n")
-				}
-				captured.WriteString("data: ")
-				captured.Write(data)
-				captured.WriteString("\n\n")
+		emit := func(name string, v object) {
+			data, _ := json.Marshal(v)
+			if name != "" {
+				captured.WriteString("event: " + name + "\n")
 			}
+			captured.WriteString("data: ")
+			captured.Write(data)
+			captured.WriteString("\n\n")
+		}
+		if options.stream && state.options.stream {
+			state.emit = emit
 			state.start()
 		}
 		bctx, bcancel := context.WithCancel(ctx)
@@ -439,6 +446,40 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			continue
 		}
 		if options.stream {
+			if options.protocol == "anthropic" {
+				state.options.stream = true
+				state.blockIndex = -1
+				state.emit = emit
+				state.start()
+				toolIndex := 0
+				for _, value := range state.blocks {
+					block := obj(value)
+					kind := str(block["type"])
+					var start, delta object
+					switch kind {
+					case "text":
+						start = object{"type": "text", "text": ""}
+						delta = object{"type": "text_delta", "text": block["text"]}
+					case "thinking":
+						start = object{"type": "thinking", "thinking": ""}
+						delta = object{"type": "thinking_delta", "thinking": block["thinking"]}
+					case "tool_use":
+						// finalize 按 finalTools 顺序追加工具块;参数从保序
+						// 文本转 UTF-8,不能重新 marshal input map 排序键。
+						partial, _ := normalizeOrderedJSON(state.finalTools[toolIndex].args, false)
+						toolIndex++
+						start = object{"type": "tool_use", "id": block["id"], "name": block["name"], "input": object{}}
+						delta = object{"type": "input_json_delta", "partial_json": partial}
+					}
+					// 只回放已 finalize 的块,不再次累积文本或计数。
+					state.openBlock(kind, start)
+					state.send("content_block_delta", object{"type": "content_block_delta", "index": state.blockIndex, "delta": delta})
+					if kind == "thinking" {
+						state.send("content_block_delta", object{"type": "content_block_delta", "index": state.blockIndex, "delta": object{"type": "signature_delta", "signature": block["signature"]}})
+					}
+					state.closeBlock()
+				}
+			}
 			state.finishStream()
 			if options.protocol == "openai" {
 				captured.WriteString("data: [DONE]\n\n")

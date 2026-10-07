@@ -154,13 +154,20 @@ func pyJSONTokenString(raw string, asciiOnly bool) string {
 func pyNumber(n json.Number) string {
 	s := n.String()
 	if strings.IndexAny(s, ".eEnN") < 0 {
+		if s == "-0" {
+			return "0"
+		}
 		return s
 	}
 	f, err := n.Float64()
 	if err != nil {
 		return s
 	}
-	out := strconv.FormatFloat(f, 'g', -1, 64)
+	out := strconv.FormatFloat(f, 'e', -1, 64)
+	_, exponent, _ := strings.Cut(out, "e")
+	if exp, _ := strconv.Atoi(exponent); exp >= -4 && exp < 16 {
+		out = strconv.FormatFloat(f, 'f', -1, 64)
+	}
 	if strings.IndexAny(out, ".en") < 0 {
 		out += ".0"
 	}
@@ -551,6 +558,10 @@ func (s *responseState) toolEvent(d object) error {
 				piece = jsonText(x)
 			}
 		case nil:
+		case []any:
+			if len(x) > 0 {
+				piece = pyRepr(x)
+			}
 		default:
 			// parsers.py: str(input_data) if input_data else ''——假值静默为空。
 			if truthy(x) {
@@ -618,21 +629,15 @@ func (s *responseState) accept(e wireEvent) error {
 	// clean EOF alone is insufficient evidence of a completed generation.
 	if v, ok := d["usage"]; ok && v != nil {
 		// 普通 OpenAI 两种输出均走生成器语义；仅 collect 路径认假值 usage。
-		if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) {
+		if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) || (s.options.protocol == "openai" && truthy(v)) {
 			s.terminal = true
 		}
 		if n, ok := v.(json.Number); ok {
 			if f, err := n.Float64(); err == nil && f != 0 {
 				s.credits, s.hasCredits = f, true
-				if s.options.protocol == "openai" {
-					s.terminal = true
-				}
 			}
 		} else {
 			s.updateUsage(obj(v))
-			if s.options.protocol == "openai" && len(obj(v)) > 0 {
-				s.terminal = true
-			}
 		}
 	}
 	if v, ok := d["contextUsagePercentage"]; ok && v != nil {

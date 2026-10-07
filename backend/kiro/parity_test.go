@@ -1336,6 +1336,124 @@ func TestRound18Fixes(t *testing.T) {
 	})
 }
 
+func TestRound24RequestBoundaries(t *testing.T) {
+	t.Run("Anthropic tool choice defaults", func(t *testing.T) {
+		for _, tc := range []object{{}, {"name": "f"}} {
+			_, opts := convert(t, object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": "f", "input_schema": object{}}}, "tool_choice": tc}, "anthropic")
+			if _, named := tc["name"]; named && (opts.policyMode != "named" || opts.policyTool != "f") {
+				t.Fatalf("options=%+v", opts)
+			}
+		}
+	})
+	t.Run("Anthropic tool choice validation", func(t *testing.T) {
+		for _, tc := range []object{{"type": nil}, {"name": 1}, {"type": "auto", "name": "f"}, {"type": "none", "extra": true}} {
+			_, _, err := convertRequest([]byte(jsonText(object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": "f", "input_schema": object{}}}, "tool_choice": tc})), "anthropic", "")
+			if err == nil {
+				t.Fatalf("accepted tool_choice %v", tc)
+			}
+		}
+	})
+	t.Run("OpenAI effort boundary", func(t *testing.T) {
+		for _, value := range []any{json.Number("1"), true, []any{}, object{}} {
+			_, _, err := convertRequest([]byte(jsonText(object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "reasoning_effort": value})), "openai", "")
+			if err == nil {
+				t.Fatalf("accepted effort %v", value)
+			}
+		}
+	})
+	t.Run("selected tool documentation", func(t *testing.T) {
+		for _, protocol := range []string{"openai", "anthropic"} {
+			for _, mode := range []string{"none", "named", "auto"} {
+				tools := []any{object{"name": "f", "input_schema": object{}, "description": strings.Repeat("F", 10001)}, object{"name": "g", "input_schema": object{}, "description": strings.Repeat("G", 10001)}}
+				var tc any = mode
+				if protocol == "anthropic" {
+					tc = object{"type": mode}
+					if mode == "named" {
+						tc = object{"type": "tool", "name": "f"}
+					}
+				} else if mode == "named" {
+					tc = object{"type": "function", "function": object{"name": "f"}}
+				}
+				payload, _ := convert(t, object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": tools, "tool_choice": tc}, protocol)
+				content := currentContent(t, payload)
+				if strings.Contains(content, "## Tool: f") != (mode != "none") || strings.Contains(content, "## Tool: g") != (mode == "auto") {
+					t.Fatalf("protocol=%s mode=%s documentation selection failed", protocol, mode)
+				}
+			}
+		}
+	})
+}
+
+func TestRound24ResponseEdges(t *testing.T) {
+	t.Run("array tool input", func(t *testing.T) {
+		for _, tc := range []struct {
+			input any
+			want  string
+		}{
+			{[]any{json.Number("1"), json.Number("2")}, "[1, 2]"},
+			{[]any{[]any{json.Number("1")}, json.Number("2")}, "[[1], 2]"},
+			{[]any{}, "{}"},
+			{[]any{true}, "{}"},
+			{[]any{"x"}, "{}"},
+		} {
+			s := newResponseState(requestOptions{protocol: "openai"})
+			if err := s.toolEvent(object{"name": "f", "input": tc.input, "stop": true}); err != nil {
+				t.Fatal(err)
+			}
+			if s.tools[0].args != tc.want {
+				t.Fatalf("input=%v arguments=%s", tc.input, s.tools[0].args)
+			}
+		}
+	})
+	t.Run("Python numeric representation", func(t *testing.T) {
+		for _, tc := range []struct{ raw, want string }{
+			{"-0", "0"}, {"-0.0", "-0.0"}, {"1e6", "1000000.0"}, {"1e15", "1000000000000000.0"}, {"1e16", "1e+16"}, {"1e-4", "0.0001"}, {"1e-5", "1e-05"},
+		} {
+			if got := pyNumber(json.Number(tc.raw)); got != tc.want {
+				t.Errorf("raw=%s got=%s want=%s", tc.raw, got, tc.want)
+			}
+		}
+		s := newResponseState(requestOptions{protocol: "openai"})
+		for _, raw := range []string{`{"x":-0}`, `{"x":0}`} {
+			if err := s.toolEvent(object{"name": "f", "toolUseId": raw, "input": raw, "stop": true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.finalize(); err != nil || len(s.finalTools) != 1 {
+			t.Fatalf("tools=%v err=%v", s.finalTools, err)
+		}
+	})
+	t.Run("truthy usage", func(t *testing.T) {
+		for _, value := range []any{true, "meter", []any{json.Number("1")}, false, "", []any{}} {
+			for _, stream := range []bool{false, true} {
+				s := newResponseState(requestOptions{protocol: "openai", stream: stream})
+				if err := s.accept(wireEvent{kind: "usageEvent", data: object{"usage": value}}); err != nil {
+					t.Fatal(err)
+				}
+				if s.terminal != truthy(value) {
+					t.Fatalf("usage=%v stream=%v terminal=%v", value, stream, s.terminal)
+				}
+			}
+		}
+	})
+	t.Run("thinking Python whitespace", func(t *testing.T) {
+		for _, whitespace := range []string{"\u001c", "\u001d", "\u001e", "\u001f"} {
+			p := newThinkingParser()
+			thinking, text := p.feed(whitespace + "<thinking>x</thinking>" + whitespace + "y")
+			if thinking != "x" || text != "y" {
+				t.Fatalf("whitespace=%q thinking=%q text=%q", whitespace, thinking, text)
+			}
+		}
+	})
+	t.Run("bracket Python case folding", func(t *testing.T) {
+		for _, text := range []string{"[Called f wİth args: {}]", "[Called f wıth args: {}]", "[Called f with argſ: {}]"} {
+			if got := parseBracketToolCalls(text); len(got) != 1 {
+				t.Fatalf("text=%q calls=%v", text, got)
+			}
+		}
+	})
+}
+
 func TestRound23RequestDetails(t *testing.T) {
 	t.Run("effort whitespace fallback", func(t *testing.T) {
 		for _, thinking := range []any{nil, object{"type": "adaptive"}} {

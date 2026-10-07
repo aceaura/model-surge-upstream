@@ -354,6 +354,11 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// models_openai.py:158-165: 数值字段只强迫类型不约束范围,非数值 422;
 	// n/max_tokens/max_completion_tokens 须为整数。
 	if protocol == "openai" {
+		if v := root["reasoning_effort"]; v != nil {
+			if _, ok := v.(string); !ok {
+				return fail(fmt.Errorf("reasoning_effort must be a string"))
+			}
+		}
 		for _, key := range []string{"temperature", "top_p", "presence_penalty", "frequency_penalty"} {
 			if v := root[key]; v != nil {
 				if _, ok := pydanticFloat(v); !ok {
@@ -428,7 +433,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		system = stripBillingHeader(system)
 	}
 	var tools []any
-	var toolDocs []string
+	toolDocs := map[string]string{}
 	// extensions/tool_name_alias.py:68-78(app_entry 恒装):先登记本轮全部
 	// 工具名——合法名进保留集防止被长名别名抢占,非法/超长名取
 	// t_<sha256[:12]>_<suffix> 别名上行,响应侧恢复原名。
@@ -576,7 +581,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		if utf8.RuneCountInString(description) > 10000 {
 			// converters_core.py:616-636: 超长描述迁入系统提示的
 			// "# Tool Documentation" 段,工具上只留指引占位。
-			toolDocs = append(toolDocs, "## Tool: "+name+"\n\n"+description)
+			toolDocs[name] = "## Tool: " + name + "\n\n" + description
 			description = "[Full documentation in system prompt under '## Tool: " + name + "']"
 		}
 		tools = append(tools, object{"toolSpecification": object{"name": name, "description": description, "inputSchema": object{"json": sanitizeSchema(schema)}}})
@@ -603,6 +608,17 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			m := obj(tc)
 			if m == nil {
 				return fail(fmt.Errorf("invalid Anthropic tool_choice structure"))
+			}
+			if _, has := m["type"]; !has {
+				m["type"] = "auto"
+				if _, named := m["name"]; named {
+					m["type"] = "tool"
+				}
+			}
+			for key := range m {
+				if key != "type" && key != "name" {
+					return fail(fmt.Errorf("unexpected Anthropic tool_choice field %q", key))
+				}
 			}
 			switch t := str(m["type"]); t {
 			case "auto", "none":
@@ -890,8 +906,15 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 	}
 	appendSystem(directive)
-	if len(toolDocs) > 0 {
-		appendSystem("\n\n---\n# Tool Documentation\nThe following tools have detailed documentation that couldn't fit in the tool definition.\n\n" + strings.Join(toolDocs, "\n\n---\n\n"))
+	var selectedDocs []string
+	for _, tool := range tools {
+		name := str(obj(obj(tool)["toolSpecification"])["name"])
+		if doc := toolDocs[name]; doc != "" {
+			selectedDocs = append(selectedDocs, doc)
+		}
+	}
+	if len(selectedDocs) > 0 {
+		appendSystem("\n\n---\n# Tool Documentation\nThe following tools have detailed documentation that couldn't fit in the tool definition.\n\n" + strings.Join(selectedDocs, "\n\n---\n\n"))
 	}
 	if !suppressTags {
 		appendSystem(thinkingSystemAddition)

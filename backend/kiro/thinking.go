@@ -207,7 +207,7 @@ func (p *thinkingParser) feed(content string) (string, string) {
 func (p *thinkingParser) preContent(content string) (string, string) {
 	p.initial.WriteString(content)
 	buffer := p.initial.String()
-	stripped := strings.TrimLeftFunc(buffer, unicode.IsSpace) // lstrip()
+	stripped := strings.TrimLeftFunc(buffer, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }) // lstrip()
 	for _, tag := range fakeReasoningOpenTags {
 		if strings.HasPrefix(stripped, tag) {
 			p.state = 1
@@ -253,7 +253,7 @@ func (p *thinkingParser) processThinking() (string, string) {
 		after := buffer[idx+len(p.closeTag):]
 		p.state = 2
 		p.thinking.Reset()
-		return thinking, strings.TrimLeftFunc(after, unicode.IsSpace) // lstrip()
+		return thinking, strings.TrimLeftFunc(after, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }) // lstrip()
 	}
 	cut := len(buffer)
 	for i := 0; i < p.maxTagLength && cut > 0; i++ {

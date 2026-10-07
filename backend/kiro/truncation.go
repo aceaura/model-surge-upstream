@@ -111,7 +111,7 @@ func looksTruncatedJSON(s string) bool {
 
 const bracketSpace = `[\s\p{Z}\x{0085}\x{000b}\x{001c}-\x{001f}]`
 
-var bracketToolPattern = regexp.MustCompile(`(?i)\[Called` + bracketSpace + `+([\p{L}\p{N}_]+)` + bracketSpace + `+with` + bracketSpace + `+args:` + bracketSpace + `*`)
+var bracketToolPattern = regexp.MustCompile(`(?i)\[Called` + bracketSpace + `+([\p{L}\p{N}_]+)` + bracketSpace + `+w[iİı]th` + bracketSpace + `+args:` + bracketSpace + `*`)
 
 // parseBracketToolCalls extracts [Called name with args: {...}] calls that some
 // models emit as plain text (parsers.py:parse_bracket_tool_calls).

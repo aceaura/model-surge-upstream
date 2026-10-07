@@ -257,6 +257,199 @@ func TestStrictToolFinalValidationProtocols(t *testing.T) {
 	}
 }
 
+func TestStrictAnthropicThinkingReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		frames [][]byte
+		sig    string
+	}{
+		{"late-signature", [][]byte{
+			frame("reasoningContentEvent", object{"text": "secret"}),
+			frame("assistantResponseEvent", object{"content": "answer"}),
+			frame("reasoningContentEvent", object{"signature": "s1"}),
+			frame("reasoningContentEvent", object{"signature": "s2"}),
+		}, "s2"},
+		{"fallback", [][]byte{
+			frame("reasoningContentEvent", object{"text": "secret"}),
+			frame("assistantResponseEvent", object{"content": "answer"}),
+		}, ""},
+		{"merged-thinking-first", [][]byte{
+			frame("assistantResponseEvent", object{"content": "ans"}),
+			frame("reasoningContentEvent", object{"text": "sec"}),
+			frame("assistantResponseEvent", object{"content": "wer"}),
+			frame("reasoningContentEvent", object{"text": "ret"}),
+			frame("reasoningContentEvent", object{"signature": "s1"}),
+			frame("reasoningContentEvent", object{"signature": "s2"}),
+		}, "s2"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", tc.name, stream), func(t *testing.T) {
+				wire := joinedFrames(append(tc.frames, endFrame())...)
+				server := stub(t, wire, nil)
+				root := object{
+					"model": "claude-sonnet-4-6", "max_tokens": 1024, "stream": stream,
+					"messages": []any{object{"role": "user", "content": "hello"}},
+					"tools":    toolDefinition("anthropic"), "tool_choice": object{"type": "none"},
+				}
+				request, err := http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(root)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header = clientRequest(tbOf(t), server.URL, "anthropic", stream).Header.Clone()
+				resp, err := NewTransport(nil).RoundTrip(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil || resp.StatusCode != 200 {
+					t.Fatalf("status=%d data=%s err=%v", resp.StatusCode, data, err)
+				}
+				var kinds []string
+				var thinking, text, signature string
+				var usage object
+				if stream {
+					stops := 0
+					for _, event := range events(t, data) {
+						switch str(event["type"]) {
+						case "content_block_start":
+							block := obj(event["content_block"])
+							if number(event["index"]) != len(kinds) || str(block["thinking"]) != "" || str(block["text"]) != "" || str(block["signature"]) != "" {
+								t.Fatalf("nonempty or misindexed block start: %v", event)
+							}
+							kinds = append(kinds, str(block["type"]))
+						case "content_block_delta":
+							delta := obj(event["delta"])
+							thinking += str(delta["thinking"])
+							text += str(delta["text"])
+							if delta["type"] == "signature_delta" {
+								if number(event["index"]) != 0 || signature != "" {
+									t.Fatalf("signature must occur once in the first block: %v", event)
+								}
+								signature = str(delta["signature"])
+							}
+						case "content_block_stop":
+							if number(event["index"]) != stops {
+								t.Fatalf("misindexed block stop: %v", event)
+							}
+							stops++
+						case "message_delta":
+							usage = obj(event["usage"])
+							if obj(event["delta"])["stop_reason"] != "end_turn" {
+								t.Fatalf("unexpected stop reason: %v", event)
+							}
+						}
+					}
+					if stops != 2 || !strings.HasSuffix(string(data), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n") {
+						t.Fatalf("incomplete replay: %s", data)
+					}
+				} else {
+					result := parseResult(t, data)
+					usage = obj(result["usage"])
+					for _, value := range list(result["content"]) {
+						block := obj(value)
+						kinds = append(kinds, str(block["type"]))
+						thinking += str(block["thinking"])
+						text += str(block["text"])
+						signature += str(block["signature"])
+					}
+				}
+				if strings.Join(kinds, ",") != "thinking,text" || thinking != "secret" || text != "answer" {
+					t.Fatalf("kinds=%v thinking=%q text=%q data=%s", kinds, thinking, text, data)
+				}
+				if (tc.sig != "" && signature != tc.sig) || (tc.sig == "" && !strings.HasPrefix(signature, "sig_")) {
+					t.Fatalf("signature=%q want=%q (empty means sig_ fallback) data=%s", signature, tc.sig, data)
+				}
+				if number(usage["output_tokens"]) != 4 {
+					t.Fatalf("replay changed token accounting: usage=%v", usage)
+				}
+			})
+		}
+	}
+}
+
+func TestOrdinaryAnthropicLateSignatureIgnored(t *testing.T) {
+	wire := joinedFrames(
+		frame("reasoningContentEvent", object{"text": "secret"}),
+		frame("assistantResponseEvent", object{"content": "answer"}),
+		frame("reasoningContentEvent", object{"signature": "s1"}),
+		frame("reasoningContentEvent", object{"signature": "s2"}),
+		endFrame(),
+	)
+	server := stub(t, wire, nil)
+	_, data, err := do(t, server.URL, "anthropic", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var thinking, text string
+	for _, event := range events(t, data) {
+		delta := obj(event["delta"])
+		if delta["type"] == "signature_delta" {
+			t.Fatalf("ordinary streaming must ignore late signatures: %s", data)
+		}
+		thinking += str(delta["thinking"])
+		text += str(delta["text"])
+	}
+	if thinking != "secret" || text != "answer" {
+		t.Fatalf("thinking=%q text=%q data=%s", thinking, text, data)
+	}
+}
+
+func TestStrictAnthropicToolReplayArgumentOrder(t *testing.T) {
+	wire := joinedFrames(
+		frame("toolUseEvent", object{"name": "lookup", "toolUseId": "first", "input": `{"z":"\u4e2d","a":1}`, "stop": true}),
+		frame("toolUseEvent", object{"name": "lookup", "toolUseId": "second", "input": `{"b":2,"a":3}`, "stop": true}),
+		endFrame(),
+	)
+	server := stub(t, wire, nil)
+	root := object{
+		"model": "claude-sonnet-4-6", "max_tokens": 1024, "stream": true,
+		"messages": []any{object{"role": "user", "content": "hello"}},
+		"tools":    toolDefinition("anthropic"), "tool_choice": object{"type": "any"},
+	}
+	request, err := http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(jsonText(root)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header = clientRequest(tbOf(t), server.URL, "anthropic", true).Header.Clone()
+	resp, err := NewTransport(nil).RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("status=%d data=%s err=%v", resp.StatusCode, data, err)
+	}
+	var ids, args []string
+	stops := 0
+	for _, event := range events(t, data) {
+		switch str(event["type"]) {
+		case "content_block_start":
+			block := obj(event["content_block"])
+			if block["type"] != "tool_use" || block["name"] != "lookup" || len(obj(block["input"])) != 0 || number(event["index"]) != len(ids) {
+				t.Fatalf("unexpected tool block start: %v", event)
+			}
+			ids = append(ids, str(block["id"]))
+		case "content_block_delta":
+			delta := obj(event["delta"])
+			if delta["type"] != "input_json_delta" || number(event["index"]) != len(args) {
+				t.Fatalf("unexpected tool delta: %v", event)
+			}
+			args = append(args, str(delta["partial_json"]))
+		case "content_block_stop":
+			stops++
+		case "message_delta":
+			if obj(event["delta"])["stop_reason"] != "tool_use" {
+				t.Fatalf("unexpected stop reason: %v", event)
+			}
+		}
+	}
+	if strings.Join(ids, ",") != "first,second" || len(args) != 2 || args[0] != `{"z": "中", "a": 1}` || args[1] != `{"b": 2, "a": 3}` || stops != 2 {
+		t.Fatalf("ids=%v args=%v stops=%d data=%s", ids, args, stops, data)
+	}
+}
+
 func TestOrdinaryScalarToolStream(t *testing.T) {
 	for _, protocol := range []string{"openai", "anthropic"} {
 		for _, args := range []string{`[1, 2]`, `null`, `1`, `"text"`, `true`} {
