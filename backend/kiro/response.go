@@ -428,26 +428,28 @@ func (s *responseState) finishTool() error {
 		args = "{}"
 	}
 	norm, ok := normalizeOrderedJSON(args, true)
-	invalid := false
-	if !ok {
+	if !ok && looksTruncatedJSON(args) {
 		// parsers.py: truncated arguments are diagnosed and replaced with {};
 		// the truncation notice is injected into the next request.
-		if looksTruncatedJSON(args) {
-			saveToolTruncation(t.id, t.name)
-		}
-		if s.options.policyMode != "" {
-			return &toolViolation{msg: "tool '" + t.name + "' returned malformed JSON arguments"}
-		}
-		norm, invalid = "{}", true
+		saveToolTruncation(t.id, t.name)
 	}
-	if s.options.forbidTools || !s.options.allowedTools[t.name] {
-		if s.options.policyMode != "" {
+	if s.options.policyMode != "" {
+		// validate_tool_choice_result 先验白名单再验 arguments
+		// (streaming_core.py:161-165);named 模式白名单只含被点名工具
+		// (converters_core.py:144-145 filter_tools →
+		// converters_anthropic.py:384 allowed_names),调用其他已声明
+		// 工具同样报 disallowed。
+		if s.options.forbidTools || !s.options.allowedTools[t.name] ||
+			(s.options.policyMode == "named" && t.name != s.options.policyTool) {
 			return &toolViolation{msg: "response returned disallowed tool '" + t.name + "'"}
 		}
-		// parsers.py 无工具白名单校验:未声明的工具调用照常透传。
+		if !ok {
+			return &toolViolation{msg: "tool '" + t.name + "' returned malformed JSON arguments"}
+		}
 	}
-	if s.options.policyMode == "named" && t.name != s.options.policyTool {
-		return &toolViolation{msg: "response called a tool other than required tool '" + s.options.policyTool + "'"}
+	invalid := false
+	if !ok {
+		norm, invalid = "{}", true
 	}
 	if s.toolCount >= 1024 {
 		return fmt.Errorf("kiro: response exceeds 1024 tool calls")
@@ -750,13 +752,12 @@ func (s *responseState) emitBracketTool(call object) error {
 			canonical = norm
 		}
 	}
-	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result)。
+	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result):
+	// named 模式白名单只含被点名工具,调用其他已声明工具同样报 disallowed。
 	if s.options.policyMode != "" {
-		if s.options.forbidTools || !s.options.allowedTools[name] {
+		if s.options.forbidTools || !s.options.allowedTools[name] ||
+			(s.options.policyMode == "named" && name != s.options.policyTool) {
 			return &toolViolation{msg: "response returned disallowed tool '" + name + "'"}
-		}
-		if s.options.policyMode == "named" && name != s.options.policyTool {
-			return &toolViolation{msg: "response called a tool other than required tool '" + s.options.policyTool + "'"}
 		}
 	}
 	s.tools = append(s.tools, &finishedTool{id: id, name: name, args: canonical, input: input})

@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -886,6 +887,155 @@ func TestSmartUnionFallback(t *testing.T) {
 		images := list(obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["images"])
 		if len(images) != 1 || obj(obj(images[0])["source"])["bytes"] != "aGVsbG8=" {
 			t.Fatalf("images=%v", images)
+		}
+	})
+}
+func TestRound15Fixes(t *testing.T) {
+	t.Run("non-string truthy tool ids preserved", func(t *testing.T) {
+		// converters_anthropic.py:245/151: tool_use id/name 与 tool_result
+		// tool_use_id 只验真值,int 原样上行并参与 repair 配对
+		// (converters_core.py:1413-1420 原值集合)。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "tools": toolDefinition("anthropic"), "messages": []any{
+			object{"role": "user", "content": "q"},
+			object{"role": "assistant", "content": []any{
+				object{"type": "tool_use", "id": json.Number("5"), "name": "lookup", "input": object{}},
+			}},
+			object{"role": "user", "content": []any{
+				object{"type": "tool_result", "tool_use_id": json.Number("5"), "content": "ok"},
+			}},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		raw := jsonText(payload)
+		if !strings.Contains(raw, `"toolUseId":5`) {
+			t.Fatalf("int id not preserved: %v", raw)
+		}
+		if strings.Contains(raw, "not delivered by the client") {
+			t.Fatalf("int ids failed to pair: %v", raw)
+		}
+	})
+	t.Run("tool_result content lenient", func(t *testing.T) {
+		// smart union 落 Unknown 后 converters_anthropic.py:151-156:
+		// 标量 str()、dict repr、裸字符串拼接、未知块跳过、假值收空。
+		mk := func(content any) object {
+			return object{"model": "claude-sonnet-4.6", "max_tokens": 64, "tools": toolDefinition("anthropic"), "messages": []any{
+				object{"role": "user", "content": "q"},
+				object{"role": "assistant", "content": []any{
+					object{"type": "tool_use", "id": "c1", "name": "lookup", "input": object{}},
+				}},
+				object{"role": "user", "content": []any{
+					object{"type": "tool_result", "tool_use_id": "c1", "content": content},
+				}},
+			}}
+		}
+		cases := []struct {
+			name    string
+			content any
+			want    string
+		}{
+			{"scalar truthy", json.Number("5"), `"text":"5"`},
+			{"scalar falsy", json.Number("0"), `(empty result)`},
+			{"dict", object{"foo": json.Number("1")}, `"text":"{'foo': 1}"`},
+			{"bare strings and unknown", []any{"raw", object{"type": "text", "text": "x"}, object{"type": "video"}}, `"text":"rawx"`},
+			{"text key harvested", []any{object{"text": "note"}}, `"text":"note"`},
+		}
+		for _, c := range cases {
+			payload, _ := convert(t, mk(c.content), "anthropic")
+			if !strings.Contains(jsonText(payload), c.want) {
+				t.Fatalf("%s: %v", c.name, jsonText(payload))
+			}
+		}
+	})
+	t.Run("output_config effort type checked", func(t *testing.T) {
+		// models_anthropic.py:349: effort Optional[str],非字符串 422。
+		bad := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "output_config": object{"effort": json.Number("5")}, "messages": []any{
+			object{"role": "user", "content": "hi"}}}
+		if _, _, err := convertRequest([]byte(jsonText(bad)), "anthropic", ""); err == nil {
+			t.Fatal("non-string effort accepted")
+		}
+	})
+	t.Run("image data url edge cases", func(t *testing.T) {
+		img := func(media string, data any) object {
+			src := object{"type": "base64", "data": data}
+			if media != "" {
+				src["media_type"] = media
+			}
+			return object{"type": "image", "source": src}
+		}
+		first := func(payload object) object {
+			return obj(list(obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["images"])[0])
+		}
+		mk := func(block object) object {
+			return object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+				object{"role": "user", "content": []any{block}}}}
+		}
+		// converters_core.py:767-770: 无逗号 data-URL 仅 warning,原始 data 上行。
+		p1, _ := convert(t, mk(img("image/png", "data:xyz")), "anthropic")
+		if got := obj(obj(first(p1))["source"])["bytes"]; got != "data:xyz" {
+			t.Fatalf("no-comma data=%v", got)
+		}
+		// 多参数 header 取 ";" 首段(converters_core.py:763)。
+		p2, _ := convert(t, mk(img("", "data:image/jpeg;base64;charset=utf-8,QUJD")), "anthropic")
+		if got := first(p2)["format"]; got != "jpeg" {
+			t.Fatalf("multi-param format=%v", got)
+		}
+		// format 取 media_type "/" 末段(converters_core.py:773)。
+		p3, _ := convert(t, mk(img("application/pdf", "QUJD")), "anthropic")
+		if got := first(p3)["format"]; got != "pdf" {
+			t.Fatalf("non-image format=%v", got)
+		}
+	})
+	t.Run("named violation reports disallowed", func(t *testing.T) {
+		// converters_core.py:144-145 + streaming_core.py:161-162: named
+		// 白名单只含被点名工具,调用其他已声明工具报 disallowed。
+		s := &responseState{options: requestOptions{
+			policyMode: "named", policyTool: "lookup",
+			allowedTools: map[string]bool{"lookup": true, "other": true},
+		}}
+		s.tool = &pendingTool{id: "1", name: "other"}
+		s.tool.args.WriteString("{}")
+		err := s.finishTool()
+		v, ok := err.(*toolViolation)
+		if !ok || v.msg != "response returned disallowed tool 'other'" {
+			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("boundary field validation", func(t *testing.T) {
+		// models_anthropic.py:398-399 / models_openai.py:163/177: 字段不
+		// 上行但类型错误 422。
+		badAnth := func(mutate func(object)) object {
+			r := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+				object{"role": "user", "content": "hi"}}}
+			mutate(r)
+			return r
+		}
+		badOpen := func(mutate func(object)) object {
+			r := object{"model": "claude-sonnet-4.6", "messages": []any{
+				object{"role": "user", "content": "hi"}}}
+			mutate(r)
+			return r
+		}
+		rejects := []struct {
+			name     string
+			root     object
+			protocol string
+		}{
+			{"stop_sequences item", badAnth(func(r object) { r["stop_sequences"] = []any{"a", json.Number("5")} }), "anthropic"},
+			{"stop_sequences type", badAnth(func(r object) { r["stop_sequences"] = "abc" }), "anthropic"},
+			{"metadata type", badAnth(func(r object) { r["metadata"] = "x" }), "anthropic"},
+			{"stop type", badOpen(func(r object) { r["stop"] = json.Number("5") }), "openai"},
+			{"stop item", badOpen(func(r object) { r["stop"] = []any{"a", json.Number("5")} }), "openai"},
+			{"logit_bias type", badOpen(func(r object) { r["logit_bias"] = "x" }), "openai"},
+			{"logit_bias value", badOpen(func(r object) { r["logit_bias"] = object{"1": "x"} }), "openai"},
+		}
+		for _, c := range rejects {
+			if _, _, err := convertRequest([]byte(jsonText(c.root)), c.protocol, ""); err == nil {
+				t.Fatalf("%s accepted", c.name)
+			}
+		}
+		// pydantic lax: 数值字符串 logit_bias 合法。
+		ok := badOpen(func(r object) { r["logit_bias"] = object{"1": "1.5"} })
+		if _, _, err := convertRequest([]byte(jsonText(ok)), "openai", ""); err != nil {
+			t.Fatalf("numeric-string logit_bias rejected: %v", err)
 		}
 	})
 }

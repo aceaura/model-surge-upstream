@@ -325,10 +325,35 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				return fail(fmt.Errorf("%s must be an object", key))
 			}
 		}
+		// models_anthropic.py:347-349: AnthropicOutputConfig.effort 为
+		// Optional[str],pydantic v2 lax 不强迫数字/布尔为 str,类型错误 422。
+		if oc := obj(root["output_config"]); oc != nil {
+			if e, has := oc["effort"]; has && e != nil {
+				if _, ok := e.(string); !ok {
+					return fail(fmt.Errorf("output_config.effort must be a string"))
+				}
+			}
+		}
 		if v := root["reasoning_effort"]; v != nil {
 			if _, ok := v.(string); !ok {
 				return fail(fmt.Errorf("reasoning_effort must be a string"))
 			}
+		}
+		// models_anthropic.py:398-399: stop_sequences 为 List[str]、
+		// metadata 为 Dict——字段本不上行,仅状态码对齐(422)。
+		if v := root["stop_sequences"]; v != nil {
+			items, ok := v.([]any)
+			if !ok {
+				return fail(fmt.Errorf("stop_sequences must be a list of strings"))
+			}
+			for _, item := range items {
+				if _, ok := item.(string); !ok {
+					return fail(fmt.Errorf("stop_sequences must be a list of strings"))
+				}
+			}
+		}
+		if v := root["metadata"]; v != nil && obj(v) == nil {
+			return fail(fmt.Errorf("metadata must be an object"))
 		}
 	}
 	// models_openai.py:158-165: 数值字段只强迫类型不约束范围,非数值 422;
@@ -345,6 +370,32 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			if v := root[key]; v != nil {
 				if f, ok := pydanticFloat(v); !ok || f != float64(int64(f)) {
 					return fail(fmt.Errorf("%s must be an integer", key))
+				}
+			}
+		}
+		// models_openai.py:163/177: stop 为 Union[str, List[str]]、
+		// logit_bias 为 Dict[str, float]——字段本不上行,仅状态码对齐(422)。
+		if v := root["stop"]; v != nil {
+			if _, ok := v.(string); !ok {
+				items, ok := v.([]any)
+				if !ok {
+					return fail(fmt.Errorf("stop must be a string or a list of strings"))
+				}
+				for _, item := range items {
+					if _, ok := item.(string); !ok {
+						return fail(fmt.Errorf("stop must be a string or a list of strings"))
+					}
+				}
+			}
+		}
+		if v := root["logit_bias"]; v != nil {
+			m := obj(v)
+			if m == nil {
+				return fail(fmt.Errorf("logit_bias must be an object"))
+			}
+			for _, val := range m {
+				if _, ok := pydanticFloat(val); !ok {
+					return fail(fmt.Errorf("logit_bias values must be numbers"))
 				}
 			}
 		}
@@ -694,7 +745,9 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				// toolUses 因此保留在 history,而不是被 trailing 处理丢弃。
 				synthetic := message{role: "user"}
 				for _, u := range m.uses {
-					if id := str(obj(u)["toolUseId"]); id != "" {
+					// converters_core.py:1413-1420: 真值 id 原样参与配对,
+					// 非字符串 id 同样合成占位。
+					if id := obj(u)["toolUseId"]; truthy(id) {
 						synthetic.results = append(synthetic.results, toolResult(id,
 							"[gateway: tool result was not delivered by the client; "+
 								"the tool likely produced an image or other media that was "+
@@ -709,11 +762,15 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			next := &messages[i+1]
 			seen := map[string]bool{}
 			for _, r := range next.results {
-				seen[str(obj(r)["toolUseId"])] = true
+				// 配对按原始 id 值(repair_unpaired_tool_uses 用 dict.get
+				// 原值集合),JSON 文本作规范化键。
+				if id := obj(r)["toolUseId"]; truthy(id) {
+					seen[jsonText(id)] = true
+				}
 			}
 			for _, u := range m.uses {
-				id := str(obj(u)["toolUseId"])
-				if id != "" && !seen[id] {
+				id := obj(u)["toolUseId"]
+				if truthy(id) && !seen[jsonText(id)] {
 					next.results = append(next.results, toolResult(id,
 						"[gateway: tool result was not delivered by the client; "+
 							"the tool likely produced an image or other media that was "+
@@ -829,8 +886,8 @@ func toolCallsToText(uses []any) string {
 		if !has {
 			args = jsonText(o["input"])
 		}
-		if id := str(o["toolUseId"]); id != "" {
-			parts = append(parts, "[Tool: "+name+" ("+id+")]\n"+args)
+		if id := o["toolUseId"]; truthy(id) {
+			parts = append(parts, "[Tool: "+name+" ("+pythonicString(id)+")]\n"+args)
 		} else {
 			parts = append(parts, "[Tool: "+name+"]\n"+args)
 		}
@@ -848,8 +905,8 @@ func toolResultsToText(results []any) string {
 		if content == "" {
 			content = "(empty result)"
 		}
-		if id := str(o["toolUseId"]); id != "" {
-			parts = append(parts, "[Tool Result ("+id+")]\n"+content)
+		if id := o["toolUseId"]; truthy(id) {
+			parts = append(parts, "[Tool Result ("+pythonicString(id)+")]\n"+content)
 		} else {
 			parts = append(parts, "[Tool Result]\n"+content)
 		}
@@ -1057,13 +1114,17 @@ func parseMessage(m object, protocol string) (message, error) {
 				}
 				// pydantic smart union: 字段畸形的 tool_use 落 UnknownContentBlock
 				// 兜底,提取器(converters_anthropic.py:228-245)按 dict 语义
-				// 处理——input 缺省 {},id/name 缺任一则整块丢弃。
-				id, idOK := b["id"].(string)
-				name, nameOK := b["name"].(string)
-				if !idOK || !nameOK || id == "" || name == "" {
+				// 处理——input 缺省 {},id/name 只验真值,非字符串真值(如
+				// int)原样上行;别名包装仅处理字符串名(tool_name_alias.py:83)。
+				id, name := b["id"], b["name"]
+				if !truthy(id) || !truthy(name) {
 					continue
 				}
-				u := toolUse(id, aliasToolName(name), b["input"])
+				alias := name
+				if s, ok := name.(string); ok {
+					alias = aliasToolName(s)
+				}
+				u := toolUse(id, alias, b["input"])
 				// converters_anthropic.py:254: unified arguments 恒为 coerce 后
 				// 的 dict,文本化渲染取其 Python repr。
 				u["argsText"] = pyRepr(u["input"])
@@ -1074,20 +1135,19 @@ func parseMessage(m object, protocol string) (message, error) {
 				if result.role != "user" {
 					continue
 				}
-				id := str(b["tool_use_id"])
+				id := b["tool_use_id"]
 				if protocol == "anthropic" {
 					// pydantic smart union: 缺 tool_use_id 落 UnknownContentBlock
-					// 兜底,提取器按条件静默丢弃整块;空串同样丢弃
-					// (converters_anthropic.py:151)。
-					if _, ok := b["tool_use_id"].(string); !ok {
+					// 兜底,提取器只验真值(converters_anthropic.py:151)——
+					// 空串/0/None 丢弃,非字符串真值(如 int)原样上行。
+					if !truthy(id) {
 						continue
 					}
-					if id == "" {
-						continue
-					}
+				} else if id == nil {
+					// openai 侧缺省按 "" 保留上行
+					// (converters_openai.py:79-82 .get("tool_use_id", ""))。
+					id = ""
 				}
-				// openai 侧空 tool_use_id 原样保留上行
-				// (converters_openai.py:79-82)。
 				text, images, err := resultContent(b["content"], protocol)
 				if err != nil {
 					return result, err
@@ -1122,9 +1182,23 @@ func parseMessage(m object, protocol string) (message, error) {
 			continue
 		}
 		// converters_openai.py:137-145: 只读 id 与 function,不校验
-		// type 字段;id/name/arguments 缺省分别按 ""/""/"{}" 保留。
+		// type 字段;id/name/arguments 缺省分别按 ""/""/"{}" 保留,
+		// 非字符串值原样上行;别名包装仅处理字符串名
+		// (tool_name_alias.py:92-95)。
 		f := obj(tc["function"])
-		u := toolUse(str(tc["id"]), aliasToolName(str(f["name"])), f["arguments"])
+		id := tc["id"]
+		if id == nil {
+			id = ""
+		}
+		name := f["name"]
+		if name == nil {
+			name = ""
+		}
+		alias := name
+		if s, ok := name.(string); ok {
+			alias = aliasToolName(s)
+		}
+		u := toolUse(id, alias, f["arguments"])
 		// 文本化渲染用 unified arguments 原文:字符串 verbatim,缺省
 		// "{}",非标量(dict 等,models_openai.py:81 List[Any] 无校验)
 		// 取 Python repr。
@@ -1141,13 +1215,13 @@ func parseMessage(m object, protocol string) (message, error) {
 	return result, nil
 }
 
-// resultContent 提取 tool_result 内容。anthropic 侧走 pydantic 边界
-// (models_anthropic.py:144-146):content 为 Optional[Union[str, List[Union[
-// Text, Image, ToolReference]]]]——裸字符串与 None 合法,标量、列表里的
-// 字符串项、联合外的块类型全部 422,text 必须字符串,image 必须有合法
-// source,tool_reference 合法但无 text 可收割(转换层跳过,
-// converters_anthropic.py:151-156)。openai 侧沿用 extract_text_content
-// 宽松策略(converters_core.py:248-272)。
+// resultContent 提取 tool_result 内容。pydantic smart union: anthropic 侧
+// content 校验失败(标量/字典/含裸字符串或联合外块的列表)时整块落
+// UnknownContentBlock 被接受,转换层按 dict 语义走 extract_text_content
+// 宽容路径(converters_anthropic.py:151-156 → converters_core.py:260-282);
+// openai 侧本就是同一函数(converters_openai.py:79-82)。两协议唯一差异:
+// 非标量非列表内容 anthropic 先验真值(假值收空串,str(v) if v else ""),
+// openai 恒 str()(extract_text_content 末尾 return str(content))。
 func resultContent(v any, protocol string) (string, []any, error) {
 	if v == nil {
 		return "", nil, nil
@@ -1157,49 +1231,33 @@ func resultContent(v any, protocol string) (string, []any, error) {
 	}
 	blocks, ok := v.([]any)
 	if !ok {
-		if protocol != "openai" {
-			// pydantic v2 lax: str 不强迫数字/布尔,标量内容 422。
-			return "", nil, fmt.Errorf("tool_result content must be text or blocks")
+		if protocol == "anthropic" && !truthy(v) {
+			return "", nil, nil
 		}
-		// extract_text_content: 标量内容按 Python str() 收为文本。
+		if obj(v) != nil {
+			// Python str(dict) 即 repr:{'foo': 1}。
+			return pyRepr(v), nil, nil
+		}
 		return pythonicString(v), nil, nil
 	}
 	var text strings.Builder
 	var images []any
-	for _, v := range blocks {
-		if s, ok := v.(string); ok {
-			if protocol != "openai" {
-				return "", nil, fmt.Errorf("tool_result content blocks must be objects")
-			}
+	for _, item := range blocks {
+		if s, ok := item.(string); ok {
 			// extract_text_content: 列表里的裸字符串直接拼接。
 			text.WriteString(s)
 			continue
 		}
-		b := obj(v)
+		b := obj(item)
 		if b == nil {
-			if protocol != "openai" {
-				return "", nil, fmt.Errorf("tool_result content blocks must be objects")
-			}
+			// extract_text_content: 无 text 属性的非标量项静默跳过。
 			continue
 		}
 		switch str(b["type"]) {
-		case "text":
-			if protocol == "anthropic" {
-				if _, ok := b["text"].(string); !ok {
-					return "", nil, fmt.Errorf("text block requires a string text field")
-				}
-			}
-			text.WriteString(str(b["text"]))
 		case "image", "image_url":
-			if protocol == "anthropic" {
-				if str(b["type"]) == "image_url" {
-					return "", nil, fmt.Errorf("unsupported content block %q", "image_url")
-				}
-				src := obj(b["source"])
-				if str(src["type"]) != "base64" && str(src["type"]) != "url" {
-					return "", nil, fmt.Errorf("image block requires a base64 or url source")
-				}
-			}
+			// extract_text_content 跳过图片块;图片由
+			// extract_images_from_tool_results 经 dict 语义另行提取
+			// (converters_anthropic.py:190-200),坏 source 宽容跳过。
 			image, err := parseImage(b)
 			if err != nil {
 				return "", nil, err
@@ -1208,16 +1266,12 @@ func resultContent(v any, protocol string) (string, []any, error) {
 				images = append(images, image)
 			}
 		case "tool_reference":
-			// anthropic 联合成员,转换层无 text 可收割,跳过;openai
-			// 同样跳过(converters_core.py:269-270)。
+			// extract_text_content 同样跳过(converters_core.py:269-270)。
 			continue
 		default:
-			if protocol == "openai" {
-				// extract_text_content: 未知块带 text 键收割,否则跳过。
-				text.WriteString(str(b["text"]))
-				continue
-			}
-			return "", nil, fmt.Errorf("unsupported content block %q", str(b["type"]))
+			// extract_text_content: text 块取 item.get("text",""),未知
+			// 块带 text 键收割,否则跳过——两者同为 str(b["text"])。
+			text.WriteString(str(b["text"]))
 		}
 	}
 	return text.String(), images, nil
@@ -1261,11 +1315,12 @@ func pydanticFloat(v any) (float64, bool) {
 
 // toolUse 构建 Kiro 工具调用。空 id/name 不拒绝(converters_openai.py:
 // 138-145 原样保留,空 name 由 extract_tool_uses_from_message 缺省空串
-// 上行)。input 按 coerce_tool_input_to_dict 等价处理:dict 原样,字符串
+// 上行);非字符串真值 id/name 原样上行(converters_anthropic.py:245 只验
+// 真值)。input 按 coerce_tool_input_to_dict 等价处理:dict 原样,字符串
 // 解析为 JSON 对象,其余(含解析失败、非对象 JSON、标量)退化 {}。
 // argsText 由调用方事后赋值(空串亦须落键以区分缺省),仅供无工具声明
 // 时的文本化渲染,上行前由 stripArgsText 剔除(converters_core.py:965-981)。
-func toolUse(id, name string, input any) object {
+func toolUse(id, name, input any) object {
 	if s, ok := input.(string); ok {
 		parsed, err := decodeObject(s)
 		if err == nil {
@@ -1361,8 +1416,9 @@ func pyStrRepr(s string) string {
 }
 
 // converters_core.py:819/845: status 恒 "success",is_error 不入上行负载,
-// 失败信息只经 content 文本传达给模型。
-func toolResult(id, text string) object {
+// 失败信息只经 content 文本传达给模型。id 原样上行(非字符串真值保留,
+// converters_anthropic.py:151 只验真值)。
+func toolResult(id any, text string) object {
 	if text == "" {
 		text = "(empty result)"
 	}
@@ -1370,8 +1426,11 @@ func toolResult(id, text string) object {
 }
 
 // parseImage 对齐 converters_core.py 的宽松策略:URL 图片与空 data 跳过
-// (返回 nil),data URL 前缀解析失败保留原始 data;媒体类型与 base64
-// 合法性不在边界拒绝,交由上游判定。
+// (返回 nil)。两阶段语义:extract_images_from_content(:322-397)对
+// image_url 块解析 data-URL,无逗号整图跳过;image 块原样进 unified,
+// convert_images_to_kiro_format(:750-785)再剥 data: 前缀,无逗号仅
+// warning、原始 data 保留上行。media 取 header ";" 首段,空值不覆盖原
+// media_type;format 取 media_type "/" 末段,无 "/" 用全串。
 func parseImage(b object) (object, error) {
 	var media, data string
 	if str(b["type"]) == "image" {
@@ -1379,30 +1438,43 @@ func parseImage(b object) (object, error) {
 		if str(src["type"]) != "base64" {
 			return nil, nil
 		}
-		media, data = str(src["media_type"]), str(src["data"])
+		if m, has := src["media_type"]; has {
+			media = str(m)
+		} else {
+			media = "image/jpeg"
+		}
+		data = str(src["data"])
 	} else {
 		data = str(obj(b["image_url"])["url"])
 		if !strings.HasPrefix(data, "data:") {
 			return nil, nil
 		}
-	}
-	if strings.HasPrefix(data, "data:") {
-		if prefix, rest, ok := strings.Cut(data, ","); ok {
-			media = strings.TrimSuffix(strings.TrimPrefix(prefix, "data:"), ";base64")
-			data = rest
-		} else {
-			// converters_core.py:339/349-350: 无逗号的 data URL 抛
-			// ValueError,图片整体跳过,不拒绝请求。
+		// image_url 在提取阶段解析:无逗号 ValueError,整图跳过。
+		prefix, rest, ok := strings.Cut(data, ",")
+		if !ok {
 			return nil, nil
 		}
+		media = strings.TrimPrefix(strings.SplitN(prefix, ";", 2)[0], "data:")
+		data = rest
 	}
 	if data == "" {
 		return nil, nil
 	}
-	if media == "" {
-		media = "image/jpeg"
+	if strings.HasPrefix(data, "data:") {
+		if prefix, rest, ok := strings.Cut(data, ","); ok {
+			if extracted := strings.TrimPrefix(strings.SplitN(prefix, ";", 2)[0], "data:"); extracted != "" {
+				media = extracted
+			}
+			data = rest
+		}
+		// 无逗号:convert 阶段 ValueError 仅 warning,原始 data(含
+		// "data:..." 前缀)原样上行(converters_core.py:767-770)。
 	}
-	return object{"format": strings.TrimPrefix(media, "image/"), "source": object{"bytes": data}}, nil
+	format := media
+	if i := strings.LastIndex(media, "/"); i >= 0 {
+		format = media[i+1:]
+	}
+	return object{"format": format, "source": object{"bytes": data}}, nil
 }
 func nativeMessage(m message, model string, tools []any) object {
 	text := m.text
