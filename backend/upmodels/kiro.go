@@ -104,33 +104,43 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 	if l.headerSource == nil {
 		return Report{}, apperr.New(apperr.UpstreamUnavailable, "Kiro models require a token header source")
 	}
-	headers, err := l.headerSource.HeadersFor(ctx, spec, acc)
-	if err != nil {
-		return Report{}, err
-	}
-	// Refresh may discover the profile or change API-region configuration.
-	acc, err = l.accounts.Get(ctx, acc.Name)
-	if err != nil {
-		return Report{}, err
-	}
-	auth := ""
-	for key, value := range headers {
-		if strings.EqualFold(key, "Authorization") {
-			auth = value
+	var headers map[string]string
+	var endpoint *url.URL
+	query := url.Values{}
+	loadHeaders := func() error {
+		var err error
+		headers, err = l.headerSource.HeadersFor(ctx, spec, acc)
+		if err != nil {
+			return err
 		}
+		acc, err = l.accounts.Get(ctx, acc.Name)
+		if err != nil {
+			return err
+		}
+		auth := ""
+		for key, value := range headers {
+			if strings.EqualFold(key, "Authorization") {
+				auth = value
+			}
+		}
+		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
+			return apperr.New(apperr.UpstreamUnavailable, "Kiro models require a nonempty access token")
+		}
+		endpoint, err = url.Parse(kiroControlBase(spec, acc) + "/ListAvailableModels")
+		if err != nil {
+			return apperr.Wrap(apperr.UpstreamUnavailable, "build Kiro models URL", err)
+		}
+		query.Set("origin", "AI_EDITOR")
+		query.Del("profileArn")
+		if acc.Credential.ClientID == "" && acc.Credential.ProfileARN != "" {
+			query.Set("profileArn", acc.Credential.ProfileARN)
+		}
+		return nil
 	}
-	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
-		return Report{}, apperr.New(apperr.UpstreamUnavailable, "Kiro models require a nonempty access token")
+	if err := loadHeaders(); err != nil {
+		return Report{}, err
 	}
-	endpoint, err := url.Parse(kiroControlBase(spec, acc) + "/ListAvailableModels")
-	if err != nil {
-		return Report{}, apperr.Wrap(apperr.UpstreamUnavailable, "build Kiro models URL", err)
-	}
-	query := endpoint.Query()
-	query.Set("origin", "AI_EDITOR")
-	if acc.Credential.ClientID == "" && acc.Credential.ProfileARN != "" {
-		query.Set("profileArn", acc.Credential.ProfileARN)
-	}
+	refreshed := false
 	out := []Entry{}
 	gotValid := false
 	seenModels, seenTokens := map[string]bool{}, map[string]bool{}
@@ -174,6 +184,15 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 				continue
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				if resp.StatusCode == http.StatusForbidden && !refreshed && l.invalidator != nil && attempt < kiroMaxAttempts-1 {
+					refreshed = true
+					l.invalidator.Invalidate(acc.Name, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
+					if err := loadHeaders(); err != nil {
+						return l.kiroFallbackReport(acc.Name), nil
+					}
+					endpoint.RawQuery = query.Encode()
+					continue
+				}
 				if kiroRetryable(nil, resp.StatusCode) && attempt < kiroMaxAttempts-1 {
 					continue
 				}
@@ -202,6 +221,11 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 		}
 		if err := json.Unmarshal(payload.Models, &models); err != nil {
 			return l.kiroFallbackReport(acc.Name), nil
+		}
+		for _, model := range models {
+			if _, has := model["modelId"]; !has {
+				return l.kiroFallbackReport(acc.Name), nil
+			}
 		}
 		gotValid = true
 		for _, model := range parseEntries(body) {

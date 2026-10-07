@@ -1336,6 +1336,86 @@ func TestRound18Fixes(t *testing.T) {
 	})
 }
 
+func TestRound22SamplingNaN(t *testing.T) {
+	for _, key := range []string{"temperature", "top_p"} {
+		for _, value := range []any{"NaN", "nan", "+Inf", "-Inf"} {
+			root := object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, key: value}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "anthropic", ""); err == nil {
+				t.Fatalf("%s accepted %v", key, value)
+			}
+		}
+		for _, value := range []any{nil, 0, 1, "0.5"} {
+			convert(t, object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, key: value}, "anthropic")
+		}
+		convert(t, object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, key: "NaN"}, "openai")
+	}
+}
+
+func TestRound22ThinkingUnicode(t *testing.T) {
+	for _, text := range []string{strings.Repeat("中", 9), strings.Repeat("中🙂é", 20)} {
+		p := newThinkingParser()
+		first, regular := p.feed("<thinking>" + text)
+		want := ""
+		runes := []rune(text)
+		if len(runes) > p.maxTagLength {
+			want = string(runes[:len(runes)-p.maxTagLength])
+		}
+		if first != want || regular != "" {
+			t.Fatalf("first=%q regular=%q want=%q", first, regular, want)
+		}
+		last, regular := p.feed("</thinking>OK")
+		if first+last != text || regular != "OK" {
+			t.Fatalf("thinking=%q regular=%q", first+last, regular)
+		}
+	}
+}
+
+func TestRound22DuplicateJSONKeys(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`{"x":1,"x":2}`, `{"x": 2}`},
+		{`{"x":1,"y":3,"x":2}`, `{"x": 2, "y": 3}`},
+		{`{"a":{"x":1,"x":2},"b":[{"y":1,"y":3}]}`, `{"a": {"x": 2}, "b": [{"y": 3}]}`},
+		{`{"x":1,"\u0078":2}`, `{"x": 2}`},
+	} {
+		for _, ascii := range []bool{false, true} {
+			got, ok := normalizeOrderedJSON(tc.raw, ascii)
+			if !ok || got != tc.want {
+				t.Fatalf("raw=%s got=%s ok=%v", tc.raw, got, ok)
+			}
+		}
+	}
+	s := newResponseState(requestOptions{protocol: "openai"})
+	for _, tc := range []struct{ id, args string }{{"a", `{"x":1,"x":2}`}, {"b", `{"x":2}`}} {
+		if err := s.toolEvent(object{"toolUseId": tc.id, "name": "lookup", "input": tc.args, "stop": true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.finalTools) != 1 || s.finalTools[0].id != "a" {
+		t.Fatalf("tools=%+v", s.finalTools)
+	}
+}
+
+func TestRound22SystemBetweenToolResults(t *testing.T) {
+	root := object{"model": "model", "tools": []any{object{"type": "function", "function": object{"name": "lookup", "parameters": object{}}}}, "messages": []any{
+		object{"role": "assistant", "content": "", "tool_calls": []any{
+			object{"id": "a", "type": "function", "function": object{"name": "lookup", "arguments": "{}"}},
+			object{"id": "b", "type": "function", "function": object{"name": "lookup", "arguments": "{}"}},
+		}},
+		object{"role": "tool", "tool_call_id": "a", "content": "A"},
+		object{"role": "system", "content": "S"},
+		object{"role": "tool", "tool_call_id": "b", "content": "B"},
+	}}
+	payload, _ := convert(t, root, "openai")
+	ctx := obj(obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["userInputMessageContext"])
+	results := list(ctx["toolResults"])
+	if len(results) != 2 || obj(results[0])["toolUseId"] != "a" || obj(results[1])["toolUseId"] != "b" || strings.Contains(jsonText(results), "not delivered") {
+		t.Fatalf("results=%v payload=%s", results, jsonText(payload))
+	}
+}
+
 func TestRound21StrictEmptyRole(t *testing.T) {
 	s := newResponseState(requestOptions{protocol: "openai", stream: true, policyMode: "none", forbidTools: true})
 	var chunks []object

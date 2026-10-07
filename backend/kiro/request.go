@@ -303,7 +303,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if protocol == "anthropic" && !countTokens {
 		for _, key := range []string{"temperature", "top_p"} {
 			if v := root[key]; v != nil {
-				if f, ok := pydanticFloat(v); !ok || f < 0 || f > 1 {
+				if f, ok := pydanticFloat(v); !ok || !(f >= 0 && f <= 1) {
 					return fail(fmt.Errorf("%s must be a number in [0, 1]", key))
 				}
 			}
@@ -683,7 +683,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				return fail(e)
 			}
 			systemMsgs = append(systemMsgs, s)
-			lastWasTool = false
 			continue
 		}
 		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")

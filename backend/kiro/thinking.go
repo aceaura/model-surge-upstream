@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // truthy 复刻 Python 真值判定:nil/false/0/空串/空容器为假。
@@ -254,10 +255,15 @@ func (p *thinkingParser) processThinking() (string, string) {
 		p.thinking.Reset()
 		return thinking, strings.TrimLeftFunc(after, unicode.IsSpace) // lstrip()
 	}
-	if len(buffer) > p.maxTagLength {
-		send := buffer[:len(buffer)-p.maxTagLength]
+	cut := len(buffer)
+	for i := 0; i < p.maxTagLength && cut > 0; i++ {
+		_, size := utf8.DecodeLastRuneInString(buffer[:cut])
+		cut -= size
+	}
+	if cut > 0 {
+		send := buffer[:cut]
 		p.thinking.Reset()
-		p.thinking.WriteString(buffer[len(buffer)-p.maxTagLength:])
+		p.thinking.WriteString(buffer[cut:])
 		return send, ""
 	}
 	return "", ""

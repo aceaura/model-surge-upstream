@@ -72,7 +72,7 @@ func run() error {
 	// (活体 token+codex 头集)复用解析面的头构造。
 	resolver := loggedResolver{inner: resolve.NewResolver(accounts, models).
 		WithTokens(tokens).WithEffortDeclarations(upstream)}
-	upstream.WithHeaderSource(resolver.inner)
+	upstream.WithHeaderSource(resolver.inner).WithTokenInvalidator(tokens)
 	quotas := quota.New(accounts, cfg.QuotaTTL)
 	// 额度脚本的 {{accessToken}} 复用同一个 token 生命周期管理。
 	quotas.SetTokenSource(tokens)

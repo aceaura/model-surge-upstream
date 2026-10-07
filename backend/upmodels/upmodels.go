@@ -59,6 +59,10 @@ type HeaderSource interface {
 	HeadersFor(ctx context.Context, spec provider.Spec, acc account.Account) (map[string]string, error)
 }
 
+type TokenInvalidator interface {
+	Invalidate(name string, accessToken string)
+}
+
 type entry struct {
 	report  Report
 	expires time.Time
@@ -67,6 +71,7 @@ type entry struct {
 type Lister struct {
 	accounts     Accounts
 	headerSource HeaderSource
+	invalidator  TokenInvalidator
 	client       *http.Client
 	ttl          time.Duration
 
@@ -86,6 +91,11 @@ func New(accounts Accounts, ttl time.Duration) *Lister {
 // WithHeaderSource 挂上凭据形态感知的头来源;不挂则用静态认证头。
 func (l *Lister) WithHeaderSource(h HeaderSource) *Lister {
 	l.headerSource = h
+	return l
+}
+
+func (l *Lister) WithTokenInvalidator(i TokenInvalidator) *Lister {
+	l.invalidator = i
 	return l
 }
 

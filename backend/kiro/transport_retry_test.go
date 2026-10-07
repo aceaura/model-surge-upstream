@@ -285,6 +285,33 @@ func TestOrdinaryScalarToolStream(t *testing.T) {
 	}
 }
 
+func TestRound22UnicodeThinkingStream(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		text := strings.Repeat("中🙂é", 20)
+		wire := joinedFrames(frame("assistantResponseEvent", object{"content": "<thinking>" + text}), frame("assistantResponseEvent", object{"content": "</thinking>OK"}), endFrame())
+		server := stub(t, wire, nil)
+		_, data, err := do(t, server.URL, protocol, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		thinking, regular := "", ""
+		for _, event := range events(t, data) {
+			if protocol == "anthropic" {
+				delta := obj(event["delta"])
+				thinking += str(delta["thinking"])
+				regular += str(delta["text"])
+			} else if choices := list(event["choices"]); len(choices) > 0 {
+				delta := obj(obj(choices[0])["delta"])
+				thinking += str(delta["reasoning_content"])
+				regular += str(delta["content"])
+			}
+		}
+		if thinking != text || regular != "OK" {
+			t.Fatalf("protocol=%s thinking=%q regular=%q", protocol, thinking, regular)
+		}
+	}
+}
+
 func TestRound21MaxTokensHTTP(t *testing.T) {
 	for _, tc := range []struct {
 		value any

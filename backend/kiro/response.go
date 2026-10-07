@@ -151,13 +151,9 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool)
 	}
 	switch delim {
 	case '{':
-		buf.WriteByte('{')
-		first := true
+		keys, values := []string{}, []string{}
+		indices := map[string]int{}
 		for dec.More() {
-			if !first {
-				buf.WriteString(", ")
-			}
-			first = false
 			kt, err := dec.Token()
 			if err != nil {
 				return false
@@ -166,14 +162,29 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, asciiOnly bool)
 			if !ok {
 				return false
 			}
-			buf.WriteString(pyJSONString(ks, asciiOnly))
-			buf.WriteString(": ")
-			if !encodeOrderedValue(dec, buf, asciiOnly) {
+			var value strings.Builder
+			if !encodeOrderedValue(dec, &value, asciiOnly) {
 				return false
+			}
+			if i, exists := indices[ks]; exists {
+				values[i] = value.String()
+			} else {
+				indices[ks] = len(keys)
+				keys = append(keys, ks)
+				values = append(values, value.String())
 			}
 		}
 		if _, err := dec.Token(); err != nil {
 			return false
+		}
+		buf.WriteByte('{')
+		for i, key := range keys {
+			if i > 0 {
+				buf.WriteString(", ")
+			}
+			buf.WriteString(pyJSONString(key, asciiOnly))
+			buf.WriteString(": ")
+			buf.WriteString(values[i])
 		}
 		buf.WriteByte('}')
 	case '[':

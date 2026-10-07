@@ -39,6 +39,92 @@ func kiroTestHeaders(_ context.Context, _ provider.Spec, acc account.Account) (m
 	return kiro.Headers("live-token", acc.Credential.ProfileARN), nil
 }
 
+type kiroInvalidateFunc func(string, string)
+
+func (f kiroInvalidateFunc) Invalidate(name, token string) { f(name, token) }
+
+func TestKiroModelsForbiddenRefresh(t *testing.T) {
+	for _, mode := range []string{"success", "persistent", "refresh failure", "metadata", "later page", "retry budget"} {
+		t.Run(mode, func(t *testing.T) {
+			calls, invalidations := 0, 0
+			var a account.Account
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if mode == "retry budget" && calls == 1 {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				if mode == "later page" && calls == 1 {
+					fmt.Fprint(w, `{"models":[{"modelId":"first"}],"nextToken":"page2"}`)
+					return
+				}
+				if r.Header.Get("Authorization") == "Bearer old-token" || mode == "persistent" {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				if r.Header.Get("Authorization") != "Bearer new-token" {
+					t.Error("refreshed authorization was not used")
+				}
+				if mode == "metadata" && (r.URL.Query().Has("profileArn") || r.URL.Path != "/refreshed/ListAvailableModels") {
+					t.Error("refreshed endpoint or OIDC identity retained old metadata")
+				}
+				if mode == "later page" && r.URL.Query().Get("nextToken") != "page2" {
+					t.Error("refresh lost pagination cursor")
+				}
+				fmt.Fprint(w, `{"models":[{"modelId":"fresh"}]}`)
+			}))
+			defer srv.Close()
+			a = kiroAccount(srv.URL)
+			accounts := fakeAccounts{a.Name: a}
+			l := New(accounts, time.Minute).WithHeaderSource(kiroHeaderFunc(func(_ context.Context, _ provider.Spec, _ account.Account) (map[string]string, error) {
+				if invalidations > 0 {
+					if mode == "refresh failure" {
+						return nil, errors.New("refresh failed")
+					}
+					if mode == "metadata" {
+						a.Credential.ClientID, a.Credential.ClientSecret = "client", "secret"
+						a.BaseURL = srv.URL + "/refreshed"
+						accounts[a.Name] = a
+					}
+					return kiro.Headers("new-token", a.Credential.ProfileARN), nil
+				}
+				return kiro.Headers("old-token", a.Credential.ProfileARN), nil
+			})).WithTokenInvalidator(kiroInvalidateFunc(func(name, token string) {
+				invalidations++
+				if name != a.Name || token != "old-token" {
+					t.Error("incorrect token invalidation")
+				}
+			}))
+			got, err := l.List(context.Background(), a.Name)
+			if err != nil || invalidations != 1 {
+				t.Fatalf("invalidations=%d err=%v", invalidations, err)
+			}
+			wantCalls := 2
+			if mode == "refresh failure" {
+				wantCalls = 1
+			} else if mode == "later page" || mode == "retry budget" {
+				wantCalls = 3
+			}
+			if calls != wantCalls {
+				t.Fatalf("calls=%d want=%d", calls, wantCalls)
+			}
+			if mode == "persistent" || mode == "refresh failure" {
+				if len(got.Models) != len(kiroFallbackModels) {
+					t.Fatalf("fallback=%v", got.Models)
+				}
+			} else {
+				want := []Entry{{ID: "auto-kiro"}, {ID: "fresh"}}
+				if mode == "later page" {
+					want = []Entry{{ID: "auto-kiro"}, {ID: "first"}, {ID: "fresh"}}
+				}
+				if !reflect.DeepEqual(got.Models, want) {
+					t.Fatalf("models=%v want=%v", got.Models, want)
+				}
+			}
+		})
+	}
+}
+
 func TestKiroListRetryClassification(t *testing.T) {
 	for _, cause := range []error{
 		&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}},
@@ -285,7 +371,7 @@ func TestKiroModelsOfficialRequestURL(t *testing.T) {
 }
 
 func TestKiroStaleModelsOnRefreshFailure(t *testing.T) {
-	for _, failure := range []string{"http", "json"} {
+	for _, failure := range []string{"http", "json", "missing modelId", "null entry"} {
 		t.Run(failure, func(t *testing.T) {
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -297,7 +383,14 @@ func TestKiroStaleModelsOnRefreshFailure(t *testing.T) {
 				if failure == "http" {
 					w.WriteHeader(http.StatusUnauthorized)
 				}
-				fmt.Fprint(w, `invalid-json`)
+				switch failure {
+				case "missing modelId":
+					fmt.Fprint(w, `{"models":[{}]}`)
+				case "null entry":
+					fmt.Fprint(w, `{"models":[null]}`)
+				default:
+					fmt.Fprint(w, `invalid-json`)
+				}
 			}))
 			defer srv.Close()
 			a := kiroAccount(srv.URL)
