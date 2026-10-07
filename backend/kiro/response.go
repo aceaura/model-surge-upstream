@@ -428,7 +428,7 @@ func (s *responseState) finishTool() error {
 		args = "{}"
 	}
 	norm, ok := normalizeOrderedJSON(args, true)
-	if !ok && looksTruncatedJSON(args) {
+	if !ok && looksTruncatedJSON(args) && s.registersTruncation() {
 		// parsers.py: truncated arguments are diagnosed and replaced with {};
 		// the truncation notice is injected into the next request.
 		saveToolTruncation(t.id, t.name)
@@ -593,7 +593,10 @@ func (s *responseState) accept(e wireEvent) error {
 			}
 		}
 	}
-	if v, ok := d["contextUsagePercentage"]; ok {
+	if v, ok := d["contextUsagePercentage"]; ok && v != nil {
+		// streaming_core.py:494-496 / streaming_anthropic.py:543 /
+		// streaming_openai.py:274: 三条消费路径都要求非 None,显式 null
+		// 不算完成信号(与 usage 分支同规)。
 		s.terminal = true
 		if n, ok := v.(json.Number); ok {
 			if f, err := n.Float64(); err == nil {
@@ -767,7 +770,9 @@ func (s *responseState) finalize() error {
 		case s.meaningful:
 			s.stopReason = "max_tokens"
 			s.stopSequence = ""
-			saveContentTruncation(s.fullText.String())
+			if s.registersTruncation() {
+				saveContentTruncation(s.fullText.String())
+			}
 		default:
 			// streaming_openai.py:787: 空流仍回 200(空 content、usage 归零)。
 		}
@@ -890,6 +895,15 @@ func (s *responseState) usageSource() object {
 	return object{"input_tokens": in, "output_tokens": out}
 }
 
+// registersTruncation 对齐参考实现的截断登记覆盖面:只在 anthropic 流式
+// 生成器(streaming_anthropic.py:685-701)与 openai 流式生成器
+// (streaming_openai.py:368-394,非流式经 collect_stream_response 复用同一
+// 生成器)登记;anthropic 非流式与两条严格 tool_choice 路径
+// (format_*_from_result)检测截断并改 stop_reason 但不登记,下请求不注入。
+func (s *responseState) registersTruncation() bool {
+	return s.options.policyMode == "" && (s.options.protocol == "openai" || s.options.stream)
+}
+
 // contextDerivedInput 对齐 streaming_core.py:510-535 的反推:无绝对 input
 // 值时,total=int(pct/100×上限),prompt=max(0, total-completion)。
 func (s *responseState) contextDerivedInput(output int) (int, bool) {
@@ -927,6 +941,11 @@ func (s *responseState) openAIUsage() object {
 	if derived, ok := s.contextDerivedInput(out); ok {
 		prompt = derived
 		total = int(s.contextPct / 100 * kiroMaxInputTokens)
+	} else if s.options.policyMode != "" && s.hasContextPct && s.contextPct == 0 {
+		// format_openai_response_from_result(streaming_openai.py:502-512)
+		// 只在 pct 为 None 时回退请求估算;pct=0 经 streaming_core.py:528
+		// 的 pct>0 守卫落 unknown 分支,prompt=0、total=completion。
+		prompt, total = 0, out
 	}
 	usage := object{"prompt_tokens": prompt, "completion_tokens": out, "total_tokens": total, "kiro_usage_source": s.usageSource()}
 	if s.hasCredits {

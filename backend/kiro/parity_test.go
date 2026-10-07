@@ -538,13 +538,14 @@ func TestToolTruncationRecovery(t *testing.T) {
 	t.Run("truncated arguments become empty object with notice", func(t *testing.T) {
 		wire := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": "trunc-tool-1", "input": `{"city":`, "stop": true}), endFrame())
 		server := stub(t, wire, nil)
-		_, data, err := do(t, server.URL, "anthropic", false)
+		// 登记只在 anthropic 流式与 openai 生成器(streaming_anthropic.py:
+		// 685-701 / streaming_openai.py:368-394),用流式触发登记。
+		_, data, err := do(t, server.URL, "anthropic", true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		blocks := list(parseResult(t, data)["content"])
-		if len(blocks) != 1 || jsonText(obj(blocks[0])["input"]) != "{}" {
-			t.Fatal(blocks)
+		if !strings.Contains(string(data), `"input":{}`) {
+			t.Fatal(data)
 		}
 		next := func() object {
 			return object{"model": "claude-sonnet-4.6", "tools": toolDefinition("anthropic"), "messages": []any{
@@ -560,6 +561,23 @@ func TestToolTruncationRecovery(t *testing.T) {
 		payload, _ = convert(t, next(), "anthropic")
 		if strings.Contains(jsonText(payload), "Your tool call was truncated") {
 			t.Fatal("notice injected twice")
+		}
+	})
+	t.Run("anthropic nonstream truncation not registered", func(t *testing.T) {
+		// format_anthropic_response_from_result(streaming_anthropic.py:
+		// 800-816)检测截断改 stop_reason 但不登记,下请求无注入。
+		wire := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": "trunc-tool-1n", "input": `{"city":`, "stop": true}), endFrame())
+		server := stub(t, wire, nil)
+		if _, _, err := do(t, server.URL, "anthropic", false); err != nil {
+			t.Fatal(err)
+		}
+		next := object{"model": "claude-sonnet-4.6", "tools": toolDefinition("anthropic"), "messages": []any{
+			object{"role": "assistant", "content": []any{object{"type": "tool_use", "id": "trunc-tool-1n", "name": "lookup", "input": object{}}}},
+			object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "trunc-tool-1n", "content": "sunny"}}},
+		}}
+		payload, _ := convert(t, next, "anthropic")
+		if strings.Contains(jsonText(payload), "Your tool call was truncated") {
+			t.Fatal("anthropic nonstream truncation registered")
 		}
 	})
 	t.Run("invalid but not truncated arguments are not recorded", func(t *testing.T) {
@@ -1140,6 +1158,70 @@ func TestRound16Fixes(t *testing.T) {
 		}
 		if str(obj(content[1])["text"]) != "xy" {
 			t.Fatalf("text block=%v", content[1])
+		}
+	})
+}
+func TestRound17Fixes(t *testing.T) {
+	t.Run("null contextUsage not terminal", func(t *testing.T) {
+		// streaming_core.py:494-496 / streaming_anthropic.py:543 /
+		// streaming_openai.py:274: 三条消费路径都要求非 None。
+		s := &responseState{options: requestOptions{protocol: "anthropic"}}
+		if err := s.accept(wireEvent{kind: "contextUsageEvent", data: object{"contextUsagePercentage": nil}}); err != nil {
+			t.Fatal(err)
+		}
+		if s.terminal {
+			t.Fatal("explicit null contextUsage marked terminal")
+		}
+		if err := s.accept(wireEvent{kind: "contextUsageEvent", data: object{"contextUsagePercentage": json.Number("50")}}); err != nil {
+			t.Fatal(err)
+		}
+		if !s.terminal {
+			t.Fatal("numeric contextUsage not terminal")
+		}
+	})
+	t.Run("truncation registration gated", func(t *testing.T) {
+		// 登记只在 anthropic 流式与 openai 生成器(含非流式复用);
+		// anthropic 非流式与严格路径不登记(streaming_anthropic.py:685 /
+		// streaming_openai.py:368 / format_*_from_result)。
+		cases := []struct {
+			opts requestOptions
+			want bool
+		}{
+			{requestOptions{protocol: "anthropic", stream: true}, true},
+			{requestOptions{protocol: "anthropic"}, false},
+			{requestOptions{protocol: "openai"}, true},
+			{requestOptions{protocol: "openai", stream: true}, true},
+			{requestOptions{protocol: "openai", policyMode: "required"}, false},
+			{requestOptions{protocol: "anthropic", stream: true, policyMode: "named"}, false},
+		}
+		for i, c := range cases {
+			s := &responseState{options: c.opts}
+			if got := s.registersTruncation(); got != c.want {
+				t.Fatalf("case %d: got %v want %v", i, got, c.want)
+			}
+		}
+	})
+	t.Run("openai strict pct0 prompt zero", func(t *testing.T) {
+		// format_openai_response_from_result(streaming_openai.py:502-512):
+		// pct=0 经 streaming_core.py:528 pct>0 守卫落 unknown,
+		// prompt=0、total=completion,不回退请求估算。
+		s := &responseState{options: requestOptions{protocol: "openai", policyMode: "required"}}
+		s.hasContextPct = true
+		s.contextPct = 0
+		s.inputTokens = 100
+		s.outputRunes = 40
+		u := s.openAIUsage()
+		if u["prompt_tokens"] != 0 || u["total_tokens"] != u["completion_tokens"] {
+			t.Fatalf("usage=%v", u)
+		}
+		// 非严格路径 pct=0 仍回退估算(streaming_openai.py:322)。
+		s2 := &responseState{options: requestOptions{protocol: "openai"}}
+		s2.hasContextPct = true
+		s2.contextPct = 0
+		s2.inputTokens = 100
+		s2.outputRunes = 40
+		if u2 := s2.openAIUsage(); u2["prompt_tokens"] != 100 {
+			t.Fatalf("non-strict usage=%v", u2)
 		}
 	})
 }
