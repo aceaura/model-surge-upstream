@@ -331,6 +331,7 @@ class _AccountFormState extends State<AccountForm> {
   late final TextEditingController _bailianAkSecret = TextEditingController();
   bool _revealAkSecret = false;
   bool _blBusy = false;
+  bool _blVerified = false;
   late final TextEditingController _profileArn = TextEditingController(
       text: widget.editing?.profileArn ?? widget.copyFrom?.profileArn ?? '');
   late final TextEditingController _authRegion = TextEditingController(
@@ -977,6 +978,9 @@ class _AccountFormState extends State<AccountForm> {
     required List<Widget> buttons,
     required Key detailsToggleKey,
     required List<Widget> details,
+    String configuredLabel = '已配置',
+    String unconfiguredLabel = '未配置',
+    String detailsTitle = '凭据详情(导入自动填充,一般无需修改)',
   }) {
     final t = context.tokens;
     return Container(
@@ -1001,7 +1005,7 @@ class _AccountFormState extends State<AccountForm> {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                configured ? '已配置' : '未配置',
+                configured ? configuredLabel : unconfiguredLabel,
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
@@ -1020,7 +1024,7 @@ class _AccountFormState extends State<AccountForm> {
           Wrap(spacing: 10, runSpacing: 10, children: buttons),
           _DetailsDisclosure(
             toggleKey: detailsToggleKey,
-            title: '凭据详情(导入自动填充,一般无需修改)',
+            title: detailsTitle,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: details,
@@ -1095,6 +1099,7 @@ class _AccountFormState extends State<AccountForm> {
     required String name,
     required String desc,
     String? value,
+    String pendingLabel = '待导入',
   }) {
     final t = context.tokens;
     return Padding(
@@ -1124,7 +1129,7 @@ class _AccountFormState extends State<AccountForm> {
         ),
         const SizedBox(width: 10),
         Text(
-          done ? (value ?? '已配置') : '待导入',
+          done ? (value ?? '已配置') : pendingLabel,
           style: TextStyle(
               fontSize: 12,
               color: done ? t.success : t.faint,
@@ -1320,7 +1325,9 @@ class _AccountFormState extends State<AccountForm> {
       icon: Icons.query_stats,
       title: '额度查询',
       subtitle: _quotaEnabled
-          ? '走供应商内置查询;两个间隔留空走默认值'
+          ? (_providerId == 'bailian.cn.subscribe.token-plan'
+              ? 'bl 自动续期 · AccessKey 仅由本机 bl 保管'
+              : '走供应商内置查询;两个间隔留空走默认值')
           : '已关闭 · 该账号不查询额度',
       initiallyExpanded: _initialSettings?.empty == false,
       child: Column(
@@ -1378,7 +1385,7 @@ class _AccountFormState extends State<AccountForm> {
             const SizedBox(height: 20),
             _kimiWebTokenField(),
           ],
-          if (providerVendor(_providerId ?? '') == 'bailian') ...[
+          if (_providerId == 'bailian.cn.subscribe.token-plan') ...[
             const SizedBox(height: 20),
             _bailianBlFields(),
           ],
@@ -1387,19 +1394,63 @@ class _AccountFormState extends State<AccountForm> {
     );
   }
 
-  /// 百炼 AK/SK 引导区:把 AK/SK 交给本机 bl CLI 保管后,额度查询 token
-  /// 撞过期由 bl 自动续签(后端直读 bl 的 config.json)。两个框只做一次性
-  /// 引导,不随账号保存;Secret 框默认纯星号、眼睛切换。
   Widget _bailianBlFields() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+    return _loginCard(
+      title: 'Token Plan 额度认证',
+      configured: _blVerified,
+      configuredLabel: '本次已验证',
+      unconfiguredLabel: '本次未验证',
+      configuredHint: '本机 bl 登录与额度 Token 签发已验证通过。AccessKey 由 bl 保管,不随账号保存;后端需读取同一份 bl 配置。',
+      unconfiguredHint: 'AccessKey → 本机 bl 登录 → 签发额度 Token → 后端直读配置。无需手动复制 Token,续期由 bl 配合自动任务完成。\n首次使用请展开 AccessKey 详情;已有 bl 登录态无需重复验证,本卡片仅显示本次验证结果。',
+      items: [
+        _checkItem(
+          done: _blVerified,
+          name: 'bl CLI',
+          desc: '缺失时自动安装',
+          value: '已验证',
+          pendingLabel: '待验证',
+        ),
+        _checkItem(
+          done: _blVerified,
+          name: 'AccessKey 登录',
+          desc: '由本机 bl 保管,不随账号保存',
+          value: '已验证',
+          pendingLabel: '待验证',
+        ),
+        _checkItem(
+          done: _blVerified,
+          name: '额度查询 Token',
+          desc: '签发到 bl 配置,后端自动读取',
+          value: '已验证',
+          pendingLabel: '待验证',
+        ),
+      ],
+      buttons: [
+        OutlinedButton.icon(
+          key: const ValueKey('bailian-bl-install'),
+          icon: _blBusy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(_blVerified ? Icons.refresh : Icons.terminal_outlined,
+                  size: 18),
+          label: Text(_blBusy
+              ? '正在安装/验证 bl…'
+              : (_blVerified ? '重新验证 bl' : '安装 bl 并验证')),
+          onPressed: _blBusy ? null : _ensureBl,
+        ),
+      ],
+      detailsToggleKey: const ValueKey('bailian-details-toggle'),
+      detailsTitle: 'AccessKey 详情(仅交给本机 bl,不随账号保存)',
+      details: [
         LabeledField(
           label: 'AccessKey ID',
-          hint: '仅用于本机 bl 登录验证,不随账号保存;验证通过后额度 token 自动续期。',
           child: TextFormField(
             key: const ValueKey('bailian-access-key-id'),
             controller: _bailianAkId,
+            enabled: !_blBusy,
+            onChanged: (_) => setState(() => _blVerified = false),
             decoration: const InputDecoration(border: OutlineInputBorder()),
           ),
         ),
@@ -1409,6 +1460,8 @@ class _AccountFormState extends State<AccountForm> {
           child: TextFormField(
             key: const ValueKey('bailian-access-key-secret'),
             controller: _bailianAkSecret,
+            enabled: !_blBusy,
+            onChanged: (_) => setState(() => _blVerified = false),
             obscureText: !_revealAkSecret,
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
@@ -1423,18 +1476,6 @@ class _AccountFormState extends State<AccountForm> {
             ),
           ),
         ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          key: const ValueKey('bailian-bl-install'),
-          icon: _blBusy
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.terminal_outlined, size: 18),
-          label: Text(_blBusy ? '正在安装/验证 bl…' : '安装 bl 并验证'),
-          onPressed: _blBusy ? null : _ensureBl,
-        ),
       ],
     );
   }
@@ -1446,10 +1487,16 @@ class _AccountFormState extends State<AccountForm> {
       TopToast.show(context, '请先填入 AccessKey ID 与 Secret', error: true);
       return;
     }
-    setState(() => _blBusy = true);
+    setState(() {
+      _blBusy = true;
+      _blVerified = false;
+    });
     final error = await ensureBlAndLogin(id, secret);
     if (!mounted) return;
-    setState(() => _blBusy = false);
+    setState(() {
+      _blBusy = false;
+      _blVerified = error == null;
+    });
     if (error == null) {
       TopToast.show(context, 'bl 已就绪,AccessKey 验证通过;额度查询 token 将自动续期');
     } else {

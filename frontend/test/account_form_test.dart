@@ -797,10 +797,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('bailian quota section shows AK fields and install button',
+  Future<void> expandBailianDetails(WidgetTester tester) async {
+    final toggle = find.byKey(const ValueKey('bailian-details-toggle'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('bailian quota card shows verification checklist and collapsed keys',
       (tester) async {
     await pumpForm(tester, editing: accountBailian);
     await expandQuotaSection(tester);
+    expect(find.text('Token Plan 额度认证'), findsOneWidget);
+    expect(find.text('本次未验证'), findsOneWidget);
+    expect(find.text('待验证'), findsNWidgets(3));
+    expect(find.text('bl CLI'), findsOneWidget);
+    expect(find.text('AccessKey 登录'), findsOneWidget);
+    expect(find.text('额度查询 Token'), findsOneWidget);
+    expect(find.textContaining('已有 bl 登录态无需重复验证'), findsOneWidget);
+    expect(find.byKey(const ValueKey('bailian-access-key-id')).hitTestable(),
+        findsNothing);
+    await expandBailianDetails(tester);
     final secretFinder = find.byKey(const ValueKey('bailian-access-key-secret'));
     expect(find.byKey(const ValueKey('bailian-access-key-id')), findsOneWidget);
     expect(secretFinder, findsOneWidget);
@@ -844,13 +861,14 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('bl button validates filled keys and reports success',
+  testWidgets('bl button validates keys and invalidates status after edits',
       (tester) async {
     debugBlExecOverride =
         (exe, args) async => ProcessResult(1, 0, '', '');
     addTearDown(() => debugBlExecOverride = null);
     await pumpForm(tester, editing: accountBailian);
     await expandQuotaSection(tester);
+    await expandBailianDetails(tester);
     await tester.enterText(
         find.byKey(const ValueKey('bailian-access-key-id')), 'ak-id');
     await tester.enterText(
@@ -861,8 +879,59 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.textContaining('AccessKey 验证通过'), findsOneWidget);
+    expect(find.text('本次已验证'), findsOneWidget);
+    expect(find.text('已验证'), findsNWidgets(3));
+    expect(find.text('重新验证 bl'), findsOneWidget);
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-secret')), 'ak-changed');
+    await tester.pumpAndSettle();
+    expect(find.text('本次未验证'), findsOneWidget);
+    expect(find.text('待验证'), findsNWidgets(3));
+    expect(find.text('安装 bl 并验证'), findsOneWidget);
+  });
+
+  testWidgets('bl mint failure never marks the card verified', (tester) async {
+    debugBlExecOverride = (exe, args) async => ProcessResult(
+        1, args.contains('generate-access-token') ? 1 : 0, '', 'mint denied');
+    addTearDown(() => debugBlExecOverride = null);
+    await pumpForm(tester, editing: accountBailian);
+    await expandQuotaSection(tester);
+    await expandBailianDetails(tester);
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-id')), 'ak-id');
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-secret')), 'ak-secret');
+    final button = find.byKey(const ValueKey('bailian-bl-install'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('签发额度 token 失败'), findsOneWidget);
+    expect(find.text('本次未验证'), findsOneWidget);
+    expect(find.text('已验证'), findsNothing);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('bailian AccessKeys stay out of account save payload',
+      (tester) async {
+    final captured = <String>[];
+    await pumpForm(tester,
+        editing: accountBailian, client: recordingClient(captured));
+    await expandQuotaSection(tester);
+    await expandBailianDetails(tester);
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-id')), 'ak-id-private');
+    await tester.enterText(
+        find.byKey(const ValueKey('bailian-access-key-secret')), 'ak-secret-private');
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(captured, hasLength(1));
+    expect(captured.single, isNot(contains('ak-id-private')));
+    expect(captured.single, isNot(contains('ak-secret-private')));
   });
 
   testWidgets('copy prefills config but keeps create semantics', (tester) async {
