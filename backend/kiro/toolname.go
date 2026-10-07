@@ -90,16 +90,6 @@ func restoreToolName(name string) string {
 	return name
 }
 
-// lookupToolAlias 只查不建:响应侧校验用,避免幻觉工具名污染注册表。
-func lookupToolAlias(name string) string {
-	toolNameMu.Lock()
-	defer toolNameMu.Unlock()
-	if a, ok := toolNameToAlias[name]; ok {
-		return a
-	}
-	return name
-}
-
 // registerToolNames 对齐 _register_tool_names(tool_name_alias.py:68-78):
 // 合法名先整体进保留集(防止被长名别名抢占),再逐一取别名。
 func registerToolNames(names []string) {

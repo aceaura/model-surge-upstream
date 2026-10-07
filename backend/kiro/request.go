@@ -389,7 +389,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 	}
 	registerToolNames(toolNames)
-	seenTools := map[string]bool{}
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
 		flat := false
@@ -414,15 +413,18 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			// models_anthropic.py / models_openai.py: 工具 name 必填字符串。
 			return fail(fmt.Errorf("tool name is required"))
 		}
-		if seenTools[name] {
+		// allowedTools 键保持客户端原名(resolve_anthropic_tool_choice 的
+		// "client-visible allowed names":tool_choice 解析与响应校验都在
+		// 别名前用原名);Go 仍拒重名(B2 边界更严,保留)。
+		if opts.allowedTools[name] {
 			return fail(fmt.Errorf("duplicate tool %q", name))
 		}
-		seenTools[name] = true
+		opts.allowedTools[name] = true
 		// tool_name_alias.py:126-143: 宽化部署不再拒绝超长/非法名,统一
-		// 换别名上行;描述占位与长描述迁移段也用别名(参考实现先别名后
+		// 换别名上行;描述占位与长描述迁移段也用别名(参考实现在
+		// build_kiro_payload 的 convert_tools_to_kiro_format 里先别名后
 		// 转换)。
 		name = aliasToolName(name)
-		opts.allowedTools[name] = true
 		schema := t["input_schema"]
 		if protocol == "openai" && !flat {
 			schema = t["parameters"]
@@ -507,12 +509,16 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			}
 			directive = "\n\n[Tool Policy] For THIS response you MUST call at least one tool. Do not reply with text only."
 		case "named":
+			// resolve_anthropic_tool_choice(converters_anthropic.py:377-385):
+			// 策略解析与过滤都在别名前用客户端原名,被选中工具在
+			// build_kiro_payload 才别名——长名 named 同样合法。
 			if !opts.allowedTools[named] {
 				return fail(fmt.Errorf("tool_choice references unknown tool %q", named))
 			}
+			namedAlias := aliasToolName(named)
 			filtered := []any{}
 			for _, t := range tools {
-				if str(obj(obj(t)["toolSpecification"])["name"]) == named {
+				if str(obj(obj(t)["toolSpecification"])["name"]) == namedAlias {
 					filtered = append(filtered, t)
 				}
 			}
@@ -644,7 +650,8 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		if len(merged) > 0 && merged[len(merged)-1].role == m.role {
 			last := &merged[len(merged)-1]
 			last.text = last.text + "\n" + m.text
-			last.images = append(last.images, m.images...)
+			// converters_core.py:1220-1249: merge 只并 content/tool_calls/
+			// tool_results,不并 images——被并消息的图片静默丢弃。
 			last.uses = append(last.uses, m.uses...)
 			last.results = append(last.results, m.results...)
 		} else {
@@ -1005,8 +1012,10 @@ func parseMessage(m object, protocol string) (message, error) {
 			}
 			switch str(b["type"]) {
 			case "text":
-				// models_anthropic.py:49: text 为必填字符串,缺省或非
-				// 字符串 422;openai 转换器 get("text","") 宽容。
+				// 缺 text 的畸形块落 UnknownContentBlock 兜底被接受,但
+				// 转换器 converters_anthropic.py:76 block.text 抛
+				// AttributeError,参考实现整请求 500——不复制崩溃,Go 保持
+				// 400(刻意分歧)。openai 转换器 get("text","") 宽容。
 				if protocol == "anthropic" {
 					if _, ok := b["text"].(string); !ok {
 						return result, fmt.Errorf("text block requires a string text field")
@@ -1014,31 +1023,20 @@ func parseMessage(m object, protocol string) (message, error) {
 				}
 				result.text += str(b["text"])
 			case "thinking": // Native history has no reasoning channel.
-				// models_anthropic.py:66: thinking 字段同为必填字符串。
-				if protocol == "anthropic" {
-					if _, ok := b["thinking"].(string); !ok {
-						return result, fmt.Errorf("thinking block requires a string thinking field")
-					}
-				}
+				// 缺 thinking 字段的畸形块经 pydantic smart union 落入
+				// UnknownContentBlock 兜底被接受,转换层不读 thinking 块,
+				// 静默忽略(server_tool_blocks.py:22-27)。
 			// extensions/server_tool_blocks.py:121-131: 宽化联合以
 			// UnknownContentBlock 兜底,redacted_thinking 等未列名块型
 			// 被接受并静默忽略——落入 default 分支。
 			case "tool_reference": // Claude Code 延迟工具标记(models_anthropic.py:128),Kiro 无对应物,忽略。
 			case "image", "image_url":
-				// UnknownContentBlock 兜底(server_tool_blocks.py:81-98)同样
-				// 接住 anthropic 消息级的 image_url:接受并忽略,不再 422。
-				// (tool_result 内层联合未被宽化,那里仍是 422。)
-				if protocol == "anthropic" && str(b["type"]) == "image_url" {
-					continue
-				}
-				// models_anthropic.py:200-201: source 必填且为 base64/url
-				// 联合,缺省或异型 422(pydantic 先于角色过滤)。
-				if protocol == "anthropic" {
-					src := obj(b["source"])
-					if str(src["type"]) != "base64" && str(src["type"]) != "url" {
-						return result, fmt.Errorf("image block requires a base64 or url source")
-					}
-				}
+				// pydantic smart union: source 畸形的 image 与 image_url 都
+				// 落入 UnknownContentBlock 兜底被接受。extract_images_from_
+				// content(converters_core.py:322-353)对两种块型统一处理:
+				// data-URL 提取、http(s) 跳过、source 缺失静默跳过——
+				// anthropic 消息级不再有图片块的边界 422(tool_result 内层
+				// 联合未宽化,仍严格)。
 				// converters_anthropic.py:297-319: 图片只为 user 角色提取,
 				// assistant 等角色的图片块静默忽略。
 				if result.role != "user" {
@@ -1057,19 +1055,12 @@ func parseMessage(m object, protocol string) (message, error) {
 				if protocol != "anthropic" || result.role != "assistant" {
 					continue
 				}
-				// models_anthropic.py: input 必填;出现的字符串由 toolUse
-				// 强迫为 dict,缺省/null 在参考实现里 422。
-				if b["input"] == nil {
-					return result, fmt.Errorf("tool_use input is required")
-				}
-				// id/name 同为必填字符串;空串由转换器静默丢弃
-				// (converters_anthropic.py:245)。
+				// pydantic smart union: 字段畸形的 tool_use 落 UnknownContentBlock
+				// 兜底,提取器(converters_anthropic.py:228-245)按 dict 语义
+				// 处理——input 缺省 {},id/name 缺任一则整块丢弃。
 				id, idOK := b["id"].(string)
 				name, nameOK := b["name"].(string)
-				if !idOK || !nameOK {
-					return result, fmt.Errorf("tool_use id/name is required")
-				}
-				if id == "" || name == "" {
+				if !idOK || !nameOK || id == "" || name == "" {
 					continue
 				}
 				u := toolUse(id, aliasToolName(name), b["input"])
@@ -1085,10 +1076,11 @@ func parseMessage(m object, protocol string) (message, error) {
 				}
 				id := str(b["tool_use_id"])
 				if protocol == "anthropic" {
-					// models_anthropic.py: tool_use_id 必填字符串,缺省或
-					// 非字符串 422;空串整块丢弃(converters_anthropic.py:151)。
+					// pydantic smart union: 缺 tool_use_id 落 UnknownContentBlock
+					// 兜底,提取器按条件静默丢弃整块;空串同样丢弃
+					// (converters_anthropic.py:151)。
 					if _, ok := b["tool_use_id"].(string); !ok {
-						return result, fmt.Errorf("tool_use_id is required")
+						continue
 					}
 					if id == "" {
 						continue

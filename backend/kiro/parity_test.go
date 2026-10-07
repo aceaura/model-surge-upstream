@@ -812,3 +812,80 @@ func TestDeploymentWidening(t *testing.T) {
 		}
 	})
 }
+
+func TestSmartUnionFallback(t *testing.T) {
+	img := func(data string) object {
+		return object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": data}}
+	}
+	t.Run("named tool_choice resolves before aliasing", func(t *testing.T) {
+		// converters_anthropic.py:377-385: 策略解析/过滤用客户端原名,
+		// 被选中工具在 build_kiro_payload 才别名——长名 named 合法。
+		long := "mcp__filesystem__read_text_file_with_an_extremely_long_name_beyond_64"
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "tools": []any{
+			object{"name": long, "description": "read", "input_schema": object{}},
+		}, "tool_choice": object{"type": "tool", "name": long},
+			"messages": []any{object{"role": "user", "content": "hi"}}}
+		payload, _ := convert(t, root, "anthropic")
+		ctx := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["userInputMessageContext"]
+		spec := obj(obj(list(obj(ctx)["tools"])[0])["toolSpecification"])
+		if str(spec["name"]) != aliasToolName(long) {
+			t.Fatalf("upstream name=%q", str(spec["name"]))
+		}
+	})
+	t.Run("malformed known blocks fall back", func(t *testing.T) {
+		// pydantic smart union: 字段畸形的已知块落 UnknownContentBlock 兜底。
+		// thinking 缺字段忽略;image 缺 source 跳过;tool_use 缺 input 以 {}
+		// 上行、缺 id/name 丢弃;tool_result 缺 tool_use_id 丢弃
+		// (converters_anthropic.py:228-245/151,converters_core.py:322-360)。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "tools": toolDefinition("anthropic"), "messages": []any{
+			object{"role": "user", "content": []any{
+				object{"type": "thinking"},
+				object{"type": "image"},
+				object{"type": "tool_result", "content": "no id"},
+				object{"type": "text", "text": "q"},
+			}},
+			object{"role": "assistant", "content": []any{
+				object{"type": "tool_use", "name": "lookup", "input": object{}},
+				object{"type": "tool_use", "id": "c1", "name": "lookup"},
+			}},
+			object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "c1", "content": "ok"}}},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		raw := jsonText(payload)
+		if !strings.Contains(raw, `"toolUses"`) || !strings.Contains(raw, `"input":{}`) {
+			t.Fatalf("payload=%v", payload)
+		}
+		// text 缺 text:参考实现转换层 AttributeError 整请求 500,Go 保持 400。
+		bad := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+			object{"role": "user", "content": []any{object{"type": "text"}}},
+		}}
+		if _, _, err := convertRequest([]byte(jsonText(bad)), "anthropic", ""); err == nil {
+			t.Fatal("text-less text block accepted")
+		}
+	})
+	t.Run("image_url data url extracted", func(t *testing.T) {
+		// converters_core.py:322-353: image_url 块 data-URL 图片提取上行。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+			object{"role": "user", "content": []any{
+				object{"type": "image_url", "image_url": object{"url": "data:image/png;base64,aGVsbG8="}},
+			}},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		images := list(obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["images"])
+		if len(images) != 1 || obj(images[0])["format"] != "png" {
+			t.Fatalf("images=%v", images)
+		}
+	})
+	t.Run("merge drops merged-away images", func(t *testing.T) {
+		// converters_core.py:1220-1249: merge 不并 images,被并消息图片丢弃。
+		root := object{"model": "claude-sonnet-4.6", "max_tokens": 64, "messages": []any{
+			object{"role": "user", "content": []any{object{"type": "text", "text": "one"}, img("aGVsbG8=")}},
+			object{"role": "user", "content": []any{object{"type": "text", "text": "two"}, img("d29ybGQ=")}},
+		}}
+		payload, _ := convert(t, root, "anthropic")
+		images := list(obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])["images"])
+		if len(images) != 1 || obj(obj(images[0])["source"])["bytes"] != "aGVsbG8=" {
+			t.Fatalf("images=%v", images)
+		}
+	})
+}

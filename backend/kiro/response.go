@@ -440,7 +440,7 @@ func (s *responseState) finishTool() error {
 		}
 		norm, invalid = "{}", true
 	}
-	if s.options.forbidTools || !s.options.allowedTools[lookupToolAlias(t.name)] {
+	if s.options.forbidTools || !s.options.allowedTools[t.name] {
 		if s.options.policyMode != "" {
 			return &toolViolation{msg: "response returned disallowed tool '" + t.name + "'"}
 		}
@@ -752,7 +752,7 @@ func (s *responseState) emitBracketTool(call object) error {
 	}
 	// 严格 tool_choice 下括号恢复的工具同样受政策约束(validate_tool_choice_result)。
 	if s.options.policyMode != "" {
-		if s.options.forbidTools || !s.options.allowedTools[lookupToolAlias(name)] {
+		if s.options.forbidTools || !s.options.allowedTools[name] {
 			return &toolViolation{msg: "response returned disallowed tool '" + name + "'"}
 		}
 		if s.options.policyMode == "named" && name != s.options.policyTool {
