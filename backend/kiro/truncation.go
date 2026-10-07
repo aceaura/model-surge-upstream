@@ -75,45 +75,45 @@ func popContentTruncation(content string) bool {
 	return ok
 }
 
-// looksTruncatedJSON is the brace/bracket balance + unclosed-string heuristic
-// from parsers.py:_diagnose_json_truncation.
+// looksTruncatedJSON replicates parsers.py:_diagnose_json_truncation's naive
+// heuristic: brace/bracket counts ignore string context, so `{"a":1}}`
+// (mismatched counts) and braces inside strings both count as truncated.
 func looksTruncatedJSON(s string) bool {
-	depth := 0
-	inString := false
-	escaped := false
-	for _, r := range s {
-		if escaped {
-			escaped = false
+	stripped := strings.TrimSpace(s)
+	if stripped == "" {
+		return false
+	}
+	if strings.HasPrefix(stripped, "{") && !strings.HasSuffix(stripped, "}") {
+		return true
+	}
+	if strings.HasPrefix(stripped, "[") && !strings.HasSuffix(stripped, "]") {
+		return true
+	}
+	if strings.Count(stripped, "{") != strings.Count(stripped, "}") {
+		return true
+	}
+	if strings.Count(stripped, "[") != strings.Count(stripped, "]") {
+		return true
+	}
+	quotes := 0
+	for i := 0; i < len(stripped); i++ {
+		if stripped[i] == '\\' && i+1 < len(stripped) {
+			i++
 			continue
 		}
-		if r == '\\' && inString {
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		switch r {
-		case '{', '[':
-			depth++
-		case '}', ']':
-			depth--
-			if depth < 0 {
-				return false
-			}
+		if stripped[i] == '"' {
+			quotes++
 		}
 	}
-	return depth > 0 || inString
+	return quotes%2 != 0
 }
 
 // parseBracketToolCalls extracts [Called name with args: {...}] calls that some
 // models emit as plain text (parsers.py:parse_bracket_tool_calls).
 func parseBracketToolCalls(text string) []object {
-	if !strings.Contains(strings.ToLower(text), "[called") {
+	// parsers.py:111: 前置守卫 "[Called" 区分大小写(正则 :117 却
+	// IGNORECASE)——纯小写 "[called" 文本直接不恢复。
+	if !strings.Contains(text, "[Called") {
 		return nil
 	}
 	var calls []object
@@ -166,10 +166,13 @@ func parseBracketToolCalls(text string) []object {
 		for i < len(rest) && isSpace(rest[i]) {
 			i++
 		}
-		if i >= len(rest) || rest[i] != '{' {
-			pos = start + i
-			continue
+		// parsers.py:122: find('{') 在 args: 后的全文里搜第一个 '{',
+		// 可跳过任意中间文本(甚至跨过下一个 [Called 段)。
+		brace := strings.IndexByte(rest[i:], '{')
+		if brace < 0 {
+			return calls
 		}
+		i += brace
 		end := matchingBrace(rest, i)
 		if end < 0 {
 			pos = start + i

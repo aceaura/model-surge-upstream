@@ -176,7 +176,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Claude Code 靠它决定何时触发会话压缩。基于原始请求
 		// (messages/tools/system),三部分分别乘 1.15 校正
 		// (tokenizer.py:208-209/251-252/291-292),返回 {"input_tokens": n}。
-		_, options, err := convertRequest(raw, "anthropic", req.Header.Get(HeaderProfileARN))
+		_, options, err := convertRequest(raw, "count_tokens", req.Header.Get(HeaderProfileARN))
 		if err != nil {
 			return nil, apperr.Wrap(apperr.InvalidRequest, "kiro", err)
 		}

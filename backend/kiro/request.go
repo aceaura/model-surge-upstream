@@ -259,6 +259,14 @@ func estimateOriginalSystem(sys any) int {
 }
 
 func convertRequest(raw []byte, protocol, profile string) (object, requestOptions, error) {
+	// models_anthropic.py:404-425: count_tokens 的 pydantic 模型只声明
+	// model/messages/system/tools(extra=allow),生成参数(stream/采样/
+	// thinking/tool_choice/stop_sequences/metadata 等)不参与校验;
+	// 消息与工具的结构校验(AnthropicMessage/AnthropicTool)依然生效。
+	countTokens := protocol == "count_tokens"
+	if countTokens {
+		protocol = "anthropic"
+	}
 	opts := requestOptions{protocol: protocol, allowedTools: map[string]bool{}}
 	fail := func(err error) (object, requestOptions, error) {
 		return nil, opts, fmt.Errorf("kiro: invalid request: %w", err)
@@ -279,33 +287,35 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		return fail(fmt.Errorf("model is required"))
 	}
 	// pydantic bool lax 强迫:true/false/1/0/yes/no/on/off/t/f/y/n(大小写
-	// 不敏感)接受,其余 422。
-	switch v := root["stream"].(type) {
-	case nil:
-	case bool:
-		opts.stream = v
-	case json.Number:
-		switch v.String() {
-		case "1":
-			opts.stream = true
-		case "0":
+	// 不敏感)接受,其余 422。count_tokens 模型无 stream 字段(extra 忽略)。
+	if !countTokens {
+		switch v := root["stream"].(type) {
+		case nil:
+		case bool:
+			opts.stream = v
+		case json.Number:
+			switch v.String() {
+			case "1":
+				opts.stream = true
+			case "0":
+			default:
+				return fail(fmt.Errorf("stream must be boolean"))
+			}
+		case string:
+			switch strings.ToLower(v) {
+			case "true", "1", "yes", "on", "t", "y":
+				opts.stream = true
+			case "false", "0", "no", "off", "f", "n":
+			default:
+				return fail(fmt.Errorf("stream must be boolean"))
+			}
 		default:
 			return fail(fmt.Errorf("stream must be boolean"))
 		}
-	case string:
-		switch strings.ToLower(v) {
-		case "true", "1", "yes", "on", "t", "y":
-			opts.stream = true
-		case "false", "0", "no", "off", "f", "n":
-		default:
-			return fail(fmt.Errorf("stream must be boolean"))
-		}
-	default:
-		return fail(fmt.Errorf("stream must be boolean"))
 	}
 	// models_anthropic.py:393-395: temperature/top_p ∈ [0,1]、top_k ≥ 0,
 	// 越界、非数值与小数 top_k 在参考实现里 422(pydantic Field 校验)。
-	if protocol == "anthropic" {
+	if protocol == "anthropic" && !countTokens {
 		for _, key := range []string{"temperature", "top_p"} {
 			if v := root[key]; v != nil {
 				if f, ok := pydanticFloat(v); !ok || f < 0 || f > 1 {
@@ -426,8 +436,17 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
 		if protocol == "openai" {
-			if typ := str(t["type"]); typ != "" && typ != "function" {
-				continue
+			// models_openai.py:117: type 为 str(缺省 "function"),pydantic
+			// v2 lax 不强迫非字符串与 null,整请求 422;字符串非 function
+			// 的条目由 converters_openai.py:280 跳过。
+			if tv, has := t["type"]; has {
+				s, ok := tv.(string)
+				if !ok {
+					return fail(fmt.Errorf("tool type must be a string"))
+				}
+				if s != "function" {
+					continue
+				}
 			}
 			if fn := obj(t["function"]); fn != nil {
 				t = fn
@@ -509,7 +528,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// required/named are expressed as a [Tool Policy] system directive with
 	// tool filtering (converters_core.py:ToolChoicePolicy).
 	directive := ""
-	if tc := root["tool_choice"]; tc != nil {
+	if tc := root["tool_choice"]; tc != nil && !countTokens {
 		mode, named := str(tc), ""
 		if protocol == "openai" {
 			if m := obj(tc); m != nil {

@@ -471,10 +471,16 @@ func (s *responseState) finishTool() error {
 		}
 	}
 	if s.options.stream && s.options.protocol == "anthropic" {
+		// streaming_anthropic.py:366: 空 toolUseId 回退 toolu_<24hex>
+		// (anthropic 客户端不接受空 id);openai 侧保留空串。
+		id := t.id
+		if id == "" {
+			id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
+		}
 		// streaming_anthropic.py:515-518: partial_json 用 ensure_ascii=False
 		// 的 UTF-8 形式,与存储的 ASCII arguments 分开渲染。
 		partial, _ := normalizeOrderedJSON(norm, false)
-		block := object{"type": "tool_use", "id": t.id, "name": t.name, "input": object{}}
+		block := object{"type": "tool_use", "id": id, "name": t.name, "input": object{}}
 		s.openBlock("tool_use", block)
 		s.send("content_block_delta", object{"type": "content_block_delta", "index": s.blockIndex, "delta": object{"type": "input_json_delta", "partial_json": partial}})
 		s.closeBlock()
@@ -562,7 +568,9 @@ func (s *responseState) accept(e wireEvent) error {
 	d := e.data
 	// Terminal metering events are emitted at the end in the observed protocol;
 	// clean EOF alone is insufficient evidence of a completed generation.
-	if v, ok := d["usage"]; ok {
+	if v, ok := d["usage"]; ok && v != nil {
+		// streaming_core.py:491-496 的任意非 null usage 含显式 null 除外:
+		// parsers.py:354/356 get(...,0) 遇 null 得 None,不算完成信号。
 		// streaming_openai.py:270-279: openai 流式路径把任意真值 usage(credits
 		// 计量或绝对 token 字典)当作完成信号;streaming_anthropic.py:543-547
 		// 的 anthropic 流式路径只认 contextUsagePercentage,usage 帧仅取缓存字段。
@@ -702,10 +710,51 @@ func (s *responseState) finalize() error {
 	}
 	s.toolCount = len(s.finalTools)
 	if !s.options.stream {
+		s.closeBlock()
+		if s.options.protocol == "anthropic" {
+			// streaming_anthropic.py:761-766: 非流式把全部 thinking 合并为
+			// 单块置首、全部 text 合并为单块,thinking 无签名帧时生成
+			// sig_ 占位;块顺序恒 thinking → text → tool_use。
+			var thinking, text strings.Builder
+			sig := ""
+			thinkingSeen, textSeen := false, false
+			merged := make([]any, 0, len(s.blocks)+2)
+			for _, b := range s.blocks {
+				switch str(obj(b)["type"]) {
+				case "thinking":
+					thinkingSeen = true
+					thinking.WriteString(str(obj(b)["thinking"]))
+					if sig == "" {
+						sig = str(obj(b)["signature"])
+					}
+				case "text":
+					textSeen = true
+					text.WriteString(str(obj(b)["text"]))
+				default:
+					merged = append(merged, b)
+				}
+			}
+			s.blocks = make([]any, 0, len(merged)+2)
+			if thinkingSeen {
+				if sig == "" {
+					sig = fakeSignature()
+				}
+				s.blocks = append(s.blocks, object{"type": "thinking", "thinking": thinking.String(), "signature": sig})
+			}
+			if textSeen {
+				s.blocks = append(s.blocks, object{"type": "text", "text": text.String()})
+			}
+			s.blocks = append(s.blocks, merged...)
+		}
 		// streaming_anthropic.py:761-786: 非流式内容块顺序恒为
 		// thinking → text → tool_use。
 		for _, ft := range s.finalTools {
-			s.blocks = append(s.blocks, object{"type": "tool_use", "id": ft.id, "name": ft.name, "input": ft.input})
+			id := ft.id
+			if id == "" && s.options.protocol == "anthropic" {
+				// streaming_anthropic.py:785: 空 id 回退 toolu_<24hex>。
+				id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
+			}
+			s.blocks = append(s.blocks, object{"type": "tool_use", "id": id, "name": ft.name, "input": ft.input})
 		}
 	}
 	if !s.terminal {

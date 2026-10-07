@@ -1039,3 +1039,107 @@ func TestRound15Fixes(t *testing.T) {
 		}
 	})
 }
+func TestRound16Fixes(t *testing.T) {
+	t.Run("empty tool id gets toolu fallback", func(t *testing.T) {
+		// streaming_anthropic.py:366/785: 空 toolUseId 回退 toolu_<24hex>;
+		// 键缺省仍由 parsers.py:396 生成 call_+8hex。
+		wire := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": "", "input": object{}, "stop": true}), endFrame())
+		for _, stream := range []bool{false, true} {
+			server := stub(t, wire, nil)
+			_, data, err := do(t, server.URL, "anthropic", stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), `"id":"toolu_`) {
+				t.Fatalf("stream=%v: %s", stream, data)
+			}
+		}
+	})
+	t.Run("truncation heuristic naive counts", func(t *testing.T) {
+		// parsers.py:522-576: 计数不看字符串上下文,端不匹配/计数不平/
+		// 引号奇数均判截断。
+		cases := map[string]bool{
+			`{"a":1}}`:      true,
+			`{"a":"}"}`:     true,
+			`{"a":1}`:       false,
+			`{"a":`:         true,
+			`[1,2`:          true,
+			`{"a":"b\"}`:    true,
+			`{"a":"b\""}`:   false,
+			``:              false,
+			`{"a":"hello"}`: false,
+		}
+		for in, want := range cases {
+			if got := looksTruncatedJSON(in); got != want {
+				t.Fatalf("looksTruncatedJSON(%q)=%v want %v", in, got, want)
+			}
+		}
+	})
+	t.Run("bracket parser guard and brace search", func(t *testing.T) {
+		// parsers.py:111 守卫区分大小写;:117 正则 IGNORECASE;:122
+		// find('{') 跳过 args: 后任意文本。
+		if n := len(parseBracketToolCalls(`[called foo with args: {}]`)); n != 0 {
+			t.Fatalf("lowercase-only guard bypass: %d", n)
+		}
+		if n := len(parseBracketToolCalls(`[Called foo with args: junk {}]`)); n != 1 {
+			t.Fatalf("find('{') skip: %d", n)
+		}
+		calls := parseBracketToolCalls(`[Called a with args: {}] then [called b with args: {}]`)
+		if len(calls) != 2 {
+			t.Fatalf("case-insensitive matching: %d", len(calls))
+		}
+	})
+	t.Run("openai tool type non-string rejected", func(t *testing.T) {
+		// models_openai.py:117: type 为 str,pydantic lax 拒数字与 null。
+		for _, tv := range []any{json.Number("5"), nil} {
+			root := object{"model": "claude-sonnet-4.6", "tools": []any{
+				object{"type": tv, "function": object{"name": "x"}},
+			}, "messages": []any{object{"role": "user", "content": "hi"}}}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "openai", ""); err == nil {
+				t.Fatalf("type=%v accepted", tv)
+			}
+		}
+	})
+	t.Run("count_tokens skips generation validation", func(t *testing.T) {
+		// models_anthropic.py:404-425: count_tokens 模型只有
+		// model/messages/system/tools,生成参数 extra 忽略。
+		root := object{"model": "claude-sonnet-4.6", "temperature": json.Number("5"), "stream": "maybe",
+			"thinking": "x", "tool_choice": object{"type": "bogus"},
+			"stop_sequences": json.Number("3"), "metadata": json.Number("4"),
+			"messages": []any{object{"role": "user", "content": "hi"}}}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "count_tokens", ""); err != nil {
+			t.Fatalf("count_tokens rejected: %v", err)
+		}
+		bad := object{"model": "claude-sonnet-4.6", "messages": "nope"}
+		if _, _, err := convertRequest([]byte(jsonText(bad)), "count_tokens", ""); err == nil {
+			t.Fatal("count_tokens accepted malformed messages")
+		}
+	})
+	t.Run("nonstream thinking merged with sig", func(t *testing.T) {
+		// streaming_anthropic.py:761-766: 非流式 thinking 合并单块置首,
+		// 无签名帧生成 sig_ 占位;text 同样合并单块。
+		wire := joinedFrames(
+			frame("reasoningContentEvent", object{"text": "a"}),
+			frame("assistantResponseEvent", object{"content": "x"}),
+			frame("reasoningContentEvent", object{"text": "b"}),
+			frame("assistantResponseEvent", object{"content": "y"}),
+			endFrame())
+		server := stub(t, wire, nil)
+		_, data, err := do(t, server.URL, "anthropic", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := parseResult(t, data)
+		content := list(m["content"])
+		if len(content) != 2 {
+			t.Fatalf("blocks=%v", content)
+		}
+		tb := obj(content[0])
+		if str(tb["type"]) != "thinking" || str(tb["thinking"]) != "ab" || !strings.HasPrefix(str(tb["signature"]), "sig_") {
+			t.Fatalf("thinking block=%v", tb)
+		}
+		if str(obj(content[1])["text"]) != "xy" {
+			t.Fatalf("text block=%v", content[1])
+		}
+	})
+}
