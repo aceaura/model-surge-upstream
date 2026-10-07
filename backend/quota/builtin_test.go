@@ -484,7 +484,7 @@ func TestBuiltinBailianCLIConfigRotation(t *testing.T) {
 	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
 	a.Credential.ConsoleAccessToken = "ct-stale"
 	q := builtinQuota(srv.URL, a)
-	q.ttl = 0
+	q.ttl = -time.Second
 	for _, token := range []string{"ct-first", "ct-renewed"} {
 		if err := os.WriteFile(path, []byte(`{"access_token":" `+token+` "}`), 0600); err != nil {
 			t.Fatal(err)
