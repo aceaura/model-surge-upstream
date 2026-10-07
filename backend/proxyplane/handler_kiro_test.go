@@ -53,6 +53,108 @@ type round29RoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f round29RoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestRound30KiroRequestBoundaryHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		protocol   string
+		patch      map[string]any
+		valid      bool
+		resultText string
+	}{
+		{"union strict", provider.ProtocolAnthropic, map[string]any{"messages": json.RawMessage(`[{"role":"user","content":[{"tool_use_id":"t","is_error":"true","id":"s","name":"f"}]}]`)}, true, ""},
+		{"union native", provider.ProtocolAnthropic, map[string]any{"messages": json.RawMessage(`[{"role":"user","content":[{"tool_use_id":"t","is_error":true,"id":"s","name":"f"}]}]`)}, true, "(empty result)"},
+		{"modeled text", provider.ProtocolAnthropic, map[string]any{"messages": json.RawMessage(`[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"tool_reference","tool_name":"f","text":"nested preserved"}]}]}]`)}, true, "nested preserved"},
+		{"raw text", provider.ProtocolChatCompletions, map[string]any{"messages": json.RawMessage(`[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"tool_reference","tool_name":"f","text":"nested hidden"}]}]}]`)}, true, "(empty result)"},
+		{"hex anthropic", provider.ProtocolAnthropic, map[string]any{"temperature": "0x1p-1"}, false, ""},
+		{"hex openai", provider.ProtocolChatCompletions, map[string]any{"temperature": "0x1p-1"}, false, ""},
+		{"underscores anthropic", provider.ProtocolAnthropic, map[string]any{"temperature": "1_.0"}, true, ""},
+		{"underscores openai", provider.ProtocolChatCompletions, map[string]any{"temperature": "1_.0"}, true, ""},
+		{"float min anthropic", provider.ProtocolAnthropic, map[string]any{"max_tokens": json.Number("-9223372036854775808.0")}, false, ""},
+		{"float min openai", provider.ProtocolChatCompletions, map[string]any{"max_tokens": json.Number("-9223372036854775808.0")}, false, ""},
+		{"integer min", provider.ProtocolAnthropic, map[string]any{"max_tokens": json.Number("-9223372036854775808")}, true, ""},
+	} {
+		for _, source := range []string{"client", "defaults", "overrides"} {
+			for _, stream := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/stream=%v", tc.name, source, stream), func(t *testing.T) {
+					calls := 0
+					up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						var payload struct {
+							ConversationState struct {
+								CurrentMessage struct{ UserInputMessage struct{ Content string } }
+							}
+						}
+						if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+							t.Error(err)
+						}
+						content := payload.ConversationState.CurrentMessage.UserInputMessage.Content
+						if tc.resultText == "" && strings.Contains(content, "[Tool Result (t)]") || tc.resultText != "" && !strings.HasSuffix(content, "[Tool Result (t)]\n"+tc.resultText) {
+							t.Errorf("native content=%q want result=%q", content, tc.resultText)
+						}
+						if strings.Contains(content, "nested hidden") {
+							t.Error("raw tool reference text escaped")
+						}
+						w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+						_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"boundary reply"}`))
+						_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":1}`))
+					}))
+					defer up.Close()
+					target := resolve.ResolvedTarget{ModelID: "kiro-r30", ProviderID: kiro.ProviderID, Protocol: tc.protocol, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+					body := map[string]any{"model": target.ModelID, "stream": stream}
+					if source != "defaults" {
+						body["messages"] = []any{map[string]any{"role": "user", "content": "ping"}}
+						body["max_tokens"] = 1
+					}
+					part, _ := json.Marshal(tc.patch)
+					switch source {
+					case "client":
+						for key, value := range tc.patch {
+							body[key] = value
+						}
+					case "defaults":
+						defaults := map[string]any{"messages": []any{map[string]any{"role": "user", "content": "ping"}}, "max_tokens": 1}
+						for key, value := range tc.patch {
+							defaults[key] = value
+						}
+						target.Defaults, _ = json.Marshal(defaults)
+					case "overrides":
+						target.Overrides = part
+					}
+					h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+					base := http.DefaultTransport.(*http.Transport).Clone()
+					defer base.CloseIdleConnections()
+					h.client.Transport = kiro.NewTransport(round29RoundTripFunc(base.RoundTrip))
+					proxy := httptest.NewServer(h)
+					defer proxy.Close()
+					path := "/v1/messages"
+					if tc.protocol == provider.ProtocolChatCompletions {
+						path = "/v1/chat/completions"
+					}
+					data, _ := json.Marshal(body)
+					r, err := http.NewRequest("POST", proxy.URL+path, strings.NewReader(string(data)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					r.Header.Set("Authorization", "Bearer "+testKey)
+					resp, err := proxy.Client().Do(r)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err = io.ReadAll(resp.Body)
+					resp.Body.Close()
+					wantStatus, wantCalls := 400, 0
+					if tc.valid {
+						wantStatus, wantCalls = 200, 1
+					}
+					if err != nil || resp.StatusCode != wantStatus || calls != wantCalls || tc.valid && !strings.Contains(string(data), "boundary reply") {
+						t.Fatalf("status=%d calls=%d err=%v body=%s", resp.StatusCode, calls, err, data)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRound29KiroUnicodeOutputHTTP(t *testing.T) {
 	const text, thought, toolID = "A中😀Bé界", "想法😀é", "调用_中😀"
 	wantArgs := map[string]any{"city": "中😀é", "escaped": "\\ud800", "pair": "😀"}
@@ -454,6 +556,52 @@ func TestKiroNativeProxy(t *testing.T) {
 					t.Fatal("nonstream response is not JSON")
 				}
 			})
+		}
+	}
+}
+
+func TestRound30KiroManagementBoundary(t *testing.T) {
+	for _, protocol := range []string{provider.ProtocolAnthropic, provider.ProtocolChatCompletions} {
+		for _, source := range []string{"defaults", "overrides"} {
+			for _, value := range []string{"0x1p-1", "1_.0"} {
+				t.Run(protocol+"/"+source+"/"+value, func(t *testing.T) {
+					calls := 0
+					up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						if r.URL.Path != "/generateAssistantResponse" {
+							t.Errorf("unexpected path=%s", r.URL.Path)
+						}
+						w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+						_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"management reply"}`))
+						_, _ = w.Write(kiroTestFrame("messageStopEvent", `{"stopReason":"end_turn"}`))
+					}))
+					defer up.Close()
+					target := resolve.ResolvedTarget{ModelID: "kiro-r30-management", ProviderID: kiro.ProviderID, Protocol: protocol, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+					params, _ := json.Marshal(map[string]any{"temperature": value})
+					if source == "defaults" {
+						target.Defaults = params
+					} else {
+						target.Overrides = params
+					}
+					reply, _, status, err := chat.Complete(context.Background(), target, "session", "", []chat.Message{{Role: "user", Content: "hello"}})
+					wantCalls := 0
+					if value == "1_.0" {
+						wantCalls = 1
+						if err != nil || status != 200 || reply != "management reply" {
+							t.Errorf("chat reply=%q status=%d err=%v", reply, status, err)
+						}
+					} else if err == nil || status != 0 {
+						t.Errorf("invalid chat status=%d err=%v", status, err)
+					}
+					if calls != wantCalls {
+						t.Errorf("chat calls=%d want=%d", calls, wantCalls)
+					}
+					probe := modelcheck.Check(context.Background(), target)
+					if !probe.OK || calls != wantCalls+1 {
+						t.Errorf("probe=%+v calls=%d want=%d", probe, calls, wantCalls+1)
+					}
+				})
+			}
 		}
 	}
 }

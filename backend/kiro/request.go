@@ -1303,9 +1303,20 @@ func anthropicImageSource(src object) (object, int, bool) {
 	return nil, 0, false
 }
 
+type anthropicBlockMatch struct {
+	block  object
+	score  int
+	strict bool
+	kind   string
+}
+
 func anthropicBlock(b object, nested bool) (object, int, bool) {
-	var best object
-	bestScore := -1
+	match := matchAnthropicBlock(b, nested)
+	return match.block, match.score, match.block != nil
+}
+
+func matchAnthropicBlock(b object, nested bool) anthropicBlockMatch {
+	best := anthropicBlockMatch{score: -1}
 	for _, kind := range []string{"text", "thinking", "image", "tool_use", "tool_result", "tool_reference", "server_tool_use", "web_search_tool_result", "unknown"} {
 		if nested && kind != "text" && kind != "image" && kind != "tool_reference" {
 			continue
@@ -1340,7 +1351,7 @@ func anthropicBlock(b object, nested bool) (object, int, bool) {
 			extra = true
 		}
 		out, known := object{"type": kind}, map[string]bool{"type": true}
-		score, valid := 0, true
+		score, valid, strict := 0, true, true
 		if typ, has := b["type"]; has {
 			out["type"] = typ
 			score += 2
@@ -1394,15 +1405,18 @@ func anthropicBlock(b object, nested bool) (object, int, bool) {
 				}
 				values := make([]any, 0, len(items))
 				for _, item := range items {
-					block, blockScore, blockOK := anthropicBlock(obj(item), true)
-					ok = ok && blockOK
-					score += blockScore
-					values = append(values, block)
+					match := matchAnthropicBlock(obj(item), true)
+					ok = ok && match.block != nil
+					score += match.score
+					strict = strict && match.strict
+					values = append(values, match.block)
 				}
 				valid = valid && ok
 				value = values
 			case "is_error":
 				if value != nil {
+					_, native := value.(bool)
+					strict = strict && native
 					var ok bool
 					value, ok = pydanticBool(value)
 					valid = valid && ok
@@ -1445,11 +1459,11 @@ func anthropicBlock(b object, nested bool) (object, int, bool) {
 				out["content"] = nil
 			}
 		}
-		if score > bestScore {
-			best, bestScore = out, score
+		if score > best.score || score == best.score && strict && !best.strict {
+			best = anthropicBlockMatch{block: out, score: score, strict: strict, kind: kind}
 		}
 	}
-	return best, bestScore, best != nil
+	return best
 }
 
 // validateAnthropicContent uses the model union because counting must not invoke generation converters.
@@ -1505,7 +1519,7 @@ func parseMessage(m object, protocol string) (message, error) {
 		result.role = "user"
 		// converters_openai.py:64-85: tool 消息只存在于 openai 协议,内容
 		// 走 extract_text_content 宽松提取。
-		text, images, err := resultContent(m["content"], "openai")
+		text, images, err := resultContent(m["content"], "openai", false)
 		if err != nil {
 			return result, err
 		}
@@ -1548,12 +1562,14 @@ func parseMessage(m object, protocol string) (message, error) {
 				}
 				continue
 			}
+			modeledResult := false
 			if protocol == "anthropic" {
-				var ok bool
-				b, _, ok = anthropicBlock(b, false)
-				if !ok {
+				match := matchAnthropicBlock(b, false)
+				if match.block == nil {
 					return result, fmt.Errorf("content block does not match a supported type")
 				}
+				b = match.block
+				modeledResult = match.kind == "tool_result"
 				blocks[i] = b
 			}
 			switch str(b["type"]) {
@@ -1624,7 +1640,7 @@ func parseMessage(m object, protocol string) (message, error) {
 				if protocol == "openai" && id == nil {
 					id = ""
 				}
-				text, images, err := resultContent(b["content"], protocol)
+				text, images, err := resultContent(b["content"], protocol, modeledResult)
 				if err != nil {
 					return result, err
 				}
@@ -1673,14 +1689,8 @@ func parseMessage(m object, protocol string) (message, error) {
 	return result, nil
 }
 
-// resultContent 提取 tool_result 内容。pydantic smart union: anthropic 侧
-// content 校验失败(标量/字典/含裸字符串或联合外块的列表)时整块落
-// UnknownContentBlock 被接受,转换层按 dict 语义走 extract_text_content
-// 宽容路径(converters_anthropic.py:151-156 → converters_core.py:260-282);
-// openai 侧本就是同一函数(converters_openai.py:79-82)。两协议唯一差异:
-// 非标量非列表内容 anthropic 先验真值(假值收空串,str(v) if v else ""),
-// openai 恒 str()(extract_text_content 末尾 return str(content))。
-func resultContent(v any, protocol string) (string, []any, error) {
+// Modeled tool results retain nested attributes; raw fallback content uses dictionary extraction.
+func resultContent(v any, protocol string, modeled bool) (string, []any, error) {
 	if v == nil {
 		return "", nil, nil
 	}
@@ -1724,8 +1734,10 @@ func resultContent(v any, protocol string) (string, []any, error) {
 				images = append(images, image)
 			}
 		case "tool_reference":
-			// extract_text_content 同样跳过(converters_core.py:269-270)。
-			continue
+			// Modeled blocks expose extra text as an attribute; raw dictionaries skip it.
+			if modeled {
+				text.WriteString(str(b["text"]))
+			}
 		default:
 			// extract_text_content: text 块取 item.get("text",""),未知
 			// 块带 text 键收割,否则跳过——两者同为 str(b["text"])。
@@ -1767,7 +1779,7 @@ func pydanticInteger(v any) (*big.Int, bool) {
 		s = x.String()
 		if strings.ContainsAny(s, ".eE") {
 			f, err := x.Float64()
-			if err != nil || f < -9223372036854775808.0 || f >= 9223372036854775808.0 || f != float64(int64(f)) {
+			if err != nil || f <= -9223372036854775808.0 || f >= 9223372036854775808.0 || f != float64(int64(f)) {
 				return nil, false
 			}
 			return big.NewInt(int64(f)), true
@@ -1841,7 +1853,17 @@ func pydanticFloat(v any) (float64, bool) {
 		f, err := x.Float64()
 		return f, err == nil
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		if strings.ContainsAny(x, "xX") {
+			return 0, false
+		}
+		s := strings.TrimSpace(x)
+		if strings.Contains(x, "_") {
+			if x != s || strings.HasPrefix(x, "_") || strings.HasSuffix(x, "_") || strings.Contains(x, "__") {
+				return 0, false
+			}
+			s = strings.ReplaceAll(x, "_", "")
+		}
+		f, err := strconv.ParseFloat(s, 64)
 		return f, err == nil
 	case bool:
 		if x {

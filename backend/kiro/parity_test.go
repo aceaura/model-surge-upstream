@@ -29,6 +29,94 @@ func convert(t *testing.T, root object, protocol string) (object, requestOptions
 	return payload, opts
 }
 
+func TestRound30UnionExactness(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		isError any
+		want    string
+	}{
+		{"coerced boolean", "true", "server_tool_use"},
+		{"numeric boolean", json.Number("1"), "server_tool_use"},
+		{"native boolean", true, "tool_result"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			block := object{"tool_use_id": "t", "is_error": tc.isError, "id": "s", "name": "f"}
+			got, _, ok := anthropicBlock(block, false)
+			if !ok || got["type"] != tc.want {
+				t.Errorf("block=%v got=%v want=%s", block, got, tc.want)
+			}
+			parsed, err := parseMessage(object{"role": "user", "content": []any{block}}, "anthropic")
+			wantResults := 0
+			if tc.want == "tool_result" {
+				wantResults = 1
+			}
+			if err != nil || len(parsed.results) != wantResults {
+				t.Errorf("parsed=%+v err=%v want results=%d", parsed, err, wantResults)
+			}
+		})
+	}
+}
+
+func TestRound30NestedModelText(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		protocol string
+		content  []any
+		want     string
+	}{
+		{"anthropic modeled", "anthropic", []any{object{"type": "tool_reference", "tool_name": "f", "text": "kept"}}, "kept"},
+		{"anthropic missing type", "anthropic", []any{object{"tool_name": "f", "text": "kept"}}, "kept"},
+		{"anthropic raw fallback", "anthropic", []any{object{"type": "tool_reference", "tool_name": "f", "text": "hidden"}, object{"type": "unknown"}}, ""},
+		{"openai raw", "openai", []any{object{"type": "tool_reference", "tool_name": "f", "text": "hidden"}}, ""},
+		{"anthropic without extra", "anthropic", []any{object{"type": "tool_reference", "tool_name": "f"}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "t", "content": tc.content}}}
+			parsed, err := parseMessage(root, tc.protocol)
+			if err != nil || len(parsed.results) != 1 {
+				t.Fatalf("parsed=%+v err=%v", parsed, err)
+			}
+			got := str(obj(list(obj(parsed.results[0])["content"])[0])["text"])
+			want := tc.want
+			if want == "" {
+				want = "(empty result)"
+			}
+			if got != want {
+				t.Errorf("result=%q want=%q", got, want)
+			}
+		})
+	}
+}
+
+func TestRound30NumericBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  float64
+		valid bool
+	}{
+		{"0x1p-1", 0, false}, {"-0X1P-1", 0, false},
+		{"1_.0", 1, true}, {"1__0", 0, false}, {"_1_", 0, false},
+		{" 1_2.5e-1 ", 0, false}, {"1_2.5e-1", 1.25, true}, {".5", .5, true}, {"1.", 1, true},
+		{"1e", 0, false}, {"--1", 0, false}, {"one", 0, false},
+	} {
+		got, valid := pydanticFloat(tc.value)
+		if valid != tc.valid || valid && got != tc.want {
+			t.Errorf("float=%q got=%v valid=%v want=%v/%v", tc.value, got, valid, tc.want, tc.valid)
+		}
+	}
+	for _, tc := range []struct {
+		value json.Number
+		valid bool
+	}{
+		{"-9223372036854775808.0", false}, {"-9223372036854775808", true},
+		{"-9223372036854774784.0", true}, {"9223372036854775808.0", false},
+	} {
+		if _, valid := pydanticInteger(tc.value); valid != tc.valid {
+			t.Errorf("integer=%s valid=%v want=%v", tc.value, valid, tc.valid)
+		}
+	}
+}
+
 func TestRound28ToolChoiceAliasIsolation(t *testing.T) {
 	for _, protocol := range []string{"anthropic", "openai"} {
 		for _, mode := range []string{"named", "none", "auto", "required"} {
@@ -101,7 +189,7 @@ func TestRound28LargeIntegerToolResult(t *testing.T) {
 			if truthy(n) != (tc.want != "") {
 				t.Errorf("truthy(%s)=%v want=%v", tc.raw, truthy(n), tc.want != "")
 			}
-			text, _, err := resultContent(n, "anthropic")
+			text, _, err := resultContent(n, "anthropic", false)
 			if err != nil || text != tc.want {
 				t.Errorf("resultContent=%q want=%q err=%v", text, tc.want, err)
 			}
@@ -1940,7 +2028,7 @@ func TestRound26RequestNumericString(t *testing.T) {
 				}
 			}
 			for _, protocol := range []string{"openai", "anthropic"} {
-				text, _, err := resultContent(n, protocol)
+				text, _, err := resultContent(n, protocol, false)
 				want := tc.want
 				if protocol == "anthropic" && (tc.raw == "-0" || tc.raw == "-0.0") {
 					want = ""
@@ -2010,7 +2098,7 @@ func TestRound27Request(t *testing.T) {
 					if protocol == "anthropic" && tc.name == "empty dict" {
 						want = ""
 					}
-					text, _, err := resultContent(tc.value, protocol)
+					text, _, err := resultContent(tc.value, protocol, false)
 					if err != nil || text != want {
 						t.Errorf("result protocol=%s text=%q want=%q err=%v", protocol, text, want, err)
 					}
