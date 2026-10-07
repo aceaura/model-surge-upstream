@@ -96,7 +96,7 @@ func TestKiroModelsForbiddenRefresh(t *testing.T) {
 				}
 			}))
 			got, err := l.List(context.Background(), a.Name)
-			if err != nil || invalidations != 1 {
+			if invalidations != 1 {
 				t.Fatalf("invalidations=%d err=%v", invalidations, err)
 			}
 			wantCalls := 2
@@ -109,10 +109,13 @@ func TestKiroModelsForbiddenRefresh(t *testing.T) {
 				t.Fatalf("calls=%d want=%d", calls, wantCalls)
 			}
 			if mode == "persistent" || mode == "refresh failure" {
-				if len(got.Models) != len(kiroFallbackModels) {
-					t.Fatalf("fallback=%v", got.Models)
+				if err == nil {
+					t.Fatalf("expected error, got %+v", got)
 				}
 			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
 				want := []Entry{{ID: "auto-kiro"}, {ID: "fresh"}}
 				if mode == "later page" {
 					want = []Entry{{ID: "auto-kiro"}, {ID: "first"}, {ID: "fresh"}}
@@ -149,9 +152,8 @@ func TestRound29KiroModelsWrappedSecurityErrors(t *testing.T) {
 				}
 				return nil, wrapped
 			})})
-			got, err := l.List(context.Background(), a.Name)
-			if err != nil || calls != 1 || !got.Queryable || len(got.Models) != len(kiroFallbackModels) {
-				t.Fatalf("calls=%d models=%d queryable=%v err=%v", calls, len(got.Models), got.Queryable, err)
+			if _, err := l.List(context.Background(), a.Name); err == nil || calls != 1 {
+				t.Fatalf("calls=%d err=%v", calls, err)
 			}
 		})
 	}
@@ -264,7 +266,8 @@ func TestKiroModelsControlEndpoint(t *testing.T) {
 }
 
 func TestKiroModelsFailures(t *testing.T) {
-	// account_manager.py:534-538: 拉取失败一律回退静态已知模型表。
+	// 拉取失败/响应畸形一律报错;有缓存时回退缓存(见
+	// TestKiroStaleModelsOnRefreshFailure),不做静态模型表保底。
 	for _, tc := range []struct {
 		name, body string
 		status     int
@@ -284,15 +287,8 @@ func TestKiroModelsFailures(t *testing.T) {
 			}))
 			defer srv.Close()
 			l := New(fakeAccounts{"kiro-1": kiroAccount(srv.URL)}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
-			got, err := l.List(context.Background(), "kiro-1")
-			if err != nil {
-				t.Fatalf("expected fallback, error = %v", err)
-			}
-			if len(got.Models) != len(kiroFallbackModels) || got.Models[0].ID != "auto-kiro" {
-				t.Fatalf("fallback = %v", got.Models)
-			}
-			if _, cached := l.lookup("kiro-1"); !cached {
-				t.Error("fallback report should be cached like a normal listing")
+			if _, err := l.List(context.Background(), "kiro-1"); !apperr.Is(err, apperr.UpstreamUnavailable) {
+				t.Fatalf("expected UpstreamUnavailable, err = %v", err)
 			}
 		})
 	}
@@ -344,9 +340,8 @@ func TestKiroModelsTokenWiring(t *testing.T) {
 		t.Fatalf("refresh failure: %v", err)
 	}
 	l.WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
-	got, err := l.List(context.Background(), "kiro-1")
-	if err != nil || len(got.Models) != len(kiroFallbackModels) {
-		t.Fatalf("network failure should fall back: %v", err)
+	if _, err := l.List(context.Background(), "kiro-1"); !apperr.Is(err, apperr.UpstreamUnavailable) {
+		t.Fatalf("network failure should error: %v", err)
 	}
 }
 
@@ -441,9 +436,8 @@ func TestKiroStaleModelsOnRefreshFailure(t *testing.T) {
 				t.Fatalf("first=%+v got=%+v calls=%d err=%v", first, got, calls, err)
 			}
 			l.Forget(a.Name)
-			got, err = l.List(context.Background(), a.Name)
-			if err != nil || len(got.Models) != len(kiroFallbackModels) || calls != 3 {
-				t.Fatalf("forgotten report=%+v calls=%d err=%v", got, calls, err)
+			if _, err = l.List(context.Background(), a.Name); err == nil || calls != 3 {
+				t.Fatalf("forgotten cache should surface the error: calls=%d err=%v", calls, err)
 			}
 		})
 	}

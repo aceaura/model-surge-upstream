@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,33 +28,18 @@ const kiroMaxPages = 100
 // 429/5xx 重试,退避 1s/2s(BASE_RETRY_DELAY 指数翻倍)。
 const kiroMaxAttempts = 3
 
-// kiroFallbackModels 对齐 config.py FALLBACK_MODELS:列表拉取失败时回退的
-// 静态已知模型表,保证基础功能可用(部分模型可能不在当前套餐内)。
-// config.py:276 FALLBACK_MODELS 含 auto,经 model_resolver 隐藏 auto、
-// 补别名 auto-kiro——回退列表与动态路径(下方 190 行改名)一样露出
-// auto-kiro。
-var kiroFallbackModels = []string{
-	"auto-kiro",
-	"claude-sonnet-4", "claude-sonnet-4.5", "claude-sonnet-4.6",
-	"claude-haiku-4.5",
-	"claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.7", "claude-opus-4.8", "claude-opus-5",
-	"claude-sonnet-5",
-	"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-	"deepseek-3.2", "glm-5", "minimax-m2.1", "minimax-m2.5", "qwen3-coder-next",
-}
-
-func (l *Lister) kiroFallbackReport(account string) Report {
+// kiroStaleOrErr 拉取失败时优先回退进程内缓存(过期也用:缓存是真实上游
+// 数据,只是旧),无缓存才报错。不做静态模型表保底——上游事实查不到就是
+// 查不到,编造的清单会把猜测当事实报给运维者;与其他 provider 的通用路径
+// (upmodels.go fetch)失败即报错同一语义。
+func (l *Lister) kiroStaleOrErr(account string, err error) (Report, error) {
 	l.mu.RLock()
 	cached, ok := l.cached[account]
 	l.mu.RUnlock()
 	if ok {
-		return cached.report
+		return cached.report, nil
 	}
-	out := make([]Entry, 0, len(kiroFallbackModels))
-	for _, id := range kiroFallbackModels {
-		out = append(out, Entry{ID: id})
-	}
-	return Report{Account: account, Queryable: true, Models: out, At: time.Now().UTC()}
+	return Report{}, err
 }
 
 // kiroRetryable 判定列表请求是否值得重试:网络错误、429、5xx。
@@ -175,7 +161,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 			resp, err := l.client.Do(req)
 			if err != nil {
 				if !kiroRetryable(err, 0) || attempt == kiroMaxAttempts-1 {
-					return l.kiroFallbackReport(acc.Name), nil
+					return l.kiroStaleOrErr(acc.Name, apperr.Wrap(apperr.UpstreamUnavailable, "Kiro models request failed", err))
 				}
 				continue
 			}
@@ -183,7 +169,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 			resp.Body.Close()
 			if readErr != nil {
 				if attempt == kiroMaxAttempts-1 {
-					return l.kiroFallbackReport(acc.Name), nil
+					return l.kiroStaleOrErr(acc.Name, apperr.Wrap(apperr.UpstreamUnavailable, "read Kiro models response", readErr))
 				}
 				continue
 			}
@@ -192,7 +178,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 					refreshed = true
 					l.invalidator.Invalidate(acc.Name, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
 					if err := loadHeaders(); err != nil {
-						return l.kiroFallbackReport(acc.Name), nil
+						return l.kiroStaleOrErr(acc.Name, err)
 					}
 					endpoint.RawQuery = query.Encode()
 					continue
@@ -200,35 +186,35 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 				if kiroRetryable(nil, resp.StatusCode) && attempt < kiroMaxAttempts-1 {
 					continue
 				}
-				// account_manager.py:534-538: 拉取失败回退静态已知模型表。
-				return l.kiroFallbackReport(acc.Name), nil
+				return l.kiroStaleOrErr(acc.Name, apperr.New(apperr.UpstreamUnavailable,
+					fmt.Sprintf("Kiro model listing returned %d", resp.StatusCode)))
 			}
 			if len(data) > bodyLimit {
-				return l.kiroFallbackReport(acc.Name), nil
+				return l.kiroStaleOrErr(acc.Name, apperr.New(apperr.UpstreamUnavailable, "Kiro models response too large"))
 			}
 			body = data
 			break
 		}
 		if body == nil {
-			return l.kiroFallbackReport(acc.Name), nil
+			return l.kiroStaleOrErr(acc.Name, apperr.New(apperr.UpstreamUnavailable, "Kiro models request exhausted retries"))
 		}
 		var payload struct {
 			Models    json.RawMessage `json:"models"`
 			NextToken string          `json:"nextToken"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil {
-			return l.kiroFallbackReport(acc.Name), nil
+			return l.kiroStaleOrErr(acc.Name, apperr.Wrap(apperr.UpstreamUnavailable, "parse Kiro models response", err))
 		}
 		var models []map[string]any
 		if len(payload.Models) == 0 || string(payload.Models) == "null" {
-			return l.kiroFallbackReport(acc.Name), nil
+			return l.kiroStaleOrErr(acc.Name, apperr.New(apperr.UpstreamUnavailable, "Kiro models response has no model list"))
 		}
 		if err := json.Unmarshal(payload.Models, &models); err != nil {
-			return l.kiroFallbackReport(acc.Name), nil
+			return l.kiroStaleOrErr(acc.Name, apperr.Wrap(apperr.UpstreamUnavailable, "parse Kiro models list", err))
 		}
 		for _, model := range models {
 			if _, has := model["modelId"]; !has {
-				return l.kiroFallbackReport(acc.Name), nil
+				return l.kiroStaleOrErr(acc.Name, apperr.New(apperr.UpstreamUnavailable, "Kiro models entry missing modelId"))
 			}
 		}
 		gotValid = true
@@ -257,7 +243,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if !gotValid {
-		return l.kiroFallbackReport(acc.Name), nil
+		return l.kiroStaleOrErr(acc.Name, apperr.New(apperr.UpstreamUnavailable, "Kiro models response has no model list"))
 	}
 	return Report{Account: acc.Name, Queryable: true, Models: out, At: time.Now().UTC()}, nil
 }
