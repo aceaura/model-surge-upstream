@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -343,6 +345,7 @@ func bailianStub(t *testing.T, usagePayload string) *httptest.Server {
 }
 
 func TestBuiltinBailian(t *testing.T) {
+	t.Setenv("MSU_BAILIAN_CLI_CONFIG", "")
 	srv := bailianStub(t, `{"per5HourPercentage":0.5,"per5HourResetTime":1893456000000,`+
 		`"per1MonthPercentage":0.02}`)
 	defer srv.Close()
@@ -377,6 +380,7 @@ func TestBuiltinBailian(t *testing.T) {
 }
 
 func TestBuiltinBailianNotLogined(t *testing.T) {
+	t.Setenv("MSU_BAILIAN_CLI_CONFIG", "")
 	srv := bailianStub(t, `{"code":"NotLogined","message":"x"}`)
 	defer srv.Close()
 
@@ -384,17 +388,109 @@ func TestBuiltinBailianNotLogined(t *testing.T) {
 	a.Credential.ConsoleAccessToken = "ct-console"
 	q := builtinQuota(srv.URL, a)
 	_, err := q.Query(context.Background(), "bl-1")
-	if err == nil || !strings.Contains(err.Error(), "登录已失效") {
-		t.Errorf("err = %v, want the re-login hint", err)
+	if err == nil || !strings.Contains(err.Error(), bailianLoginHint) {
+		t.Fatalf("err = %v, want the token renewal hint", err)
+	}
+	if strings.Contains(err.Error(), "重新导入") {
+		t.Errorf("err = %v, CLI token renewal does not require importing", err)
 	}
 }
 
 func TestBuiltinBailianMissingConsoleToken(t *testing.T) {
+	t.Setenv("MSU_BAILIAN_CLI_CONFIG", "")
 	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
 	q := New(fakeAccounts{"bl-1": a}, time.Minute)
 	_, err := q.Query(context.Background(), "bl-1")
-	if err == nil || !strings.Contains(err.Error(), "console_access_token") {
-		t.Errorf("err = %v, referencing {{consoleAccessToken}} without one must fail fast", err)
+	if err == nil || !strings.Contains(err.Error(), "安装 bl 并验证") ||
+		!strings.Contains(err.Error(), "MSU_BAILIAN_CLI_CONFIG") {
+		t.Fatalf("err = %v, want CLI setup and backend config guidance", err)
+	}
+	if strings.Contains(err.Error(), "console_access_token") {
+		t.Errorf("err = %v, no manual console token field remains in the form", err)
+	}
+}
+
+func TestBailianConsoleTokenConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+	}{
+		{"missing", ""},
+		{"invalid JSON", "{"},
+		{"wrong token type", `{"access_token":123}`},
+		{"missing token", `{}`},
+		{"blank token", `{"access_token":"   "}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			t.Setenv("MSU_BAILIAN_CLI_CONFIG", path)
+			if tc.config != "" {
+				if err := os.WriteFile(path, []byte(tc.config), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a := account.Account{}
+			a.Credential.ConsoleAccessToken = " ct-stored "
+			if got := bailianConsoleToken(a); got != "ct-stored" {
+				t.Fatalf("token = %q, want stored token fallback", got)
+			}
+			a.Credential.ConsoleAccessToken = ""
+			a.Credential.APIKey = "sk-inference"
+			if got := bailianConsoleToken(a); got != "" {
+				t.Fatalf("token = %q, inference key must not authenticate quota queries", got)
+			}
+		})
+	}
+}
+
+func TestBuiltinBailianCLIConfigRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("MSU_BAILIAN_CLI_CONFIG", path)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		want := "Bearer ct-first"
+		if call > 3 {
+			want = "Bearer ct-renewed"
+		}
+		if got := r.Header.Get("Authorization"); got != want {
+			t.Errorf("call %d auth = %q, want %q from CLI config", call, got, want)
+		}
+		if r.URL.Path != "/cli/api.json" || r.Method != http.MethodPost {
+			t.Errorf("request = %s %s, want POST /cli/api.json", r.Method, r.URL.Path)
+		}
+		var payload string
+		switch api := r.URL.Query().Get("api"); {
+		case strings.HasSuffix(api, "/usage"):
+			payload = `{"per5HourPercentage":0.5}`
+		case strings.HasSuffix(api, "/subscription"):
+			payload = `{"specCode":"pro"}`
+		case strings.HasSuffix(api, "/quota-config"):
+			payload = `{"pro":{"five_hour":100}}`
+		default:
+			t.Errorf("api = %q", api)
+		}
+		_, _ = w.Write([]byte(bailianEnvelope(payload)))
+	}))
+	defer srv.Close()
+	a := acct("bl-1", "bailian.cn.subscribe.token-plan", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode")
+	a.Credential.ConsoleAccessToken = "ct-stale"
+	q := builtinQuota(srv.URL, a)
+	q.ttl = 0
+	for _, token := range []string{"ct-first", "ct-renewed"} {
+		if err := os.WriteFile(path, []byte(`{"access_token":" `+token+` "}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := q.Query(context.Background(), a.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Meters) != 1 || got.Meters[0].Used == nil || *got.Meters[0].Used != 50 {
+			t.Fatalf("meters = %+v, want 50 credits used", got.Meters)
+		}
+	}
+	if got := calls.Load(); got != 6 {
+		t.Fatalf("calls = %d, want three endpoints for each token", got)
 	}
 }
 

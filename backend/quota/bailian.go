@@ -21,7 +21,7 @@ import (
 const (
 	bailianConsoleURL = "https://bailian-cs.console.aliyun.com/cli/api.json"
 	bailianAPIPrefix  = "zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2F"
-	bailianLoginHint  = "百炼控制台登录已失效，请执行 bl auth login --console 后重新导入控制台 access_token"
+	bailianLoginHint  = "百炼控制台登录已失效，请执行 bl auth generate-access-token 续签并检查自动续期任务；AccessKey 失效时请在额度查询设置中重新执行「安装 bl 并验证」"
 )
 
 // bailianMeters 聚合三接口出窗口计量。任一接口失败整份报告不可用:
@@ -30,7 +30,7 @@ func bailianMeters(ctx context.Context, q *Quota, spec provider.Spec, acc accoun
 	token := bailianConsoleToken(acc)
 	if token == "" {
 		return nil, apperr.New(apperr.InvalidRequest,
-			"缺少百炼控制台 access_token，请从百炼 CLI 获取并配置 console_access_token（不是推理 API Key）")
+			"未读取到百炼 CLI 控制台登录态，请在额度查询设置中执行「安装 bl 并验证」，并确认后端已配置 MSU_BAILIAN_CLI_CONFIG（推理 API Key 不能用于额度查询）")
 	}
 	payloads := make([]any, 3)
 	for i, api := range []string{"usage", "subscription", "quota-config"} {
