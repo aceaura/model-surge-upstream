@@ -587,7 +587,9 @@ func (s *responseState) finishTool() error {
 	t := s.tool
 	s.tool = nil
 	args := t.args.String()
-	if strings.TrimSpace(args) == "" {
+	// parsers.py:441 用 str.strip() 判空:纯 \x1c-\x1f 参数视为空,
+	// 走 "{}" 且不标 _arguments_invalid,与请求侧三十二轮同空白类。
+	if pyTrimSpace(args) == "" {
 		args = "{}"
 	}
 	norm, ok := normalizeOrderedJSON(args, true)
