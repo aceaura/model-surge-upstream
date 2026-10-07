@@ -822,9 +822,29 @@ class _AccountFormState extends State<AccountForm> {
     final masked = widget.editing?.maskedWebRefreshToken ??
         widget.copyFrom?.maskedWebRefreshToken ??
         '';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+    final hasToken = _webRefreshToken.text.trim().isNotEmpty || masked.isNotEmpty;
+    return _loginCard(
+      title: '网页会话登录态',
+      configured: hasToken,
+      configuredHint: '已配置;重新导入或粘贴新值整体替换,留空保留原值。',
+      unconfiguredHint: '可选;导入本机 kimi-desktop 的网页会话登录态后,额度页可显示会员月总额度。',
+      items: [
+        _checkItem(
+          done: hasToken,
+          name: '网页会话 Token',
+          desc: '月度会员额度查询链的凭据',
+        ),
+      ],
+      buttons: [
+        OutlinedButton.icon(
+          key: const ValueKey('kimi-autofill-desktop'),
+          icon: const Icon(Icons.desktop_windows_outlined, size: 18),
+          label: const Text('从 kimi-desktop 导入'),
+          onPressed: _fillKimiWebToken,
+        ),
+      ],
+      detailsToggleKey: const ValueKey('kimi-web-details-toggle'),
+      details: [
         LabeledField(
           label: '网页会话 Token',
           hint: '可选;填入后额度页可显示会员月总额度。'
@@ -848,14 +868,8 @@ class _AccountFormState extends State<AccountForm> {
                 onPressed: () => setState(() => _revealKey = !_revealKey),
               ),
             ),
+            onChanged: (_) => setState(() {}),
           ),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          key: const ValueKey('kimi-autofill-desktop'),
-          icon: const Icon(Icons.desktop_windows_outlined, size: 18),
-          label: const Text('从 kimi-desktop 获取'),
-          onPressed: _fillKimiWebToken,
         ),
       ],
     );
@@ -951,11 +965,73 @@ class _AccountFormState extends State<AccountForm> {
 
   List<Widget> _kiroFields() => [_kiroLoginCard()];
 
-  /// 登录态卡片:清单即导入说明——逐项列出「从 Kiro App 导入」会写入的
-  /// 内容,状态区分 待导入/已配置;原始输入框收进「凭据详情」折叠组,
-  /// 供手改或 App 不可达时手动粘贴兜底。
-  Widget _kiroLoginCard() {
+  /// 登录态卡片:清单即导入说明——逐项列出「导入」会写入的内容,状态区分
+  /// 待导入/已配置;原始输入框收进「凭据详情」折叠组,供手改或来源不可达
+  /// 时手动粘贴兜底。kiro/codex/kimi 三处导入入口共用此版式。
+  Widget _loginCard({
+    required String title,
+    required bool configured,
+    required String configuredHint,
+    required String unconfiguredHint,
+    required List<Widget> items,
+    required List<Widget> buttons,
+    required Key detailsToggleKey,
+    required List<Widget> details,
+  }) {
     final t = context.tokens;
+    return Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        border: Border.all(color: t.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Text(title,
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: t.ink)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+              decoration: BoxDecoration(
+                color: configured ? t.successSoft : t.bg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                configured ? '已配置' : '未配置',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: configured ? t.success : t.faint),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text(
+            configured ? configuredHint : unconfiguredHint,
+            style: TextStyle(fontSize: 12.5, color: t.faint, height: 1.55),
+          ),
+          const SizedBox(height: 10),
+          ...items,
+          const SizedBox(height: 14),
+          Wrap(spacing: 10, runSpacing: 10, children: buttons),
+          _DetailsDisclosure(
+            toggleKey: detailsToggleKey,
+            title: '凭据详情(导入自动填充,一般无需修改)',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: details,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _kiroLoginCard() {
     final source = widget.editing ?? widget.copyFrom;
     final hasRefresh = _refreshToken.text.trim().isNotEmpty ||
         (source?.maskedRefreshToken.isNotEmpty ?? false);
@@ -968,89 +1044,53 @@ class _AccountFormState extends State<AccountForm> {
     final regionText = apiRegion.isEmpty || apiRegion == authRegion
         ? authRegion
         : '$authRegion / $apiRegion';
-    return Container(
-      decoration: BoxDecoration(
-        color: t.surface,
-        border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Text('Kiro 登录态',
-                style: TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: t.ink)),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              decoration: BoxDecoration(
-                color: hasRefresh ? t.successSoft : t.bg,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                hasRefresh ? '已配置' : '未配置',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: hasRefresh ? t.success : t.faint),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
-          Text(
-            hasRefresh
-                ? '凭据已落库,msu 独立续期与查询额度,不依赖本机登录状态;换账号登录后点「重新导入」整体替换。'
-                : '导入本机 Kiro App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。\nIAM / Identity Center 账号的 SSO 会话最长 90 天,到期需重新导入一次。',
-            style: TextStyle(fontSize: 12.5, color: t.faint, height: 1.55),
-          ),
-          const SizedBox(height: 10),
-          _kiroCheckItem(
-            done: hasRefresh,
-            name: 'Refresh Token',
-            desc: '续期凭据,轮换链由 msu 自持',
-          ),
-          _kiroCheckItem(
-            done: hasSso,
-            name: 'SSO 客户端凭据',
-            desc: 'IAM 账号续期所需的 Client ID + Secret',
-          ),
-          _kiroCheckItem(
-            done: arn.isNotEmpty,
-            name: 'Profile ARN',
-            desc: '额度查询与转发的身份标识',
-            value: arn.isNotEmpty
-                ? (arn.length > 4 ? '…${arn.substring(arn.length - 4)}' : arn)
-                : null,
-          ),
-          _kiroCheckItem(
-            done: regionText.isNotEmpty,
-            name: '认证 / API 区域',
-            desc: '续期与调用端点',
-            value: regionText.isNotEmpty ? regionText : null,
-          ),
-          const SizedBox(height: 14),
-          OutlinedButton.icon(
-            key: const ValueKey('kiro-autofill-app'),
-            icon: Icon(
-                hasRefresh ? Icons.refresh : Icons.file_download_outlined,
-                size: 18),
-            label: Text(hasRefresh ? '从 Kiro App 重新导入' : '从 Kiro App 导入'),
-            onPressed: _fillKiroApp,
-          ),
-          _KiroDetailsDisclosure(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: _kiroDetailFields(),
-            ),
-          ),
-        ],
-      ),
+    return _loginCard(
+      title: 'Kiro 登录态',
+      configured: hasRefresh,
+      configuredHint: '凭据已落库,msu 独立续期与查询额度,不依赖本机登录状态;换账号登录后点「重新导入」整体替换。',
+      unconfiguredHint: '导入本机 Kiro App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。\nIAM / Identity Center 账号的 SSO 会话最长 90 天,到期需重新导入一次。',
+      items: [
+        _checkItem(
+          done: hasRefresh,
+          name: 'Refresh Token',
+          desc: '续期凭据,轮换链由 msu 自持',
+        ),
+        _checkItem(
+          done: hasSso,
+          name: 'SSO 客户端凭据',
+          desc: 'IAM 账号续期所需的 Client ID + Secret',
+        ),
+        _checkItem(
+          done: arn.isNotEmpty,
+          name: 'Profile ARN',
+          desc: '额度查询与转发的身份标识',
+          value: arn.isNotEmpty
+              ? (arn.length > 4 ? '…${arn.substring(arn.length - 4)}' : arn)
+              : null,
+        ),
+        _checkItem(
+          done: regionText.isNotEmpty,
+          name: '认证 / API 区域',
+          desc: '续期与调用端点',
+          value: regionText.isNotEmpty ? regionText : null,
+        ),
+      ],
+      buttons: [
+        OutlinedButton.icon(
+          key: const ValueKey('kiro-autofill-app'),
+          icon: Icon(
+              hasRefresh ? Icons.refresh : Icons.file_download_outlined,
+              size: 18),
+          label: Text(hasRefresh ? '从 Kiro App 重新导入' : '从 Kiro App 导入'),
+          onPressed: _fillKiroApp,
+        ),
+      ],
+      detailsToggleKey: const ValueKey('kiro-details-toggle'),
+      details: _kiroDetailFields(),
     );
   }
 
-  Widget _kiroCheckItem({
+  Widget _checkItem({
     required bool done,
     required String name,
     required String desc,
@@ -1155,15 +1195,57 @@ class _AccountFormState extends State<AccountForm> {
     }
   }
 
-  List<Widget> _oauthFields() {
+  List<Widget> _oauthFields() => [_codexLoginCard()];
+
+  Widget _codexLoginCard() {
     final masked = widget.editing?.maskedRefreshToken ??
         widget.copyFrom?.maskedRefreshToken ??
         '';
+    final hasRefresh = _refreshToken.text.trim().isNotEmpty || masked.isNotEmpty;
+    final accountId = _accountId.text.trim();
+    return _loginCard(
+      title: 'Codex 登录态',
+      configured: hasRefresh,
+      configuredHint: '凭据已落库,msu 独立续期与查询额度,不依赖本机登录状态;换账号登录后重新导入整体替换。',
+      unconfiguredHint: '导入本机 codex CLI 或 Codex App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。',
+      items: [
+        _checkItem(
+          done: hasRefresh,
+          name: 'Refresh Token',
+          desc: '续期凭据,轮换链由 msu 自持',
+        ),
+        _checkItem(
+          done: accountId.isNotEmpty,
+          name: 'Account ID',
+          desc: '登录态里的 ChatGPT account_id',
+        ),
+      ],
+      buttons: [
+        OutlinedButton.icon(
+          key: const ValueKey('oauth-autofill-cli'),
+          icon: const Icon(Icons.terminal_outlined, size: 18),
+          label: const Text('从 codex CLI 导入'),
+          onPressed: () =>
+              _fillFrom('codex CLI', codexCliAuthPath(), parseCodexCliAuth),
+        ),
+        OutlinedButton.icon(
+          key: const ValueKey('oauth-autofill-app'),
+          icon: const Icon(Icons.bolt_outlined, size: 18),
+          label: const Text('从 Codex App 导入'),
+          onPressed: () =>
+              _fillFrom('Codex App', codexAppAuthPath(), parseCodexAppAuth),
+        ),
+      ],
+      detailsToggleKey: const ValueKey('oauth-details-toggle'),
+      details: _oauthDetailFields(masked),
+    );
+  }
+
+  List<Widget> _oauthDetailFields(String masked) {
     return [
       LabeledField(
         label: 'Refresh Token',
-        hint: '可用下方按钮从 codex CLI / Codex App 自动获取;'
-            '${_isEdit ? '留空保留原登录态' : '粘贴后由服务端自动续期'}',
+        hint: _isEdit ? '留空保留原登录态' : '粘贴后由服务端自动续期',
         child: TextFormField(
           key: const ValueKey('account-refresh-token'),
           controller: _refreshToken,
@@ -1190,6 +1272,7 @@ class _AccountFormState extends State<AccountForm> {
                 ? 'Refresh Token 不能为空'
                 : null;
           },
+          onChanged: (_) => setState(() {}),
         ),
       ),
       const SizedBox(height: 20),
@@ -1205,27 +1288,8 @@ class _AccountFormState extends State<AccountForm> {
           validator: (v) => (v == null || v.trim().isEmpty)
               ? 'Account ID 不能为空'
               : null,
+          onChanged: (_) => setState(() {}),
         ),
-      ),
-      const SizedBox(height: 12),
-      Row(
-        children: [
-          OutlinedButton.icon(
-            key: const ValueKey('oauth-autofill-cli'),
-            icon: const Icon(Icons.terminal_outlined, size: 18),
-            label: const Text('从 codex CLI 获取'),
-            onPressed: () =>
-                _fillFrom('codex CLI', codexCliAuthPath(), parseCodexCliAuth),
-          ),
-          const SizedBox(width: 10),
-          OutlinedButton.icon(
-            key: const ValueKey('oauth-autofill-app'),
-            icon: const Icon(Icons.bolt_outlined, size: 18),
-            label: const Text('从 Codex App 获取'),
-            onPressed: () =>
-                _fillFrom('Codex App', codexAppAuthPath(), parseCodexAppAuth),
-          ),
-        ],
       ),
     ];
   }
@@ -1408,16 +1472,22 @@ class _AccountFormState extends State<AccountForm> {
 /// 「凭据详情」轻量折叠组:比 CollapsibleSection 更弱的视觉层级(无边框
 /// 卡片,单行文字开关),用于卡片内部的低频区。child 全程留在树内
 /// (Align heightFactor 裁剪而非卸载),折叠不丢已填内容。
-class _KiroDetailsDisclosure extends StatefulWidget {
-  const _KiroDetailsDisclosure({required this.child});
+class _DetailsDisclosure extends StatefulWidget {
+  const _DetailsDisclosure({
+    required this.toggleKey,
+    required this.title,
+    required this.child,
+  });
 
+  final Key toggleKey;
+  final String title;
   final Widget child;
 
   @override
-  State<_KiroDetailsDisclosure> createState() => _KiroDetailsDisclosureState();
+  State<_DetailsDisclosure> createState() => _DetailsDisclosureState();
 }
 
-class _KiroDetailsDisclosureState extends State<_KiroDetailsDisclosure>
+class _DetailsDisclosureState extends State<_DetailsDisclosure>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl = AnimationController(
     duration: const Duration(milliseconds: 200),
@@ -1438,7 +1508,7 @@ class _KiroDetailsDisclosureState extends State<_KiroDetailsDisclosure>
       mainAxisSize: MainAxisSize.min,
       children: [
         InkWell(
-          key: const ValueKey('kiro-details-toggle'),
+          key: widget.toggleKey,
           borderRadius: BorderRadius.circular(6),
           onTap: () => _ctrl.isDismissed ? _ctrl.forward() : _ctrl.reverse(),
           child: Padding(
@@ -1454,7 +1524,7 @@ class _KiroDetailsDisclosureState extends State<_KiroDetailsDisclosure>
               ),
               const SizedBox(width: 2),
               Text(
-                '凭据详情(导入自动填充,一般无需修改)',
+                widget.title,
                 style: TextStyle(fontSize: 12.5, color: t.faint),
               ),
             ]),

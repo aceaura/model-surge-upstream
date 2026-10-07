@@ -1367,6 +1367,26 @@ void main() {
     expect(find.text('Refresh Token 不能为空'), findsOneWidget);
   });
 
+  testWidgets('codex login card checklist shows import contents when empty',
+      (tester) async {
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'OpenAI', billing: '订阅', region: '全球');
+    expect(find.text('Codex 登录态'), findsOneWidget);
+    expect(find.text('未配置'), findsOneWidget);
+    expect(find.text('待导入'), findsNWidgets(2));
+    expect(find.text('从 codex CLI 导入'), findsOneWidget);
+    expect(find.text('从 Codex App 导入'), findsOneWidget);
+    expect(find.text('凭据详情(导入自动填充,一般无需修改)'), findsOneWidget);
+  });
+
+  testWidgets('codex login card checklist reflects stored credentials in edit',
+      (tester) async {
+    await pumpForm(tester, editing: accountOAuth);
+    // 徽标 + Refresh Token + Account ID 三处「已配置」。
+    expect(find.text('已配置'), findsNWidgets(3));
+    expect(find.text('待导入'), findsNothing);
+  });
+
   testWidgets('oauth edit prefills account id and keeps credential when blank',
       (tester) async {
     final captured = <String>[];
@@ -1586,6 +1606,15 @@ void main() {
         reason: '默认纯星号,眼睛才亮掩码');
     expect(find.textContaining('eyJh***xyz'), findsNothing,
         reason: '未点眼睛前网页 token 掩码字符一个都不露');
+  });
+
+  testWidgets('kimi web token card reflects stored token in edit',
+      (tester) async {
+    await pumpForm(tester, editing: accountKimi);
+    expect(find.text('网页会话登录态'), findsOneWidget);
+    // 徽标 + Token 清单项两处「已配置」。
+    expect(find.text('已配置'), findsNWidgets(2));
+    expect(find.text('从 kimi-desktop 导入'), findsOneWidget);
   });
 
   testWidgets('kimi create submits credential with web refresh token',
