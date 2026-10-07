@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import '../models.dart';
+import '../theme.dart';
 import '../ui/collapsible_section.dart';
 import '../ui/feedback.dart';
 import '../ui/form_page.dart';
@@ -754,7 +755,9 @@ class _AccountFormState extends State<AccountForm> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                '登录态已失效,请重新粘贴 Refresh Token 后保存',
+                _isKiro
+                    ? '登录态已失效,请重新从 Kiro App 导入后保存'
+                    : '登录态已失效,请重新粘贴 Refresh Token 后保存',
                 style: TextStyle(
                   fontSize: 12.5,
                   color: Theme.of(context).colorScheme.onErrorContainer,
@@ -911,15 +914,15 @@ class _AccountFormState extends State<AccountForm> {
               : null,
         ),
         validator: validator,
-        onChanged: key == 'account-refresh-token' ||
-                key == 'account-auth-region' ||
-                key == 'account-client-id' ||
-                key == 'account-client-secret'
-            ? (_) {
-                _kiroAccessToken = '';
-                _kiroExpiry = '';
-              }
-            : null,
+        onChanged: (_) => setState(() {
+          if (key == 'account-refresh-token' ||
+              key == 'account-auth-region' ||
+              key == 'account-client-id' ||
+              key == 'account-client-secret') {
+            _kiroAccessToken = '';
+            _kiroExpiry = '';
+          }
+        }),
       ),
     );
   }
@@ -946,7 +949,152 @@ class _AccountFormState extends State<AccountForm> {
     return hasId != hasSecret ? 'SSO Client ID 与 Client Secret 必须一起填写' : null;
   }
 
-  List<Widget> _kiroFields() {
+  List<Widget> _kiroFields() => [_kiroLoginCard()];
+
+  /// 登录态卡片:清单即导入说明——逐项列出「从 Kiro App 导入」会写入的
+  /// 内容,状态区分 待导入/已配置;原始输入框收进「凭据详情」折叠组,
+  /// 供手改或 App 不可达时手动粘贴兜底。
+  Widget _kiroLoginCard() {
+    final t = context.tokens;
+    final source = widget.editing ?? widget.copyFrom;
+    final hasRefresh = _refreshToken.text.trim().isNotEmpty ||
+        (source?.maskedRefreshToken.isNotEmpty ?? false);
+    final hasSso = _clientId.text.trim().isNotEmpty &&
+        (_clientSecret.text.trim().isNotEmpty ||
+            (source?.maskedClientSecret.isNotEmpty ?? false));
+    final arn = _profileArn.text.trim();
+    final authRegion = _authRegion.text.trim();
+    final apiRegion = _apiRegion.text.trim();
+    final regionText = apiRegion.isEmpty || apiRegion == authRegion
+        ? authRegion
+        : '$authRegion / $apiRegion';
+    return Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        border: Border.all(color: t.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Text('Kiro 登录态',
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600, color: t.ink)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+              decoration: BoxDecoration(
+                color: hasRefresh ? t.successSoft : t.bg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                hasRefresh ? '已配置' : '未配置',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: hasRefresh ? t.success : t.faint),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text(
+            hasRefresh
+                ? '凭据已落库,msu 独立续期与查询额度,不依赖本机登录状态;换账号登录后点「重新导入」整体替换。'
+                : '导入本机 Kiro App 的登录态后,msu 独立续期与查询额度,不再依赖本机登录状态。\nIAM / Identity Center 账号的 SSO 会话最长 90 天,到期需重新导入一次。',
+            style: TextStyle(fontSize: 12.5, color: t.faint, height: 1.55),
+          ),
+          const SizedBox(height: 10),
+          _kiroCheckItem(
+            done: hasRefresh,
+            name: 'Refresh Token',
+            desc: '续期凭据,轮换链由 msu 自持',
+          ),
+          _kiroCheckItem(
+            done: hasSso,
+            name: 'SSO 客户端凭据',
+            desc: 'IAM 账号续期所需的 Client ID + Secret',
+          ),
+          _kiroCheckItem(
+            done: arn.isNotEmpty,
+            name: 'Profile ARN',
+            desc: '额度查询与转发的身份标识',
+            value: arn.isNotEmpty
+                ? (arn.length > 4 ? '…${arn.substring(arn.length - 4)}' : arn)
+                : null,
+          ),
+          _kiroCheckItem(
+            done: regionText.isNotEmpty,
+            name: '认证 / API 区域',
+            desc: '续期与调用端点',
+            value: regionText.isNotEmpty ? regionText : null,
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            key: const ValueKey('kiro-autofill-app'),
+            icon: Icon(
+                hasRefresh ? Icons.refresh : Icons.file_download_outlined,
+                size: 18),
+            label: Text(hasRefresh ? '从 Kiro App 重新导入' : '从 Kiro App 导入'),
+            onPressed: _fillKiroApp,
+          ),
+          _KiroDetailsDisclosure(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: _kiroDetailFields(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _kiroCheckItem({
+    required bool done,
+    required String name,
+    required String desc,
+    String? value,
+  }) {
+    final t = context.tokens;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(children: [
+        Container(
+          width: 17,
+          height: 17,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: done ? t.success : Colors.transparent,
+            border: done ? null : Border.all(color: t.faint, width: 1.2),
+          ),
+          child: done
+              ? const Icon(Icons.check, size: 11, color: Colors.white)
+              : null,
+        ),
+        const SizedBox(width: 10),
+        Text(name,
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w500, color: t.ink)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(desc,
+              style: TextStyle(fontSize: 12, color: t.faint),
+              overflow: TextOverflow.ellipsis),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          done ? (value ?? '已配置') : '待导入',
+          style: TextStyle(
+              fontSize: 12,
+              color: done ? t.success : t.faint,
+              fontFamily: done && value != null ? AppConst.fontMono : null),
+        ),
+      ]),
+    );
+  }
+
+  List<Widget> _kiroDetailFields() {
     final source = widget.editing ?? widget.copyFrom;
     return [
       _kiroField('account-refresh-token', 'Refresh Token', _refreshToken,
@@ -979,16 +1127,6 @@ class _AccountFormState extends State<AccountForm> {
           hasMasked: source?.maskedClientSecret.isNotEmpty ?? false,
           hint: _hasStoredKiroCredentials ? '编辑时留空保留原值' : 'Desktop 登录无需填写',
           validator: _validateKiroClientPair),
-      const SizedBox(height: 12),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: OutlinedButton.icon(
-          key: const ValueKey('kiro-autofill-app'),
-          icon: const Icon(Icons.desktop_windows_outlined, size: 18),
-          label: const Text('从 Kiro App 获取'),
-          onPressed: _fillKiroApp,
-        ),
-      ),
     ];
   }
 
@@ -1264,5 +1402,79 @@ class _AccountFormState extends State<AccountForm> {
       if (n == null || n < min || n > max) return '需为 $min-$max 的整数';
       return null;
     };
+  }
+}
+
+/// 「凭据详情」轻量折叠组:比 CollapsibleSection 更弱的视觉层级(无边框
+/// 卡片,单行文字开关),用于卡片内部的低频区。child 全程留在树内
+/// (Align heightFactor 裁剪而非卸载),折叠不丢已填内容。
+class _KiroDetailsDisclosure extends StatefulWidget {
+  const _KiroDetailsDisclosure({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_KiroDetailsDisclosure> createState() => _KiroDetailsDisclosureState();
+}
+
+class _KiroDetailsDisclosureState extends State<_KiroDetailsDisclosure>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    duration: const Duration(milliseconds: 200),
+    vsync: this,
+  );
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          key: const ValueKey('kiro-details-toggle'),
+          borderRadius: BorderRadius.circular(6),
+          onTap: () => _ctrl.isDismissed ? _ctrl.forward() : _ctrl.reverse(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              AnimatedBuilder(
+                animation: _ctrl,
+                builder: (context, _) => Icon(
+                  _ctrl.value > 0.5 ? Icons.expand_more : Icons.chevron_right,
+                  size: 15,
+                  color: t.faint,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Text(
+                '凭据详情(导入自动填充,一般无需修改)',
+                style: TextStyle(fontSize: 12.5, color: t.faint),
+              ),
+            ]),
+          ),
+        ),
+        AnimatedBuilder(
+          animation: _ctrl,
+          builder: (context, child) => ClipRect(
+            child: Align(
+              alignment: Alignment.topCenter,
+              heightFactor: _ctrl.value,
+              child: child,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 6, bottom: 6),
+            child: widget.child,
+          ),
+        ),
+      ],
+    );
   }
 }

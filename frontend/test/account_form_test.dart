@@ -429,6 +429,10 @@ void main() {
   testWidgets('Kiro edit secrets stay blank and pure-starred with independent eyes',
       (tester) async {
     await pumpForm(tester, editing: accountKiro);
+    final detailsToggle = find.byKey(const ValueKey('kiro-details-toggle'));
+    await tester.ensureVisible(detailsToggle);
+    await tester.tap(detailsToggle);
+    await tester.pumpAndSettle();
     expect(fieldText(tester, 'account-profile-arn'), 'arn:profile:existing');
     expect(fieldText(tester, 'account-auth-region'), 'eu-west-1');
     expect(fieldText(tester, 'account-api-region'), 'us-east-1');
@@ -448,6 +452,31 @@ void main() {
       expect(field.decoration!.hintText, '************');
       expect(field.controller!.text, isEmpty);
     }
+  });
+
+  testWidgets('Kiro login card checklist shows import contents when empty',
+      (tester) async {
+    await pumpForm(tester);
+    await selectCascade(tester, vendor: 'Kiro', billing: '订阅', region: '全球');
+    expect(find.text('Kiro 登录态'), findsOneWidget);
+    expect(find.text('未配置'), findsOneWidget);
+    // Refresh Token / SSO 凭据 / Profile ARN 待导入;区域默认 us-east-1 已算配置。
+    expect(find.text('待导入'), findsNWidgets(3));
+    // 清单值与折叠组内默认值的输入框都会显示该文案。
+    expect(find.text('us-east-1'), findsWidgets);
+    expect(find.text('从 Kiro App 导入'), findsOneWidget);
+    expect(find.text('凭据详情(导入自动填充,一般无需修改)'), findsOneWidget);
+  });
+
+  testWidgets('Kiro login card checklist reflects stored credentials in edit',
+      (tester) async {
+    await pumpForm(tester, editing: accountKiro);
+    // 徽标 + Refresh Token + SSO 凭据三处「已配置」。
+    expect(find.text('已配置'), findsNWidgets(3));
+    expect(find.text('待导入'), findsNothing);
+    expect(find.text('…ting'), findsOneWidget);
+    expect(find.text('eu-west-1 / us-east-1'), findsOneWidget);
+    expect(find.text('从 Kiro App 重新导入'), findsOneWidget);
   });
 
   for (final change in ['none', 'region', 'profile', 'client', 'secret', 'refresh']) {
