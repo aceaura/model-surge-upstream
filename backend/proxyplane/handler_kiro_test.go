@@ -269,7 +269,11 @@ func TestRound26KiroCountTokensHTTP(t *testing.T) {
 }
 
 func TestRound26KiroNumericContentHTTP(t *testing.T) {
-	for _, tc := range []struct{ raw, want string }{{"1e2", "100.0"}, {"1.00", "1.0"}, {"-0", "0"}, {"-0.0", "-0.0"}} {
+	for _, tc := range []struct{ raw, want string }{
+		{"1e2", "100.0"}, {"1.00", "1.0"}, {"-0", "0"}, {"-0.0", "-0.0"},
+		{`{}`, `{}`}, {`{"n":1e0}`, `{'n': 1.0}`}, {`{"x":"\u0000\u0085"}`, `{'x': '\x00\x85'}`},
+		{`{"x":"\ud800"}`, `{'x': '\ud800'}`}, {`{"\ud800":1,"\ud801":2}`, `{'\ud800': 1, '\ud801': 2}`},
+	} {
 		t.Run(tc.raw, func(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var payload struct {
@@ -297,6 +301,100 @@ func TestRound26KiroNumericContentHTTP(t *testing.T) {
 			h.ServeHTTP(w, r)
 			if w.Code != 200 {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body)
+			}
+		})
+	}
+}
+
+func TestRound27KiroSurrogateContainersHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{"high", `{"x":"\ud800"}`, `{'x': '\ud800'}`},
+		{"low", `{"x":"\uDC00"}`, `{'x': '\udc00'}`},
+		{"pair", `{"x":"\ud83d\ude00"}`, `{'x': '😀'}`},
+		{"literal_escape", `{"x":"\\ud800"}`, `{'x': '\\ud800'}`},
+		{"replacement", `{"x":"�"}`, `{'x': '�'}`},
+		{"distinct_keys", `{"\ud800":1,"\ud801":2}`, `{'\ud800': 1, '\ud801': 2}`},
+		{"duplicate_key", `{"\ud800":1,"\uD800":2}`, `{'\ud800': 2}`},
+		{"nested", `{"x":["\ud800",{"y":"\udc00","n":1e0}]}`, `{'x': ['\ud800', {'n': 1.0, 'y': '\udc00'}]}`},
+	} {
+		for _, protocol := range []string{provider.ProtocolChatCompletions, provider.ProtocolAnthropic} {
+			for _, source := range []string{"client", "defaults", "overrides"} {
+				t.Run(tc.name+"/"+protocol+"/"+source, func(t *testing.T) {
+					up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path != "/generateAssistantResponse" {
+							t.Errorf("unexpected native path %s", r.URL.Path)
+						}
+						var payload struct {
+							ConversationState struct {
+								CurrentMessage struct{ UserInputMessage struct{ Content string } }
+							}
+						}
+						if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+							t.Error(err)
+							return
+						}
+						content := payload.ConversationState.CurrentMessage.UserInputMessage.Content
+						want := tc.want
+						if protocol == provider.ProtocolAnthropic {
+							want = "[Tool Result (i)]\n" + want
+						}
+						if content != want && !strings.HasSuffix(content, "\n\n"+want) {
+							t.Errorf("surrogate content=%q, want suffix=%q", content, want)
+						}
+						w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+						_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+						_, _ = w.Write(kiroTestFrame("messageStopEvent", `{"stopReason":"end_turn"}`))
+					}))
+					defer up.Close()
+					content := tc.raw
+					path := "/v1/chat/completions"
+					if protocol == provider.ProtocolAnthropic {
+						path = "/v1/messages"
+						content = `[{"type":"tool_result","tool_use_id":"i","content":` + content + `}]`
+					}
+					messages := `,"messages":[{"role":"user","content":` + content + `}]`
+					target := resolve.ResolvedTarget{ModelID: "kiro-surrogate", ProviderID: kiro.ProviderID,
+						Protocol: protocol, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+					client := messages
+					switch source {
+					case "defaults":
+						target.Defaults = json.RawMessage(`{` + strings.TrimPrefix(messages, ",") + `}`)
+						client = ""
+					case "overrides":
+						target.Overrides = json.RawMessage(`{` + strings.TrimPrefix(messages, ",") + `}`)
+						client = `,"messages":[{"role":"user","content":"must be overridden"}]`
+					}
+					h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+					proxy := httptest.NewServer(h)
+					defer proxy.Close()
+					r, err := http.NewRequest(http.MethodPost, proxy.URL+path, strings.NewReader(`{"model":"kiro-surrogate","max_tokens":32`+client+`}`))
+					if err != nil {
+						t.Fatal(err)
+					}
+					r.Header.Set("Authorization", "Bearer "+testKey)
+					r.Header.Set("Content-Type", "application/json")
+					resp, err := proxy.Client().Do(r)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer resp.Body.Close()
+					body, err := io.ReadAll(resp.Body)
+					if err != nil || resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "ok") {
+						t.Fatalf("status=%d body=%s err=%v", resp.StatusCode, body, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRound27KiroRawObjectEmpty(t *testing.T) {
+	for _, raw := range []string{"", "null", "{}", "[]", "1", `{"x":`} {
+		t.Run(raw, func(t *testing.T) {
+			if got := rawObject(json.RawMessage(raw), true); got == nil || len(got) != 0 {
+				t.Fatalf("rawObject(%q)=%v, want non-nil empty object", raw, got)
 			}
 		})
 	}

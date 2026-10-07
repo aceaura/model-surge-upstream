@@ -1854,6 +1854,205 @@ func TestRound26RequestNumericString(t *testing.T) {
 	}
 }
 
+func TestRound27Request(t *testing.T) {
+	containers := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"empty dict", object{}, "{}"},
+		{"empty list", []any{}, "[]"},
+		{"nested dict", object{"a": []any{object{}, []any{json.Number("1e0"), json.Number("1.00"), json.Number("-0"), json.Number("-0.0")}, true, nil, "x"}}, "{'a': [{}, [1.0, 1.0, 0, -0.0], True, None, 'x']}"},
+		{"nested list", []any{object{"a": []any{json.Number("1e0"), json.Number("1.00"), json.Number("-0"), json.Number("-0.0")}}}, "[{'a': [1.0, 1.0, 0, -0.0]}]"},
+	}
+	for _, tc := range containers {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pythonicString(tc.value); got != tc.want {
+				t.Errorf("container str=%q want=%q", got, tc.want)
+			}
+			if got := pyRepr(tc.value); got != tc.want {
+				t.Errorf("container repr=%q want=%q", got, tc.want)
+			}
+			if _, ok := tc.value.(map[string]any); ok {
+				text, err := textOnly(tc.value)
+				if err != nil || text != tc.want {
+					t.Errorf("text fallback=%q want=%q err=%v", text, tc.want, err)
+				}
+				for _, role := range []string{"user", "assistant", "developer"} {
+					msg, err := parseMessage(object{"role": role, "content": tc.value}, "openai")
+					if err != nil || msg.text != tc.want {
+						t.Errorf("role=%s text=%q want=%q err=%v", role, msg.text, tc.want, err)
+					}
+				}
+				for _, protocol := range []string{"openai", "anthropic"} {
+					want := tc.want
+					if protocol == "anthropic" && tc.name == "empty dict" {
+						want = ""
+					}
+					text, _, err := resultContent(tc.value, protocol)
+					if err != nil || text != want {
+						t.Errorf("result protocol=%s text=%q want=%q err=%v", protocol, text, want, err)
+					}
+					root := object{"model": "model", "messages": []any{object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "i", "content": tc.value}}}}}
+					payload, opts := convert(t, root, protocol)
+					resultText := want
+					if resultText == "" {
+						resultText = "(empty result)"
+					}
+					if !strings.HasSuffix(currentContent(t, payload), "[Tool Result (i)]\n"+resultText) {
+						t.Errorf("tool result text=%q", currentContent(t, payload))
+					}
+					// Counting uses str(dict) even when the converter treats {} as false.
+					wantParts := [3]int{10 + estimateText(tc.want, false), 0, 0}
+					if opts.estimateParts != wantParts {
+						t.Errorf("result estimate=%v want=%v", opts.estimateParts, wantParts)
+					}
+				}
+			}
+			for _, protocol := range []string{"openai", "anthropic"} {
+				if protocol == "anthropic" && obj(tc.value) == nil {
+					continue
+				}
+				assistant := object{"role": "assistant"}
+				if protocol == "anthropic" {
+					assistant["content"] = []any{object{"type": "tool_use", "id": "i", "name": "f", "input": tc.value}}
+				} else {
+					assistant["tool_calls"] = []any{object{"id": "i", "function": object{"name": "f", "arguments": tc.value}}}
+				}
+				root := object{"model": "model", "messages": []any{object{"role": "user", "content": "q"}, assistant, object{"role": "user", "content": "continue"}}}
+				payload, _ := convert(t, root, protocol)
+				history := list(obj(payload["conversationState"])["history"])
+				if len(history) != 2 {
+					t.Fatalf("history=%v", history)
+				}
+				response := obj(obj(history[1])["assistantResponseMessage"])
+				if response["toolUses"] != nil || str(response["content"]) != "[Tool: f (i)]\n"+tc.want {
+					t.Errorf("history protocol=%s response=%v want=%q", protocol, response, tc.want)
+				}
+			}
+		})
+	}
+	t.Run("scalar behavior unchanged", func(t *testing.T) {
+		for _, tc := range []struct {
+			value any
+			want  string
+		}{{nil, "<nil>"}, {true, "True"}, {false, "False"}, {"x", "x"}, {json.Number("1e0"), "1.0"}} {
+			if got := pythonicString(tc.value); got != tc.want {
+				t.Errorf("scalar str=%q want=%q", got, tc.want)
+			}
+		}
+	})
+	t.Run("missing input versus explicit null count", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			input object
+			want  int
+		}{{"missing", object{}, 13}, {"empty dict", object{"input": object{}}, 13}, {"explicit null", object{"input": nil}, 14}} {
+			t.Run(tc.name, func(t *testing.T) {
+				block := object{"type": "tool_use", "id": "i", "name": "f"}
+				for key, value := range tc.input {
+					block[key] = value
+				}
+				messages := []any{object{"role": "assistant", "content": []any{block}}}
+				if got := estimateOriginalMessages(messages); got != tc.want {
+					t.Errorf("message count=%d want=%d", got, tc.want)
+				}
+				root := object{"model": "model", "messages": messages}
+				payload, opts, err := convertRequest([]byte(jsonText(root)), "count_tokens", "")
+				if err != nil || payload != nil || opts.estimateParts != [3]int{tc.want, 0, 0} || opts.inputEstimate != tc.want {
+					t.Errorf("count route payload present=%v options=%+v want=%d err=%v", payload != nil, opts, tc.want, err)
+				}
+			})
+		}
+	})
+}
+
+func TestRound27RequestOpenAIToolArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fields    object
+		wantText  string
+		wantInput string
+	}{
+		{"missing", object{}, "{}", "{}"},
+		{"null", object{"arguments": nil}, "None", "{}"},
+		{"empty string", object{"arguments": ""}, "", "{}"},
+		{"false", object{"arguments": false}, "False", "{}"},
+		{"zero", object{"arguments": json.Number("0")}, "0", "{}"},
+		{"string verbatim", object{"arguments": " {\"n\": 1} "}, " {\"n\": 1} ", `{"n":1}`},
+		{"dict repr", object{"arguments": object{"n": json.Number("0")}}, "{'n': 0}", `{"n":0}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, declared := range []bool{false, true} {
+				mode := "text history"
+				if declared {
+					mode = "native history"
+				}
+				t.Run(mode, func(t *testing.T) {
+					function := object{"name": "f"}
+					for key, value := range tc.fields {
+						function[key] = value
+					}
+					root := object{"model": "model", "messages": []any{
+						object{"role": "user", "content": "q"},
+						object{"role": "assistant", "tool_calls": []any{object{"id": "i", "type": "function", "function": function}}},
+						object{"role": "tool", "tool_call_id": "i", "content": "ok"},
+					}}
+					if declared {
+						root["tools"] = []any{object{"type": "function", "function": object{"name": "f", "parameters": object{}}}}
+					}
+					payload, _, err := convertRequest([]byte(jsonText(root)), "openai", "")
+					if err != nil {
+						t.Fatal(err)
+					}
+					history := list(obj(payload["conversationState"])["history"])
+					if len(history) != 2 {
+						t.Fatalf("history=%v", history)
+					}
+					response := obj(obj(history[1])["assistantResponseMessage"])
+					if !declared {
+						if response["toolUses"] != nil || str(response["content"]) != "[Tool: f (i)]\n"+tc.wantText {
+							t.Fatalf("response=%v want text=%q", response, tc.wantText)
+						}
+						return
+					}
+					uses := list(response["toolUses"])
+					if len(uses) != 1 {
+						t.Fatalf("native response=%v", response)
+					}
+					use := obj(uses[0])
+					if jsonText(use["input"]) != tc.wantInput {
+						t.Fatalf("native input=%s want=%s", jsonText(use["input"]), tc.wantInput)
+					}
+					if _, has := use["argsText"]; has {
+						t.Fatalf("argsText leaked into native use=%v", use)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRound27RequestReprControls(t *testing.T) {
+	for _, tc := range []struct{ value, want string }{
+		{"\x00\a\b\v\f\x1b\x7f\u0085", `'\x00\x07\x08\x0b\x0c\x1b\x7f\x85'`},
+		{"\n\r\t", `'\n\r\t'`},
+		{"\u00a0\u200b\u2028\U000e0001", `'\xa0\u200b\u2028\U000e0001'`},
+		{"中 é 😀", "'中 é 😀'"},
+		{"a'b", `"a'b"`},
+		{"a'\"b", `'a\'"b'`},
+	} {
+		if got := pyStrRepr(tc.value); got != tc.want {
+			t.Errorf("repr=%q want=%q", got, tc.want)
+		}
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": object{"x": tc.value}}}}
+		payload, _ := convert(t, root, "openai")
+		if !strings.HasSuffix(currentContent(t, payload), "{'x': "+tc.want+"}") {
+			t.Errorf("container control text=%q", currentContent(t, payload))
+		}
+	}
+}
+
 func TestRound24ResponseEdges(t *testing.T) {
 	t.Run("array tool input", func(t *testing.T) {
 		for _, tc := range []struct {

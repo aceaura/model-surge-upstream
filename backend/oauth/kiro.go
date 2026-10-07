@@ -14,7 +14,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/kiro"
 )
 
-func (m *Manager) refreshKiro(ctx context.Context, acc account.Account) (string, error) {
+func (m *Manager) refreshKiro(ctx context.Context, acc account.Account, f *flight) (string, error) {
 	cred := acc.Credential
 	if err := cred.Validate(); err != nil {
 		return "", err
@@ -57,6 +57,10 @@ func (m *Manager) refreshKiro(ctx context.Context, acc account.Account) (string,
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
 			(resp.StatusCode == http.StatusBadRequest && (failure.Error == "invalid_grant" || failure.Error == "invalid_token" || failure.Error == "invalid_request")) {
 			m.mu.Lock()
+			if m.flights[acc.Name] != f {
+				m.mu.Unlock()
+				return "", context.Canceled
+			}
 			m.reauth[acc.Name] = true
 			m.mu.Unlock()
 			return "", ErrNeedsReauth
@@ -90,11 +94,16 @@ func (m *Manager) refreshKiro(ctx context.Context, acc account.Account) (string,
 		ttl = time.Duration(*data.ExpiresIn) * time.Second
 	}
 	cred.Expiry = time.Now().UTC().Add(ttl - time.Minute)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.flights[acc.Name] != f {
+		return "", context.Canceled
+	}
+	// Store 不回调 Manager;持锁直到落库与缓存更新结束,使 Reset 成为屏障。
 	if err := m.store.UpdateCredential(ctx, acc.Name, cred); err != nil {
 		return "", fmt.Errorf("kiro: persist refreshed token: %w", err)
 	}
-	m.mu.Lock()
+	m.kiroCredentials[acc.Name] = cred
 	delete(m.invalid, acc.Name)
-	m.mu.Unlock()
 	return cred.AccessToken, nil
 }

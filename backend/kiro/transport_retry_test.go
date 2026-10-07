@@ -21,6 +21,223 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
+func TestRound27StrictOpenAIContentKey(t *testing.T) {
+	for _, tc := range []struct {
+		name, thinking string
+		text, tools    bool
+	}{
+		{name: "only-fake-thinking", thinking: "fake"},
+		{name: "only-native-thinking", thinking: "native"},
+		{name: "fake-thinking+text", thinking: "fake", text: true},
+		{name: "native-thinking+text", thinking: "native", text: true},
+		{name: "text-only", text: true},
+		{name: "empty"},
+		{name: "tools-only", tools: true},
+		{name: "fake-thinking+tools", thinking: "fake", tools: true},
+		{name: "native-thinking+tools", thinking: "native", tools: true},
+	} {
+		for _, policy := range []string{"auto", "none", "required", "named"} {
+			if policy == "none" && tc.tools || (policy == "required" || policy == "named") && !tc.tools {
+				continue
+			}
+			for _, stream := range []bool{false, true} {
+				for _, retry := range []bool{false, true} {
+					if retry && policy == "auto" {
+						continue
+					}
+					t.Run(fmt.Sprintf("%s/%s/stream=%v/retry=%v", tc.name, policy, stream, retry), func(t *testing.T) {
+						var choice any = policy
+						if policy == "named" {
+							choice = object{"type": "function", "function": object{"name": "lookup"}}
+						}
+						root := object{"model": "claude-sonnet-4-6", "max_tokens": 32, "stream": stream,
+							"messages": []any{object{"role": "user", "content": "round27-current-request"}},
+							"tools":    toolDefinition("openai"), "tool_choice": choice}
+						// NewRequest binds Body and GetBody to the same payload; replacing
+						// clientRequest.Body alone would replay its stale auto request.
+						request, err := http.NewRequest(http.MethodPost, "http://unused/v1/chat/completions", strings.NewReader(jsonText(root)))
+						if err != nil {
+							t.Fatal(err)
+						}
+						for k, v := range Headers("native-token", "arn:aws:codewhisperer:eu-west-1:123:profile/p") {
+							request.Header.Set(k, v)
+						}
+						wire := []byte{}
+						var wantReasonPieces []string
+						switch tc.thinking {
+						case "fake":
+							wire = joinedFrames(frame("assistantResponseEvent", object{"content": "<think>reason-"}),
+								frame("assistantResponseEvent", object{"content": "tail</think>"}))
+							wantReasonPieces = []string{"reason-tail"}
+						case "native":
+							wire = joinedFrames(frame("assistantResponseEvent", object{"text": "reason-"}),
+								frame("assistantResponseEvent", object{"text": "tail"}))
+							wantReasonPieces = []string{"reason-", "tail"}
+						}
+						wantContent, wantReason, wantFinish := "", strings.Join(wantReasonPieces, ""), "stop"
+						if tc.text {
+							// Identical body frames remain two real deltas.
+							wire = joinedFrames(wire, frame("assistantResponseEvent", object{"content": "ha"}), frame("assistantResponseEvent", object{"content": "ha"}))
+							wantContent = "haha"
+						}
+						if tc.tools {
+							wire = joinedFrames(wire, frame("toolUseEvent", object{"name": "lookup", "toolUseId": "round27-tool", "input": `{"x":`}),
+								frame("toolUseEvent", object{"input": "1}", "stop": true}))
+							wantFinish = "tool_calls"
+						}
+						wire = joinedFrames(wire, tokenFrame())
+						calls := 0
+						upstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+							calls++
+							payload, err := io.ReadAll(r.Body)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if r.URL.Path != "/generateAssistantResponse" || !strings.Contains(string(payload), "round27-current-request") ||
+								strings.Contains(string(payload), "[Tool Policy Recovery]") != (retry && calls == 2) ||
+								strings.Contains(string(payload), "[Tool Policy]") != (policy != "auto") {
+								t.Fatalf("call=%d path=%s payload=%s", calls, r.URL.Path, payload)
+							}
+							body := wire
+							if retry && calls == 1 {
+								name := "unlisted"
+								if policy == "none" {
+									name = "lookup"
+								}
+								body = joinedFrames(frame("assistantResponseEvent", object{"text": "FIRST_RESPONSE_REASON_SECRET"}),
+									frame("assistantResponseEvent", object{"content": "FIRST_RESPONSE_TEXT_SECRET"}),
+									frame("toolUseEvent", object{"name": name, "toolUseId": "FIRST_RESPONSE_TOOL_SECRET", "input": object{}, "stop": true}), endFrame())
+							}
+							return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
+						})
+						response, err := NewTransport(upstream).RoundTrip(request)
+						if err != nil {
+							t.Fatal(err)
+						}
+						data, err := io.ReadAll(response.Body)
+						response.Body.Close()
+						wantCalls := 1
+						if retry {
+							wantCalls = 2
+						}
+						if err != nil || response.StatusCode != 200 || calls != wantCalls || strings.Contains(string(data), "FIRST_RESPONSE_") {
+							t.Fatalf("status=%d calls=%d want=%d err=%v body=%s", response.StatusCode, calls, wantCalls, err, data)
+						}
+						var message, usage object
+						var tools []any
+						if stream {
+							if response.Header.Get("Content-Type") != "text/event-stream" || strings.Count(string(data), "data: [DONE]\n\n") != 1 {
+								t.Fatalf("invalid SSE response: headers=%v body=%s", response.Header, data)
+							}
+							parsed := events(t, data)
+							var reasonPieces, textPieces []string
+							roles, emptyContents, finishes := 0, 0, 0
+							message = object{}
+							for i, event := range parsed {
+								if event["done"] == true {
+									if i != len(parsed)-1 {
+										t.Fatal("DONE is not last")
+									}
+									continue
+								}
+								choices := list(event["choices"])
+								if len(choices) != 1 || event["object"] != "chat.completion.chunk" {
+									t.Fatalf("invalid chunk: %v", event)
+								}
+								c := obj(choices[0])
+								delta := obj(c["delta"])
+								if role, ok := delta["role"]; ok {
+									roles++
+									message["role"] = role
+									if i != 0 || role != "assistant" {
+										t.Fatalf("unexpected role delta: %v", delta)
+									}
+								}
+								if v, ok := delta["content"]; ok {
+									text, ok := v.(string)
+									if !ok {
+										t.Fatalf("content must be a string: %v", delta)
+									}
+									message["content"] = str(message["content"]) + text
+									if text == "" {
+										emptyContents++
+										if i != 0 || policy == "auto" {
+											t.Fatalf("unexpected empty content: %v", delta)
+										}
+									} else {
+										textPieces = append(textPieces, text)
+									}
+								}
+								if v, ok := delta["reasoning_content"]; ok {
+									reasonPieces = append(reasonPieces, str(v))
+									if i == 0 {
+										content, exists := delta["content"]
+										if exists != (policy != "auto") || exists && content != "" {
+											t.Errorf("first reasoning delta content: policy=%s delta=%v", policy, delta)
+										}
+									}
+								}
+								tools = append(tools, list(delta["tool_calls"])...)
+								if c["finish_reason"] != nil {
+									finishes++
+									usage = obj(event["usage"])
+									if c["finish_reason"] != wantFinish || len(delta) != 0 || i != len(parsed)-2 {
+										t.Fatalf("invalid finish chunk: %v", event)
+									}
+								}
+							}
+							message["reasoning_content"] = strings.Join(reasonPieces, "")
+							wantRoles, wantEmpty := 1, 0
+							if policy == "auto" && tc.thinking == "" && !tc.text {
+								wantRoles = 0
+							}
+							if policy != "auto" && (tc.thinking != "" || !tc.text) {
+								wantEmpty = 1
+							}
+							if roles != wantRoles || emptyContents != wantEmpty || finishes != 1 ||
+								jsonText(reasonPieces) != jsonText(wantReasonPieces) || tc.text && jsonText(textPieces) != `["ha","ha"]` {
+								t.Errorf("roles=%d emptyContents=%d finishes=%d reasonPieces=%v textPieces=%v body=%s", roles, emptyContents, finishes, reasonPieces, textPieces, data)
+							}
+							if policy != "auto" {
+								if _, exists := message["content"]; !exists {
+									t.Errorf("strict streamed message missing content key: %s", data)
+								}
+							}
+						} else {
+							if response.Header.Get("Content-Type") != "application/json" {
+								t.Fatalf("headers=%v", response.Header)
+							}
+							result := parseResult(t, data)
+							c := obj(list(result["choices"])[0])
+							message, usage = obj(c["message"]), obj(result["usage"])
+							tools = list(message["tool_calls"])
+							if content, exists := message["content"]; !exists || content != wantContent || message["role"] != "assistant" || c["finish_reason"] != wantFinish {
+								t.Fatalf("invalid completion: %s", data)
+							}
+						}
+						if str(message["content"]) != wantContent || str(message["reasoning_content"]) != wantReason || number(usage["prompt_tokens"]) != 17 || number(usage["completion_tokens"]) != 9 {
+							t.Fatalf("message=%v usage=%v body=%s", message, usage, data)
+						}
+						wantTools := 0
+						if tc.tools {
+							wantTools = 1
+						}
+						if len(tools) != wantTools {
+							t.Fatalf("tools=%v", tools)
+						}
+						if tc.tools {
+							tool := obj(tools[0])
+							if tool["id"] != "round27-tool" || obj(tool["function"])["name"] != "lookup" || obj(tool["function"])["arguments"] != `{"x": 1}` {
+								t.Fatalf("tool=%v", tool)
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestRound26AliasDedupWireMatrix(t *testing.T) {
 	const original = "round26.wire.lookup"
 	registerToolNames([]string{original})

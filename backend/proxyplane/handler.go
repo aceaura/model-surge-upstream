@@ -231,13 +231,14 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 	}
 
 	keepNumbers := target.ProviderID == kiro.ProviderID
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if keepNumbers {
-		// Preserve integer versus float identity for Kiro's thinking budget rules.
-		decoder.UseNumber()
-	}
 	var obj map[string]any
-	if err := decoder.Decode(&obj); err != nil {
+	if keepNumbers {
+		// Preserve surrogate code points and integer versus float identity for Kiro.
+		obj, err = kiro.DecodeJSON(raw)
+	} else {
+		err = json.NewDecoder(bytes.NewReader(raw)).Decode(&obj)
+	}
+	if err != nil {
 		writeFamilyError(w, fam, apperr.New(apperr.InvalidJSON, "request body is not valid json"))
 		return
 	}
@@ -344,7 +345,13 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 // codex 等 OAuth 账号遇 401 时作废旧 token、重解析、原样重放一次:
 // 订阅登录态的 access_token 短命,401 多半是服务端提前作废。
 func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, target resolve.ResolvedTarget, suffix string, body map[string]any) {
-	encoded, err := json.Marshal(body)
+	var encoded []byte
+	var err error
+	if target.ProviderID == kiro.ProviderID {
+		encoded, err = kiro.EncodeJSON(body)
+	} else {
+		encoded, err = json.Marshal(body)
+	}
 	if err != nil {
 		writeFamilyError(w, fam, apperr.New(apperr.InvalidJSON, "re-encode request body failed"))
 		return
@@ -634,9 +641,11 @@ func rawObject(raw json.RawMessage, keepNumbers bool) map[string]any {
 		return out
 	}
 	if keepNumbers {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		_ = decoder.Decode(&out)
+		var err error
+		out, err = kiro.DecodeJSON(raw)
+		if err != nil {
+			return map[string]any{}
+		}
 	} else {
 		_ = json.Unmarshal(raw, &out)
 	}

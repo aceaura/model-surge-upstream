@@ -58,6 +58,7 @@ type flight struct {
 	done  chan struct{}
 	token string
 	err   error
+	kiro  bool
 }
 
 type Manager struct {
@@ -73,6 +74,8 @@ type Manager struct {
 	invalid map[string]string
 	// reauth 记录终态失败的账号,短路后续续期尝试。
 	reauth map[string]bool
+	// Kiro 最近持久化凭据避免旧快照复用已轮换的 refresh_token。
+	kiroCredentials map[string]credential.Credential
 }
 
 func NewManager(store Store) *Manager {
@@ -81,13 +84,14 @@ func NewManager(store Store) *Manager {
 
 func newManager(store Store, client *http.Client, tokenURL, clientID string) *Manager {
 	return &Manager{
-		store:    store,
-		client:   client,
-		tokenURL: tokenURL,
-		clientID: clientID,
-		flights:  map[string]*flight{},
-		invalid:  map[string]string{},
-		reauth:   map[string]bool{},
+		store:           store,
+		client:          client,
+		tokenURL:        tokenURL,
+		clientID:        clientID,
+		flights:         map[string]*flight{},
+		invalid:         map[string]string{},
+		reauth:          map[string]bool{},
+		kiroCredentials: map[string]credential.Credential{},
 	}
 }
 
@@ -100,6 +104,12 @@ func (m *Manager) AccessToken(ctx context.Context, acc account.Account) (string,
 	}
 
 	m.mu.Lock()
+	if cred.Kind == provider.CredKiroRefresh {
+		if latest, ok := m.kiroCredentials[acc.Name]; ok {
+			acc.Credential = latest
+			cred = latest
+		}
+	}
 	if m.reauth[acc.Name] {
 		m.mu.Unlock()
 		return "", ErrNeedsReauth
@@ -124,14 +134,16 @@ func (m *Manager) AccessToken(ctx context.Context, acc account.Account) (string,
 			return "", ctx.Err()
 		}
 	}
-	f := &flight{done: make(chan struct{})}
+	f := &flight{done: make(chan struct{}), kiro: cred.Kind == provider.CredKiroRefresh}
 	m.flights[acc.Name] = f
 	m.mu.Unlock()
 
-	f.token, f.err = m.refresh(ctx, acc)
+	f.token, f.err = m.refresh(ctx, acc, f)
 
 	m.mu.Lock()
-	delete(m.flights, acc.Name)
+	if m.flights[acc.Name] == f {
+		delete(m.flights, acc.Name)
+	}
 	m.mu.Unlock()
 	close(f.done)
 	return f.token, f.err
@@ -154,13 +166,17 @@ func (m *Manager) NeedsReauth(name string) bool {
 	return m.reauth[name]
 }
 
-// Reset 用户重新粘贴登录态后调用:清掉终态标记与作废记录,
-// 下次取 token 用新凭据正常续期。
+// Reset 用户重新粘贴登录态后调用:清掉终态标记、作废记录与 Kiro 缓存,
+// 摘除旧 Kiro flight,阻止其后续持久化/回填;Codex flight 保持不变。
 func (m *Manager) Reset(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if f := m.flights[name]; f != nil && f.kiro {
+		delete(m.flights, name)
+	}
 	delete(m.reauth, name)
 	delete(m.invalid, name)
+	delete(m.kiroCredentials, name)
 }
 
 type tokenResponse struct {
@@ -169,9 +185,9 @@ type tokenResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
-func (m *Manager) refresh(ctx context.Context, acc account.Account) (string, error) {
+func (m *Manager) refresh(ctx context.Context, acc account.Account, f *flight) (string, error) {
 	if acc.Credential.Kind == provider.CredKiroRefresh {
-		return m.refreshKiro(ctx, acc)
+		return m.refreshKiro(ctx, acc, f)
 	}
 	// form 编码:sub2api/new-api/cc-switch 三家生产实现一致,JSON 编码未见实证。
 	form := url.Values{

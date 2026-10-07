@@ -69,12 +69,21 @@ func normalizeOrderedJSON(raw string, asciiOnly bool) (string, bool) {
 	return buf.String(), true
 }
 
+func textRune(s string) (rune, int) {
+	if len(s) >= 3 && s[0] == 0xed && s[1] >= 0xa0 && s[1] <= 0xbf && s[2]&0xc0 == 0x80 {
+		return rune(s[0]&0xf)<<12 | rune(s[1]&0x3f)<<6 | rune(s[2]&0x3f), 3
+	}
+	return utf8.DecodeRuneInString(s)
+}
+
 // pyJSONString 按 Python json.dumps 转义字符串:只转引号、反斜杠与常见控制
 // 符,不转 <>&;asciiOnly 时非 ASCII 字符转 \uXXXX(星平面用代理对)。
 func pyJSONString(s string, asciiOnly bool) string {
 	var buf strings.Builder
 	buf.WriteByte('"')
-	for _, r := range s {
+	for i := 0; i < len(s); {
+		r, size := textRune(s[i:])
+		i += size
 		writeJSONRune(&buf, r, asciiOnly)
 	}
 	buf.WriteByte('"')
@@ -115,11 +124,17 @@ func writeJSONRune(buf *strings.Builder, r rune, asciiOnly bool) {
 
 // Go's JSON decoder replaces unpaired surrogates; preserve their escaped identity.
 func pyJSONTokenString(raw string, asciiOnly bool) string {
-	raw = raw[strings.IndexByte(raw, '"')+1 : len(raw)-1]
 	var buf strings.Builder
 	buf.WriteByte('"')
+	jsonTokenRunes(raw, func(r rune) { writeJSONRune(&buf, r, asciiOnly) })
+	buf.WriteByte('"')
+	return buf.String()
+}
+
+func jsonTokenRunes(raw string, emit func(rune)) {
+	raw = raw[strings.IndexByte(raw, '"')+1 : len(raw)-1]
 	for i := 0; i < len(raw); {
-		r, size := utf8.DecodeRuneInString(raw[i:])
+		r, size := textRune(raw[i:])
 		i += size
 		if r == '\\' {
 			r = rune(raw[i])
@@ -146,10 +161,23 @@ func pyJSONTokenString(raw string, asciiOnly bool) string {
 				r = '\t'
 			}
 		}
-		writeJSONRune(&buf, r, asciiOnly)
+		emit(r)
 	}
-	buf.WriteByte('"')
-	return buf.String()
+}
+
+func jsonTokenText(raw string) string {
+	var b strings.Builder
+	jsonTokenRunes(raw, func(r rune) {
+		if r >= 0xd800 && r <= 0xdfff {
+			// WTF-8 retains surrogate identity until repr turns it into printable escapes.
+			b.WriteByte(0xe0 | byte(r>>12))
+			b.WriteByte(0x80 | byte(r>>6)&0x3f)
+			b.WriteByte(0x80 | byte(r)&0x3f)
+		} else {
+			b.WriteRune(r)
+		}
+	})
+	return b.String()
 }
 
 // pyNumber 按 Python repr 归一数字:整数原文保留(任意精度),浮点走最短
@@ -539,6 +567,10 @@ func (s *responseState) emitBlock(kind, text string, fake bool) error {
 		delta := object{field: text}
 		if !s.sentRole {
 			delta["role"] = "assistant"
+			// Strict replay retains an empty content key when reasoning arrives first.
+			if kind == "thinking" && s.options.policyMode != "" {
+				delta["content"] = ""
+			}
 			s.sentRole = true
 		}
 		s.send("", s.chunk(delta, nil))

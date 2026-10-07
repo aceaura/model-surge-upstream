@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/ringlog"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
@@ -279,11 +281,17 @@ type Resolver interface {
 	Resolve(ctx context.Context, modelID string) (resolve.ResolvedTarget, error)
 }
 
+// TokenInvalidator 作废本次请求使用的令牌，供重新解析时续期。
+type TokenInvalidator interface {
+	Invalidate(name, token string)
+}
+
 // Service 把仓储、模型解析与上游调用串成对话页需要的操作。
 type Service struct {
-	repo     *Repo
-	resolver Resolver
-	record   UsageRecorder
+	repo        *Repo
+	resolver    Resolver
+	record      UsageRecorder
+	invalidator TokenInvalidator
 }
 
 // UsageRecord 对话一轮补全的旁路用量记录：成功失败都记。
@@ -301,6 +309,11 @@ type UsageRecorder func(ctx context.Context, rec UsageRecord)
 // NewService 组装对话服务。
 func NewService(repo *Repo, resolver Resolver, record UsageRecorder) *Service {
 	return &Service{repo: repo, resolver: resolver, record: record}
+}
+
+func (s *Service) WithTokenInvalidator(invalidator TokenInvalidator) *Service {
+	s.invalidator = invalidator
+	return s
 }
 
 func (s *Service) ListSessions(ctx context.Context) ([]Session, error) {
@@ -374,8 +387,50 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effortL
 	}
 	history = append(history, user)
 
+	reply, target, err := s.complete(ctx, target, modelID, sessionID, effortLevel, history)
+	if err != nil {
+		ringlog.Push(ringlog.LevelWarn, "chat",
+			fmt.Sprintf("session=%s model=%s upstream failed: %v", sessionID, modelID, err))
+		return nil, err
+	}
+	if _, err := s.repo.append(ctx, sessionID, RoleAssistant, reply, nil); err != nil {
+		return nil, err
+	}
+	if err := s.repo.setModel(ctx, sessionID, modelID); err != nil {
+		return nil, apperr.Wrap(apperr.StorageError, "record session model", err)
+	}
+	ringlog.Push(ringlog.LevelInfo, "chat",
+		fmt.Sprintf("session=%s model=%s account=%s reply=%d chars", sessionID, modelID, target.Account, len([]rune(reply))))
+	return s.repo.ListMessages(ctx, sessionID)
+}
+
+func (s *Service) complete(ctx context.Context, target resolve.ResolvedTarget, modelID, sessionKey, effortLevel string, history []Message) (string, resolve.ResolvedTarget, error) {
 	start := time.Now()
-	reply, u, status, err := Complete(ctx, target, sessionID, effortLevel, history)
+	isKiro := target.ProviderID == kiro.ProviderID
+	reply, u, status, err := Complete(ctx, target, sessionKey, effortLevel, history)
+	safeError := "Kiro upstream completion failed"
+	if isKiro && status == http.StatusForbidden && s.invalidator != nil {
+		token := ""
+		for name, auth := range target.Headers {
+			if strings.EqualFold(name, "Authorization") && len(auth) >= 7 && strings.EqualFold(auth[:7], "Bearer ") {
+				token = strings.TrimSpace(auth[7:])
+				break
+			}
+		}
+		s.invalidator.Invalidate(target.Account, token)
+		fresh, resolveErr := s.resolver.Resolve(ctx, modelID)
+		if resolveErr != nil {
+			err = resolveErr
+			safeError = "resolve Kiro model after token invalidation failed"
+		} else {
+			target = fresh
+			reply, u, status, err = Complete(ctx, target, sessionKey, effortLevel, history)
+		}
+	}
+	if isKiro && err != nil {
+		// 不保留上游响应或续期错误的 cause，避免凭据进入返回值与日志。
+		err = apperr.New(apperr.CodeOf(err), fmt.Sprintf("%s (HTTP %d)", safeError, status))
+	}
 	elapsed := time.Since(start)
 	if s.record != nil {
 		errMsg := ""
@@ -391,18 +446,5 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effortL
 			ErrorMessage: errMsg,
 		})
 	}
-	if err != nil {
-		ringlog.Push(ringlog.LevelWarn, "chat",
-			fmt.Sprintf("session=%s model=%s upstream failed: %v", sessionID, modelID, err))
-		return nil, err
-	}
-	if _, err := s.repo.append(ctx, sessionID, RoleAssistant, reply, nil); err != nil {
-		return nil, err
-	}
-	if err := s.repo.setModel(ctx, sessionID, modelID); err != nil {
-		return nil, apperr.Wrap(apperr.StorageError, "record session model", err)
-	}
-	ringlog.Push(ringlog.LevelInfo, "chat",
-		fmt.Sprintf("session=%s model=%s account=%s reply=%d chars", sessionID, modelID, target.Account, len([]rune(reply))))
-	return s.repo.ListMessages(ctx, sessionID)
+	return reply, target, err
 }

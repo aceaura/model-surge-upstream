@@ -4,13 +4,79 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRound27KiroHeaderTimeout(t *testing.T) {
+	oldTimeout, oldBackoff := streamStallTimeout, retryBackoff
+	streamStallTimeout = 20 * time.Millisecond
+	retryBackoff = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { streamStallTimeout, retryBackoff = oldTimeout, oldBackoff })
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "collect", true: "stream"}[stream], func(t *testing.T) {
+			var calls atomic.Int32
+			release := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				if calls.Add(1) < 3 {
+					select {
+					case <-r.Context().Done():
+					case <-release:
+					}
+					return
+				}
+				w.WriteHeader(200)
+				w.(http.Flusher).Flush()
+				time.Sleep(40 * time.Millisecond)
+				_, _ = w.Write(joinedFrames(frame("assistantResponseEvent", object{"content": "after headers"}), endFrame()))
+			}))
+			defer server.Close()
+			defer close(release)
+			base := http.DefaultTransport.(*http.Transport).Clone()
+			defer base.CloseIdleConnections()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			request := clientRequest(tbOf(t), server.URL, "openai", stream).WithContext(ctx)
+			response, err := NewTransport(base).RoundTrip(request)
+			if err != nil {
+				t.Fatalf("header retry failed: calls=%d err=%v", calls.Load(), err)
+			}
+			data, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || calls.Load() != 3 || !strings.Contains(string(data), "after headers") {
+				t.Fatalf("calls=%d err=%v body=%s", calls.Load(), err, data)
+			}
+			if base.ResponseHeaderTimeout != 0 {
+				t.Fatal("caller transport was changed")
+			}
+		})
+	}
+}
+
+func TestRound27KiroHeaderTransportIsolation(t *testing.T) {
+	for _, configured := range []time.Duration{0, time.Millisecond, time.Hour} {
+		base := http.DefaultTransport.(*http.Transport).Clone()
+		base.ResponseHeaderTimeout = configured
+		adapted := NewTransport(base).(*transport)
+		native, ok := adapted.kiroBase.(*http.Transport)
+		want := configured
+		if want == 0 || want > streamStallTimeout {
+			want = streamStallTimeout
+		}
+		if !ok || native == base || adapted.base != base || native.ResponseHeaderTimeout != want || base.ResponseHeaderTimeout != configured {
+			t.Fatalf("configured=%s native transport isolation failed", configured)
+		}
+		base.CloseIdleConnections()
+		native.CloseIdleConnections()
+	}
+}
 
 func TestCloseBeforeReadingAndUnexpectedCompression(t *testing.T) {
 	for _, encoding := range []string{"", "gzip"} {
@@ -487,5 +553,96 @@ func TestNoReplayBodyIsConsumedWithoutChangingRequestFields(t *testing.T) {
 	resp.Body.Close()
 	if req.Body != input || input.closes.Load() != 1 || req.URL.Path != "/v1/chat/completions" || req.Header.Get(HeaderProfileARN) != "trusted-profile" || req.ContentLength != int64(len(raw)) {
 		t.Fatal("original request fields changed")
+	}
+}
+
+func TestRound27RequestSurrogateContainers(t *testing.T) {
+	for _, tc := range []struct {
+		raw, want string
+	}{
+		{`{"x":"\ud800"}`, `{'x': '\ud800'}`},
+		{`{"x":"\uDC00"}`, `{'x': '\udc00'}`},
+		{`{"x":"\ud83d\ude00"}`, `{'x': '😀'}`},
+		{`{"x":"\\ud800"}`, `{'x': '\\ud800'}`},
+		{`{"x":"�"}`, `{'x': '�'}`},
+		{`{"\ud800":1,"\ud801":2}`, `{'\ud800': 1, '\ud801': 2}`},
+		{`{"\ud800":1,"\uD800":2}`, `{'\ud800': 2}`},
+		{`{"x":["\ud800",{"y":"\udc00"}]}`, `{'x': ['\ud800', {'y': '\udc00'}]}`},
+	} {
+		for _, protocol := range []string{"openai", "anthropic"} {
+			content := tc.raw
+			if protocol == "anthropic" {
+				content = `[{"type":"tool_result","tool_use_id":"i","content":` + content + `}]`
+			}
+			raw := `{"model":"auto","max_tokens":10,"messages":[{"role":"user","content":` + content + `}]}`
+			payload, _, err := convertRequest([]byte(raw), protocol, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := currentContent(t, payload); !strings.HasSuffix(got, tc.want) {
+				t.Errorf("protocol=%s raw=%s want suffix=%q", protocol, tc.raw, tc.want)
+			}
+		}
+	}
+}
+
+func TestRound27RequestNestedSurrogateInput(t *testing.T) {
+	for _, input := range []string{
+		`"{\"x\":\"\ud800\"}"`,
+		`"{\"x\":\"\\ud800\"}"`,
+	} {
+		raw := `{"model":"auto","max_tokens":1,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"i","name":"f","input":` + input + `}]},{"role":"user","content":"continue"}]}`
+		payload, _, err := convertRequest([]byte(raw), "anthropic", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		history := list(obj(payload["conversationState"])["history"])
+		found := false
+		for _, entry := range history {
+			if content := str(obj(obj(entry)["assistantResponseMessage"])["content"]); content == `[Tool: f (i)]`+"\n"+`{'x': '\ud800'}` {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("nested input lost surrogate identity: %s", input)
+		}
+	}
+}
+
+func TestRound27JSONRoundTrip(t *testing.T) {
+	for _, raw := range []string{
+		`{"x":"\ud800","\ud801":"\udc00","nested":[true,false,null,{},[]]}`,
+		`{"x":"\ud83d\ude00","y":"\\ud800","z":"�"}`,
+		`{"n":[1e0,1.00,-0,-0.0,9007199254740993],"x":"\"\\\b\f\n\r\t/中"}`,
+		`{"x":"\uD800\u0041\uDC00","same":"\ud800","same":"\ud801"}`,
+	} {
+		value, err := DecodeJSON([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := EncodeJSON(value)
+		if err != nil || !json.Valid(encoded) {
+			t.Fatalf("invalid reencoded JSON: %v", err)
+		}
+		decoded, err := DecodeJSON(encoded)
+		if err != nil || pyRepr(decoded) != pyRepr(value) {
+			t.Errorf("round trip lost identity raw=%s err=%v", raw, err)
+		}
+	}
+	for _, value := range []any{nil, object(nil), []any(nil)} {
+		encoded, err := EncodeJSON(value)
+		if err != nil || string(encoded) != "null" {
+			t.Errorf("nil encode=%s err=%v", encoded, err)
+		}
+	}
+	for _, value := range []any{make(chan int), json.Number("NaN"), object{"x": make(chan int)}} {
+		if _, err := EncodeJSON(value); err == nil {
+			t.Error("accepted non-JSON value")
+		}
+	}
+	for _, raw := range []string{`null`, `[]`, `{"x":"\ud800"} {}`, `{"x":"\ud800",}`, `{"x":NaN}`} {
+		if _, err := DecodeJSON([]byte(raw)); err == nil {
+			t.Errorf("accepted invalid object: %s", raw)
+		}
 	}
 }

@@ -290,6 +290,7 @@ func (s *stubOAuth) Reset(name string) {
 	s.resets = append(s.resets, name)
 	delete(s.reauth, name)
 }
+func (s *stubOAuth) Invalidate(string, string) {}
 
 type fixture struct {
 	server   http.Handler

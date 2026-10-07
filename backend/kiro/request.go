@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -17,7 +18,71 @@ type object = map[string]any
 func obj(v any) object      { m, _ := v.(map[string]any); return m }
 func str(v any) string      { s, _ := v.(string); return s }
 func list(v any) []any      { a, _ := v.([]any); return a }
-func jsonText(v any) string { b, _ := json.Marshal(v); return string(b) }
+func jsonText(v any) string { b, _ := EncodeJSON(v); return string(b) }
+
+func DecodeJSON(raw []byte) (map[string]any, error) {
+	return decodeObject(string(raw))
+}
+
+func EncodeJSON(v any) ([]byte, error) {
+	var b strings.Builder
+	if err := encodeJSONValue(&b, v); err != nil {
+		return nil, err
+	}
+	return []byte(b.String()), nil
+}
+
+func encodeJSONValue(b *strings.Builder, v any) error {
+	switch x := v.(type) {
+	case string:
+		b.WriteString(pyJSONString(x, false))
+	case map[string]any:
+		if x == nil {
+			b.WriteString("null")
+			return nil
+		}
+		keys := make([]string, 0, len(x))
+		for key := range x {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		b.WriteByte('{')
+		for i, key := range keys {
+			if i != 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(pyJSONString(key, false))
+			b.WriteByte(':')
+			if err := encodeJSONValue(b, x[key]); err != nil {
+				return err
+			}
+		}
+		b.WriteByte('}')
+	case []any:
+		if x == nil {
+			b.WriteString("null")
+			return nil
+		}
+		b.WriteByte('[')
+		for i, value := range x {
+			if i != 0 {
+				b.WriteByte(',')
+			}
+			if err := encodeJSONValue(b, value); err != nil {
+				return err
+			}
+		}
+		b.WriteByte(']')
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		b.Write(raw)
+	}
+	return nil
+}
+
 func decodeObject(s string) (object, error) {
 	var m object
 	d := json.NewDecoder(strings.NewReader(s))
@@ -32,7 +97,41 @@ func decodeObject(s string) (object, error) {
 	if err := d.Decode(&extra); err != io.EOF {
 		return nil, fmt.Errorf("unexpected trailing JSON")
 	}
+	if strings.Contains(s, `\ud`) || strings.Contains(s, `\uD`) || !utf8.ValidString(s) {
+		// Reparse validated JSON so repr can retain lone surrogate code points.
+		d = json.NewDecoder(strings.NewReader(s))
+		d.UseNumber()
+		m = obj(decodeSurrogateValue(d, s))
+	}
 	return m, nil
+}
+
+func decodeSurrogateValue(d *json.Decoder, raw string) any {
+	start := int(d.InputOffset())
+	token, _ := d.Token()
+	switch token {
+	case json.Delim('{'):
+		m := object{}
+		for d.More() {
+			start := int(d.InputOffset())
+			d.Token()
+			key := jsonTokenText(raw[start:int(d.InputOffset())])
+			m[key] = decodeSurrogateValue(d, raw)
+		}
+		d.Token()
+		return m
+	case json.Delim('['):
+		values := []any{}
+		for d.More() {
+			values = append(values, decodeSurrogateValue(d, raw))
+		}
+		d.Token()
+		return values
+	}
+	if _, ok := token.(string); ok {
+		return jsonTokenText(raw[start:int(d.InputOffset())])
+	}
+	return token
 }
 
 type requestOptions struct {
@@ -153,7 +252,11 @@ func estimateOriginalMessages(msgs []any) int {
 				case "tool_use":
 					total += estimateText(str(b["id"]), false)
 					total += estimateText(str(b["name"]), false)
-					total += estimateText(pyDumps(b["input"]), false)
+					input, has := b["input"]
+					if !has {
+						input = object{}
+					}
+					total += estimateText(pyDumps(input), false)
 				case "tool_result":
 					total += estimateText(str(b["tool_use_id"]), false)
 					if ie := b["is_error"]; ie != nil {
@@ -1565,16 +1668,14 @@ func parseMessage(m object, protocol string) (message, error) {
 			name = ""
 		}
 		u := toolUse(id, name, f["arguments"])
-		// 文本化渲染用 unified arguments 原文:字符串 verbatim,缺省
-		// "{}",非标量(dict 等,models_openai.py:81 List[Any] 无校验)
-		// 取 Python repr。
-		switch a := f["arguments"].(type) {
-		case string:
-			u["argsText"] = a
-		case nil:
+		// 文本化仅缺键默认 {};字符串原样,显式 null 与其他值取 Python repr。
+		arguments, hasArguments := f["arguments"]
+		if !hasArguments {
 			u["argsText"] = "{}"
-		default:
-			u["argsText"] = pyRepr(a)
+		} else if a, ok := arguments.(string); ok {
+			u["argsText"] = a
+		} else {
+			u["argsText"] = pyRepr(arguments)
 		}
 		result.uses = append(result.uses, u)
 	}
@@ -1655,6 +1756,8 @@ func pythonicString(v any) string {
 		return pyNumber(x)
 	case string:
 		return x
+	case map[string]any, []any:
+		return pyRepr(x)
 	}
 	return fmt.Sprintf("%v", v)
 }
@@ -1795,7 +1898,7 @@ func stripArgsText(u any) object {
 }
 
 // pyRepr 复刻 Python repr():字符串单引号(含单引号且无双引号时换双引号,
-// 否则反斜杠转义)、True/False/None、数字原文、容器 ", " 连接、dict 键
+// 否则反斜杠转义)、True/False/None、有限数字归一、容器 ", " 连接、dict 键
 // 排序(Go map 无插入序,取确定性近似)。用于 anthropic 侧 dict 参数的文
 // 本化渲染(tool_calls_to_text 对 unified dict arguments 的 str())。
 func pyRepr(v any) string {
@@ -1810,7 +1913,7 @@ func pyRepr(v any) string {
 	case string:
 		return pyStrRepr(x)
 	case json.Number:
-		return x.String()
+		return pyNumber(x)
 	case map[string]any:
 		keys := make([]string, 0, len(x))
 		for k := range x {
@@ -1839,7 +1942,9 @@ func pyStrRepr(s string) string {
 	}
 	var b strings.Builder
 	b.WriteByte(quote)
-	for _, r := range s {
+	for i := 0; i < len(s); {
+		r, size := textRune(s[i:])
+		i += size
 		switch r {
 		case '\\':
 			b.WriteString("\\\\")
@@ -1853,7 +1958,15 @@ func pyStrRepr(s string) string {
 			b.WriteByte('\\')
 			b.WriteRune(r)
 		default:
-			b.WriteRune(r)
+			if unicode.IsPrint(r) {
+				b.WriteRune(r)
+			} else if r <= 0xff {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else if r <= 0xffff {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				fmt.Fprintf(&b, `\U%08x`, r)
+			}
 		}
 	}
 	b.WriteByte(quote)

@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/account"
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/model"
 	"github.com/aceaura/model-surge-upstream/backend/modelcheck"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
@@ -46,26 +49,44 @@ func (h handler) probeModel(ctx context.Context, m model.Model, acc account.Acco
 			"account "+acc.Name+" references unknown provider "+acc.ProviderID)
 	}
 
-	// 头集与转发面同一路径构造:oauth 账号(codex 订阅)才有活体 token
-	// 与 codex 身份头;静态密钥账号等价于 resolve.AuthHeaders。
-	headers, err := h.Resolver.HeadersFor(ctx, spec, acc)
-	if err != nil {
-		return modelcheck.Result{Error: err.Error()}, nil
-	}
-
-	if spec.ID == "kiro.global.subscribe.standard" {
-		acc, err = h.Accounts.Get(ctx, acc.Name)
+	isKiro := spec.ID == kiro.ProviderID
+	for attempt := 0; ; attempt++ {
+		headers, err := h.Resolver.HeadersFor(ctx, spec, acc)
 		if err != nil {
-			return modelcheck.Result{}, err
+			if isKiro {
+				return modelcheck.Result{Error: "Kiro probe authentication failed"}, nil
+			}
+			return modelcheck.Result{Error: err.Error()}, nil
 		}
+		if isKiro {
+			acc, err = h.Accounts.Get(ctx, acc.Name)
+			if err != nil {
+				return modelcheck.Result{}, err
+			}
+		}
+		result := modelcheck.Check(ctx, resolve.ResolvedTarget{
+			ModelID:     m.ID,
+			Account:     acc.Name,
+			ProviderID:  spec.ID,
+			Protocol:    m.Protocol,
+			BaseURL:     acc.EffectiveBaseURL(spec),
+			NativeModel: m.NativeModel,
+			Headers:     headers,
+		})
+		if isKiro && result.StatusCode == http.StatusForbidden && attempt == 0 && h.OAuth != nil {
+			token := ""
+			for name, value := range headers {
+				if strings.EqualFold(name, "Authorization") && len(value) >= 7 && strings.EqualFold(value[:7], "Bearer ") {
+					token = strings.TrimSpace(value[7:])
+					break
+				}
+			}
+			h.OAuth.Invalidate(acc.Name, token)
+			continue
+		}
+		if isKiro && result.Error != "" {
+			result.Error = fmt.Sprintf("Kiro upstream probe failed (HTTP %d)", result.StatusCode)
+		}
+		return result, nil
 	}
-	return modelcheck.Check(ctx, resolve.ResolvedTarget{
-		ModelID:     m.ID,
-		Account:     acc.Name,
-		ProviderID:  spec.ID,
-		Protocol:    m.Protocol,
-		BaseURL:     acc.EffectiveBaseURL(spec),
-		NativeModel: m.NativeModel,
-		Headers:     headers,
-	}), nil
 }

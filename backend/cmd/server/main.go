@@ -93,7 +93,7 @@ func run() error {
 	}
 
 	// 对话页：会话与消息落库，补全走解析出的上游目标。
-	chats := chat.NewService(chat.NewRepo(db.Pool()), resolver, chatUsage(db, act))
+	chats := chat.NewService(chat.NewRepo(db.Pool()), resolver, chatUsage(db, act)).WithTokenInvalidator(tokens)
 
 	handler := withRequestLog(httpapi.NewServer(httpapi.Deps{
 		Accounts:       accounts,

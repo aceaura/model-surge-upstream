@@ -113,6 +113,7 @@ type UsageStats interface {
 type OAuthState interface {
 	NeedsReauth(name string) bool
 	Reset(name string)
+	Invalidate(name, token string)
 }
 
 type Deps struct {

@@ -123,14 +123,24 @@ func newID() string {
 	return s[:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:]
 }
 
-type transport struct{ base http.RoundTripper }
+type transport struct {
+	base, kiroBase http.RoundTripper
+}
 
 // NewTransport adapts only requests explicitly marked HeaderProvider=kiro.
 func NewTransport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return &transport{base: base}
+	native := base
+	if tr, ok := base.(*http.Transport); ok {
+		clone := tr.Clone()
+		if clone.ResponseHeaderTimeout == 0 || clone.ResponseHeaderTimeout > streamStallTimeout {
+			clone.ResponseHeaderTimeout = streamStallTimeout
+		}
+		native = clone
+	}
+	return &transport{base: base, kiroBase: native}
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -255,7 +265,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				upstream.Body = io.NopCloser(bytes.NewReader(encoded))
 				upstream.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(encoded)), nil }
 				upstream.ContentLength = int64(len(encoded))
-				resp, err = t.base.RoundTrip(upstream)
+				resp, err = t.kiroBase.RoundTrip(upstream)
 				if err != nil {
 					if !retryableNetErr(err) || attempt >= maxRetryAttempts-1 {
 						return nil, nil, err
