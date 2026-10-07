@@ -220,7 +220,8 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 		gotValid = true
 		for _, model := range parseEntries(body) {
 			// config.py HIDDEN_FROM_LIST=["auto"] + model_resolver.py:394-395:
-			// auto 自身不入列表,但其别名 auto-kiro 出现在列表中。
+			// auto 自身不入列表,但其别名 auto-kiro 出现在列表中。改名只作用
+			// 于上游真实返回的条目;上游没列就不补——清单全部来自动态查询。
 			if model.ID == "auto" {
 				model.ID = "auto-kiro"
 			}
@@ -237,9 +238,6 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 		}
 		seenTokens[payload.NextToken] = true
 		query.Set("nextToken", payload.NextToken)
-	}
-	if !seenModels["auto-kiro"] {
-		out = append(out, Entry{ID: "auto-kiro"})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if !gotValid {

@@ -116,9 +116,9 @@ func TestKiroModelsForbiddenRefresh(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := []Entry{{ID: "auto-kiro"}, {ID: "fresh"}}
+				want := []Entry{{ID: "fresh"}}
 				if mode == "later page" {
-					want = []Entry{{ID: "auto-kiro"}, {ID: "first"}, {ID: "fresh"}}
+					want = []Entry{{ID: "first"}, {ID: "fresh"}}
 				}
 				if !reflect.DeepEqual(got.Models, want) {
 					t.Fatalf("models=%v want=%v", got.Models, want)
@@ -302,7 +302,7 @@ func TestKiroModelsFailures(t *testing.T) {
 		defer srv.Close()
 		l := New(fakeAccounts{"kiro-1": kiroAccount(srv.URL)}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
 		got, err := l.List(context.Background(), "kiro-1")
-		if err != nil || !reflect.DeepEqual(got.Models, []Entry{{ID: "auto-kiro"}}) || calls != 2 {
+		if err != nil || !reflect.DeepEqual(got.Models, []Entry{}) || calls != 2 {
 			t.Fatalf("report = %+v, err = %v, calls = %d", got, err, calls)
 		}
 	})
@@ -317,7 +317,7 @@ func TestKiroModelsPaginationLimit(t *testing.T) {
 	defer srv.Close()
 	l := New(fakeAccounts{"kiro-1": kiroAccount(srv.URL)}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
 	got, err := l.List(context.Background(), "kiro-1")
-	if err != nil || !reflect.DeepEqual(got.Models, []Entry{{ID: "auto-kiro"}}) || calls != kiroMaxPages {
+	if err != nil || !reflect.DeepEqual(got.Models, []Entry{}) || calls != kiroMaxPages {
 		t.Fatalf("report = %+v, err = %v, calls = %d", got, err, calls)
 	}
 }
@@ -357,7 +357,7 @@ func TestKiroModelsEmptyListNoProfile(t *testing.T) {
 	a.Credential.ProfileARN = ""
 	l := New(fakeAccounts{a.Name: a}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
 	got, err := l.List(context.Background(), a.Name)
-	if err != nil || !reflect.DeepEqual(got.Models, []Entry{{ID: "auto-kiro"}}) {
+	if err != nil || !reflect.DeepEqual(got.Models, []Entry{}) {
 		t.Fatalf("empty list = %+v, error = %v", got, err)
 	}
 }
@@ -392,7 +392,7 @@ func TestKiroModelsOfficialRequestURL(t *testing.T) {
 		return srv.Client().Transport.RoundTrip(local)
 	})})
 	got, err := l.List(context.Background(), a.Name)
-	if err != nil || !reflect.DeepEqual(got.Models, []Entry{{ID: "actual-upstream-model"}, {ID: "auto-kiro"}}) {
+	if err != nil || !reflect.DeepEqual(got.Models, []Entry{{ID: "actual-upstream-model"}}) {
 		t.Fatalf("report = %+v, err = %v", got, err)
 	}
 }
@@ -455,7 +455,7 @@ func TestKiroOIDCModelsOmitsProfile(t *testing.T) {
 	a.Credential.ClientID, a.Credential.ClientSecret = "client", "secret"
 	l := New(fakeAccounts{a.Name: a}, time.Minute).WithHeaderSource(kiroHeaderFunc(kiroTestHeaders))
 	got, err := l.List(context.Background(), a.Name)
-	if err != nil || !reflect.DeepEqual(got.Models, []Entry{{ID: "auto-kiro"}}) {
+	if err != nil || !reflect.DeepEqual(got.Models, []Entry{}) {
 		t.Fatalf("report=%+v err=%v", got, err)
 	}
 }
