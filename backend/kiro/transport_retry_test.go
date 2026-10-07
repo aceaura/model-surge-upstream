@@ -1,8 +1,10 @@
 package kiro
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -280,6 +282,69 @@ func TestOrdinaryScalarToolStream(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRound21MaxTokensHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		valid bool
+	}{
+		{"16.0", true}, {"1_6", true}, {"9223372036854775808", true},
+		{json.Number("9223372036854775808"), true}, {json.Number("1e2"), true}, {false, true},
+		{"1e2", false}, {"16.", false}, {"16.1", false}, {nil, false},
+		{json.Number("9223372036854775808.0"), false},
+	} {
+		root := object{"model": "model", "max_tokens": tc.value, "messages": []any{object{"role": "user", "content": "hi"}}}
+		r, err := http.NewRequest("POST", "http://127.0.0.1/v1/messages", strings.NewReader(jsonText(root)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range Headers("token", "") {
+			r.Header.Set(k, v)
+		}
+		calls := 0
+		tr := NewTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(endFrame())), Request: r}, nil
+		}))
+		resp, err := tr.RoundTrip(r)
+		if !tc.valid {
+			if err == nil || calls != 0 {
+				t.Fatalf("invalid value=%v calls=%d err=%v", tc.value, calls, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("valid value=%v err=%v", tc.value, err)
+		}
+		_, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || calls != 1 {
+			t.Fatalf("value=%v calls=%d err=%v", tc.value, calls, err)
+		}
+	}
+}
+
+func TestRound21CacheUsageStream(t *testing.T) {
+	wire := joinedFrames(
+		frame("assistantResponseEvent", object{"content": "hello"}),
+		frame("usageEvent", object{"usage": object{"cache_read_input_tokens": 9, "cacheReadInputTokens": 7.9, "cacheCreationInputTokens": true}}),
+		endFrame(),
+	)
+	server := stub(t, wire, nil)
+	_, data, err := do(t, server.URL, "anthropic", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usage object
+	for _, event := range events(t, data) {
+		if event["type"] == "message_delta" {
+			usage = obj(event["usage"])
+		}
+	}
+	if usage == nil || number(usage["cache_read_input_tokens"]) != 7 || number(usage["cache_creation_input_tokens"]) != 1 {
+		t.Fatalf("usage=%v data=%s", usage, data)
 	}
 }
 
@@ -626,6 +691,11 @@ func TestToolChoiceRecoveryStream(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("calls=%d", calls.Load())
+	}
+	chunks := events(t, data)
+	first := obj(obj(list(chunks[0]["choices"])[0])["delta"])
+	if first["role"] != "assistant" || first["content"] != "" || len(list(first["tool_calls"])) != 1 {
+		t.Fatalf("first strict tool delta=%v", first)
 	}
 }
 

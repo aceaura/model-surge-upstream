@@ -2,6 +2,8 @@ package upmodels
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -57,6 +59,15 @@ func (l *Lister) kiroFallbackReport(account string) Report {
 // kiroRetryable 判定列表请求是否值得重试:网络错误、429、5xx。
 func kiroRetryable(err error, status int) bool {
 	if err != nil {
+		var verifyErr *tls.CertificateVerificationError
+		var authorityErr x509.UnknownAuthorityError
+		var hostnameErr x509.HostnameError
+		var invalidErr x509.CertificateInvalidError
+		var recordErr tls.RecordHeaderError
+		if errors.As(err, &verifyErr) || errors.As(err, &authorityErr) ||
+			errors.As(err, &hostnameErr) || errors.As(err, &invalidErr) || errors.As(err, &recordErr) {
+			return false
+		}
 		var netErr net.Error
 		if errors.As(err, &netErr) {
 			return true

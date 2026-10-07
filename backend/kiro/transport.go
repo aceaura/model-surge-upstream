@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/user"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -198,20 +197,12 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// 且 pydantic int 只接受整数/整值浮点/数值字符串/布尔;小数、非数值
 	// 字符串、数组对象与 null 一律 422。与 FastAPI 一样在 HTTP 边界拒绝。
 	if protocol == "anthropic" {
-		var probe map[string]any
-		if err := json.Unmarshal(raw, &probe); err == nil {
-			switch v := probe["max_tokens"].(type) {
-			case float64:
-				if v != float64(int64(v)) {
-					return nil, apperr.New(apperr.InvalidRequest, "kiro: invalid request: max_tokens must be an integer")
-				}
-			case string:
-				if _, err := strconv.Atoi(strings.TrimSpace(v)); err != nil {
-					return nil, apperr.New(apperr.InvalidRequest, "kiro: invalid request: max_tokens must be an integer")
-				}
-			case bool: // pydantic lax: True→1、False→0 接受
-			default:
+		if probe, err := decodeObject(string(raw)); err == nil {
+			if probe["max_tokens"] == nil {
 				return nil, apperr.New(apperr.InvalidRequest, "kiro: invalid request: max_tokens is required")
+			}
+			if _, ok := pydanticInteger(probe["max_tokens"]); !ok {
+				return nil, apperr.New(apperr.InvalidRequest, "kiro: invalid request: max_tokens must be an integer")
 			}
 		}
 	}

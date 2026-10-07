@@ -509,6 +509,22 @@ func (s *responseState) toolEvent(d object) error {
 	}
 	return nil
 }
+func cacheTokens(v any) (int, bool) {
+	switch x := v.(type) {
+	case bool:
+		if x {
+			return 1, true
+		}
+		return 0, true
+	case json.Number:
+		f, err := x.Float64()
+		if err == nil && f >= -(1<<40) && f <= 1<<40 {
+			return int(f), true
+		}
+	}
+	return 0, false
+}
+
 func (s *responseState) updateUsage(d object) {
 	// Credits, percentages, and fractions are not absolute token counts.
 	for _, key := range []string{"inputTokens", "inputTokenCount", "input_tokens", "prompt_tokens"} {
@@ -525,19 +541,16 @@ func (s *responseState) updateUsage(d object) {
 			break
 		}
 	}
-	// Prompt-cache metering is forwarded verbatim (streaming_anthropic.py).
-	for _, key := range []string{"cacheReadInputTokens", "cache_read_input_tokens"} {
-		if n, ok := absoluteTokens(d[key]); ok {
+	for _, key := range []string{"cache_read_input_tokens", "cacheReadInputTokens"} {
+		if n, ok := cacheTokens(d[key]); ok {
 			s.cacheRead = n
 			s.cacheReadAbs = true
-			break
 		}
 	}
-	for _, key := range []string{"cacheCreationInputTokens", "cache_creation_input_tokens"} {
-		if n, ok := absoluteTokens(d[key]); ok {
+	for _, key := range []string{"cache_creation_input_tokens", "cacheCreationInputTokens"} {
+		if n, ok := cacheTokens(d[key]); ok {
 			s.cacheCreation = n
 			s.cacheCreateAbs = true
-			break
 		}
 	}
 }
@@ -983,6 +996,7 @@ func (s *responseState) finishStream() {
 		s.send("message_delta", object{"type": "message_delta", "delta": object{"stop_reason": anthropic, "stop_sequence": s.sequenceValue()}, "usage": s.anthropicUsage()})
 		s.send("message_stop", object{"type": "message_stop"})
 	} else {
+		delta := object{}
 		if len(s.finalTools) > 0 {
 			// streaming_openai.py:340-368: 工具调用收尾前聚合为单个
 			// tool_calls chunk(去重后的 finalTools),index 按序编号。
@@ -990,7 +1004,14 @@ func (s *responseState) finishStream() {
 			for i, ft := range s.finalTools {
 				toolCalls = append(toolCalls, object{"index": i, "id": ft.id, "type": "function", "function": object{"name": ft.name, "arguments": ft.args}})
 			}
-			s.send("", s.chunk(object{"tool_calls": toolCalls}, nil))
+			delta["tool_calls"] = toolCalls
+		}
+		if s.options.policyMode != "" && !s.sentRole {
+			delta["role"], delta["content"] = "assistant", ""
+			s.sentRole = true
+		}
+		if len(delta) > 0 {
+			s.send("", s.chunk(delta, nil))
 		}
 		// streaming_openai.py:396-411: finish_reason 与 usage 同一收尾帧,
 		// 恒发,不看 stream_options。

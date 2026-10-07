@@ -2,8 +2,12 @@ package upmodels
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -33,6 +37,31 @@ func kiroAccount(base string) account.Account {
 
 func kiroTestHeaders(_ context.Context, _ provider.Spec, acc account.Account) (map[string]string, error) {
 	return kiro.Headers("live-token", acc.Credential.ProfileARN), nil
+}
+
+func TestKiroListRetryClassification(t *testing.T) {
+	for _, cause := range []error{
+		&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}},
+		x509.UnknownAuthorityError{},
+		x509.HostnameError{Certificate: &x509.Certificate{}, Host: "invalid"},
+		x509.CertificateInvalidError{Cert: &x509.Certificate{}},
+		tls.RecordHeaderError{},
+	} {
+		wrapped := &net.OpError{Op: "dial", Net: "tcp", Err: cause}
+		if kiroRetryable(wrapped, 0) {
+			t.Errorf("TLS error retried: %T", cause)
+		}
+	}
+	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF, &net.DNSError{Err: "temporary", IsTemporary: true}} {
+		if !kiroRetryable(err, 0) {
+			t.Errorf("network error not retried: %v", err)
+		}
+	}
+	for status, want := range map[int]bool{200: false, 401: false, 429: true, 500: true, 503: true} {
+		if kiroRetryable(nil, status) != want {
+			t.Errorf("status=%d retry=%v", status, !want)
+		}
+	}
 }
 
 func TestKiroListAuthenticationPaginationAndRefresh(t *testing.T) {

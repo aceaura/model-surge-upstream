@@ -1336,6 +1336,202 @@ func TestRound18Fixes(t *testing.T) {
 	})
 }
 
+func TestRound21StrictEmptyRole(t *testing.T) {
+	s := newResponseState(requestOptions{protocol: "openai", stream: true, policyMode: "none", forbidTools: true})
+	var chunks []object
+	s.emit = func(_ string, chunk object) { chunks = append(chunks, chunk) }
+	if err := s.finalize(); err != nil {
+		t.Fatal(err)
+	}
+	s.finishStream()
+	if len(chunks) != 2 {
+		t.Fatalf("chunks=%v", chunks)
+	}
+	first := obj(obj(list(chunks[0]["choices"])[0])["delta"])
+	if first["role"] != "assistant" || first["content"] != "" {
+		t.Fatalf("first delta=%v", first)
+	}
+}
+
+func TestRound21ContentDefaults(t *testing.T) {
+	image := object{"source": object{"media_type": "image/png", "data": "aGVsbG8="}}
+	for _, tc := range []struct {
+		block object
+		kind  string
+	}{
+		{object{"text": "hi"}, "text"},
+		{object{"thinking": "reason"}, "thinking"},
+		{image, "image"},
+		{object{"source": object{"url": "https://example.invalid/image"}}, "image"},
+		{object{"id": "call", "name": "lookup", "input": "invalid"}, "tool_use"},
+		{object{"id": "call", "name": "lookup", "input": object{}}, "tool_use"},
+		{object{"id": "call", "name": "lookup"}, "server_tool_use"},
+		{object{"tool_name": "lookup"}, "tool_reference"},
+		{object{"tool_use_id": "call", "content": []any{object{"text": "result"}, object{"tool_name": "lookup"}, image}}, "tool_result"},
+		{object{"tool_use_id": "call", "content": object{"results": []any{}}}, "web_search_tool_result"},
+		{object{"text": "hi", "thinking": "reason"}, "text"},
+		{object{"text": "hi", "thinking": "reason", "signature": "sig"}, "thinking"},
+		{object{"text": "hi", "tool_name": "lookup"}, "tool_reference"},
+	} {
+		got, _, ok := anthropicBlock(tc.block, false)
+		if !ok || got["type"] != tc.kind {
+			t.Fatalf("block=%v got=%v want=%s", tc.block, got, tc.kind)
+		}
+	}
+	for _, block := range []object{{"foo": "bar"}, {"type": nil, "text": "hi"}, {"text": true}, {"source": object{"data": "bad"}}} {
+		if got, _, ok := anthropicBlock(block, false); ok {
+			t.Fatalf("invalid untyped block accepted: %v => %v", block, got)
+		}
+	}
+	m := object{"role": "user", "content": []any{object{"text": "hi"}, image}}
+	parsed, err := parseMessage(m, "anthropic")
+	if err != nil || parsed.text != "hi" || len(parsed.images) != 1 || obj(obj(parsed.images[0])["source"])["bytes"] != "aGVsbG8=" {
+		t.Fatalf("parsed=%+v err=%v", parsed, err)
+	}
+	m = object{"role": "user", "content": []any{object{"tool_use_id": "call", "content": []any{object{"text": "result"}, object{"tool_name": "lookup"}, image}}}}
+	parsed, err = parseMessage(m, "anthropic")
+	if err != nil || len(parsed.results) != 1 || len(parsed.images) != 1 || str(obj(list(obj(parsed.results[0])["content"])[0])["text"]) != "result" {
+		t.Fatalf("parsed=%+v err=%v", parsed, err)
+	}
+	for _, tc := range []struct {
+		system []any
+		want   string
+	}{
+		{[]any{object{"text": "first"}, object{"text": "second"}}, "first\nsecond"},
+		{[]any{object{"text": "first"}, object{"type": "unknown", "text": "second"}}, ""},
+		{[]any{object{"type": "text", "text": "first"}, object{"text": "second", "cache_control": false}}, "first"},
+	} {
+		got, err := systemPromptText(tc.system)
+		if err != nil || got != tc.want {
+			t.Fatalf("system=%v got=%q err=%v", tc.system, got, err)
+		}
+	}
+	for _, protocol := range []string{"anthropic", "count_tokens"} {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": []any{object{"text": "hello"}}}}}
+		_, defaults := convert(t, root, protocol)
+		root["messages"] = []any{object{"role": "user", "content": []any{object{"type": "text", "text": "hello"}}}}
+		_, explicit := convert(t, root, protocol)
+		if defaults.estimateParts != explicit.estimateParts {
+			t.Fatalf("default estimate=%v explicit=%v", defaults.estimateParts, explicit.estimateParts)
+		}
+	}
+}
+
+func TestRound21IntegerCoercion(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  string
+	}{
+		{true, "1"}, {false, "0"}, {json.Number("16.0"), "16"}, {json.Number("1e2"), "100"},
+		{"16.00", "16"}, {"+16", "16"}, {"1_6", "16"}, {"0__16", "16"}, {"0-16", "-16"},
+		{"-0__16", "-16"}, {"\u00a016\u00a0", "16"}, {"9223372036854775808", "9223372036854775808"},
+		{json.Number("9223372036854775808"), "9223372036854775808"},
+	} {
+		got, ok := pydanticInteger(tc.value)
+		if !ok || got.String() != tc.want {
+			t.Fatalf("value=%v got=%v ok=%v want=%s", tc.value, got, ok, tc.want)
+		}
+	}
+	for _, value := range []any{"1e2", "16.", "16.1", "1__6", "16.0_0", "_16", "0_", "0+16", "+-16", "", nil, []any{}, json.Number("1.5"), json.Number("9223372036854775808.0")} {
+		if _, ok := pydanticInteger(value); ok {
+			t.Errorf("invalid integer accepted: %v", value)
+		}
+	}
+	for _, size := range []int{4300, 4301} {
+		if _, ok := pydanticInteger(strings.Repeat("9", size)); ok != (size == 4300) {
+			t.Errorf("integer digit boundary=%d accepted=%v", size, ok)
+		}
+	}
+	for _, key := range []string{"n", "max_tokens", "max_completion_tokens", "seed", "top_logprobs"} {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, key: "1e2"}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "openai", ""); err == nil {
+			t.Errorf("OpenAI %s accepted exponent string", key)
+		}
+		root[key] = "1_6.00"
+		convert(t, root, "openai")
+	}
+}
+
+func TestRound21ToolDefinitions(t *testing.T) {
+	for _, tool := range []any{
+		1, "bad", nil,
+		object{"function": "bad"},
+		object{"function": object{}},
+		object{"function": object{"name": 1}},
+		object{"function": object{"name": "lookup", "description": true}},
+		object{"function": object{"name": "lookup", "parameters": []any{}}},
+		object{"name": 1},
+		object{"name": "lookup", "description": 1},
+		object{"name": "lookup", "input_schema": "bad"},
+		object{"type": "custom", "function": object{"name": "lookup", "parameters": 1}},
+	} {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, "tools": []any{tool}}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "openai", ""); err == nil {
+			t.Errorf("invalid OpenAI tool accepted: %v", tool)
+		}
+	}
+	for _, key := range []string{"description", "type", "max_uses", "allowed_domains", "blocked_domains", "user_location"} {
+		tool := object{"name": "lookup", "input_schema": object{}, key: "invalid"}
+		if key == "description" || key == "type" {
+			tool[key] = true
+		}
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, "tools": []any{tool}}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "anthropic", ""); err == nil {
+			t.Errorf("invalid Anthropic tool accepted: %v", tool)
+		}
+	}
+	for _, tool := range []object{{"type": "", "name": "lookup"}, {"type": "custom", "name": "lookup"}, {}} {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, "tools": []any{tool}}
+		_, opts := convert(t, root, "openai")
+		if len(opts.allowedTools) != 0 {
+			t.Fatalf("skipped tool retained: %v", tool)
+		}
+	}
+	root := object{"model": "model", "messages": []any{object{"role": "user", "content": "hi"}}, "tools": []any{object{"name": "", "description": nil, "input_schema": nil}}}
+	_, opts := convert(t, root, "openai")
+	if !opts.allowedTools[""] {
+		t.Fatal("empty flat tool name discarded")
+	}
+}
+
+func TestRound21CacheUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		data               object
+		read, create       int
+		hasRead, hasCreate bool
+	}{
+		{"fraction", object{"cache_read_input_tokens": json.Number("7.9"), "cache_creation_input_tokens": json.Number("3.0")}, 7, 3, true, true},
+		{"boolean", object{"cacheReadInputTokens": true, "cacheCreationInputTokens": false}, 1, 0, true, true},
+		{"negative", object{"cacheReadInputTokens": json.Number("-2.9"), "cacheCreationInputTokens": json.Number("-1")}, -2, -1, true, true},
+		{"camel wins", object{"cache_read_input_tokens": json.Number("5"), "cacheReadInputTokens": json.Number("7"), "cache_creation_input_tokens": json.Number("4"), "cacheCreationInputTokens": json.Number("6")}, 7, 6, true, true},
+		{"invalid camel", object{"cache_read_input_tokens": json.Number("5"), "cacheReadInputTokens": "7", "cacheCreationInputTokens": nil}, 5, 0, true, false},
+		{"invalid", object{"cacheReadInputTokens": "7", "cacheCreationInputTokens": []any{}}, 0, 0, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: "anthropic", stream: true})
+			if err := s.accept(wireEvent{kind: "usageEvent", data: object{"usage": tc.data}}); err != nil {
+				t.Fatal(err)
+			}
+			if s.cacheRead != tc.read || s.cacheCreation != tc.create || s.cacheReadAbs != tc.hasRead || s.cacheCreateAbs != tc.hasCreate {
+				t.Fatalf("cache=%d/%d present=%v/%v", s.cacheRead, s.cacheCreation, s.cacheReadAbs, s.cacheCreateAbs)
+			}
+			u := s.anthropicUsage()
+			if _, ok := u["cache_read_input_tokens"]; ok != tc.hasRead {
+				t.Fatalf("usage=%v", u)
+			}
+			if _, ok := u["cache_creation_input_tokens"]; ok != tc.hasCreate {
+				t.Fatalf("usage=%v", u)
+			}
+		})
+	}
+	for _, value := range []any{true, json.Number("7.9"), json.Number("-1"), "7"} {
+		if _, ok := absoluteTokens(value); ok {
+			t.Fatalf("absolute token boundary changed for %v", value)
+		}
+	}
+}
+
 func TestRound20ParserFixes(t *testing.T) {
 	t.Run("false followup preserves content", func(t *testing.T) {
 		for _, value := range []any{nil, false, json.Number("0"), "", []any{}, object{}, true, "yes"} {

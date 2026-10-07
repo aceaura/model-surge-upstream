@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -308,7 +309,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			}
 		}
 		if v := root["top_k"]; v != nil {
-			if f, ok := pydanticFloat(v); !ok || f < 0 || f != float64(int64(f)) {
+			if n, ok := pydanticInteger(v); !ok || n.Sign() < 0 {
 				return fail(fmt.Errorf("top_k must be a non-negative integer"))
 			}
 		}
@@ -362,7 +363,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		for _, key := range []string{"n", "max_tokens", "max_completion_tokens", "top_logprobs", "seed"} {
 			if v := root[key]; v != nil {
-				if f, ok := pydanticFloat(v); !ok || f != float64(int64(f)) {
+				if _, ok := pydanticInteger(v); !ok {
 					return fail(fmt.Errorf("%s must be an integer", key))
 				}
 			}
@@ -434,7 +435,65 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	var toolNames []string
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
+		if t == nil {
+			return fail(fmt.Errorf("tool definitions must be objects"))
+		}
+		for _, key := range []string{"description", "type"} {
+			if value := t[key]; value != nil {
+				if _, ok := value.(string); !ok {
+					return fail(fmt.Errorf("tool %s must be a string", key))
+				}
+			}
+		}
+		if value := t["input_schema"]; value != nil && obj(value) == nil {
+			return fail(fmt.Errorf("tool input_schema must be an object"))
+		}
+		if protocol == "anthropic" {
+			if value := t["max_uses"]; value != nil {
+				if _, ok := pydanticInteger(value); !ok {
+					return fail(fmt.Errorf("tool max_uses must be an integer"))
+				}
+			}
+			for _, key := range []string{"allowed_domains", "blocked_domains"} {
+				if value := t[key]; value != nil {
+					items, ok := value.([]any)
+					if !ok {
+						return fail(fmt.Errorf("tool %s must be a list of strings", key))
+					}
+					for _, item := range items {
+						if _, ok := item.(string); !ok {
+							return fail(fmt.Errorf("tool %s must be a list of strings", key))
+						}
+					}
+				}
+			}
+			if value := t["user_location"]; value != nil && obj(value) == nil {
+				return fail(fmt.Errorf("tool user_location must be an object"))
+			}
+		}
 		if protocol == "openai" {
+			if value := t["name"]; value != nil {
+				if _, ok := value.(string); !ok {
+					return fail(fmt.Errorf("tool name must be a string"))
+				}
+			}
+			if value := t["function"]; value != nil {
+				fn := obj(value)
+				if fn == nil {
+					return fail(fmt.Errorf("tool function must be an object"))
+				}
+				if _, ok := fn["name"].(string); !ok {
+					return fail(fmt.Errorf("tool function name is required"))
+				}
+				if desc := fn["description"]; desc != nil {
+					if _, ok := desc.(string); !ok {
+						return fail(fmt.Errorf("tool function description must be a string"))
+					}
+				}
+				if params := fn["parameters"]; params != nil && obj(params) == nil {
+					return fail(fmt.Errorf("tool function parameters must be an object"))
+				}
+			}
 			// models_openai.py:117: type 为 str(缺省 "function"),pydantic
 			// v2 lax 不强迫非字符串与 null,整请求 422;字符串非 function
 			// 的条目由 converters_openai.py:280 跳过。
@@ -449,7 +508,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			}
 			if fn := obj(t["function"]); fn != nil {
 				t = fn
-			} else if str(t["name"]) == "" {
+			} else if t["name"] == nil {
 				continue
 			}
 		}
@@ -462,16 +521,12 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		t := obj(v)
 		flat := false
 		if protocol == "openai" {
-			// converters_openai.py:278-300: 非法工具条目 warning 跳过而非
-			// 整请求拒绝:type!="function" 跳过;无 function 且无 name 跳过。
-			if typ := str(t["type"]); typ != "" && typ != "function" {
+			if typ, has := t["type"]; has && str(typ) != "function" {
 				continue
 			}
 			if fn := obj(t["function"]); fn != nil {
 				t = fn
-			} else if str(t["name"]) != "" {
-				// converters_openai.py:290-296: Cursor 风格扁平定义
-				// {name,description,input_schema},无 function 包裹。
+			} else if t["name"] != nil {
 				flat = true
 			} else {
 				continue
@@ -1029,18 +1084,207 @@ func systemPromptText(v any) (string, error) {
 		return "", fmt.Errorf("system must be a string or a list of content blocks")
 	}
 	parts := []string{}
+	typed := true
 	for _, v := range a {
 		b := obj(v)
 		if b == nil {
-			// pydantic 联合类型的两个列表分支都只收字典项,非对象项 422。
 			return "", fmt.Errorf("system blocks must be objects")
 		}
-		if str(b["type"]) == "text" {
+		if _, ok := b["text"].(string); !ok {
+			typed = false
+		}
+		if typ, has := b["type"]; has && typ != "text" {
+			typed = false
+		}
+		if cc := b["cache_control"]; cc != nil && obj(cc) == nil {
+			typed = false
+		}
+	}
+	for _, v := range a {
+		b := obj(v)
+		if typed || str(b["type"]) == "text" {
 			parts = append(parts, str(b["text"]))
 		}
 	}
 	return strings.Join(parts, "\n"), nil
 }
+func anthropicImageSource(src object) (object, int, bool) {
+	for _, kind := range []string{"base64", "url"} {
+		if typ, has := src["type"]; has && typ != kind {
+			continue
+		}
+		keys := []string{"media_type", "data"}
+		if kind == "url" {
+			keys = []string{"url"}
+		}
+		out, score, valid := object{"type": kind}, 0, true
+		if _, has := src["type"]; has {
+			score += 2
+		}
+		for _, key := range keys {
+			if _, ok := src[key].(string); !ok {
+				valid = false
+				break
+			}
+			out[key] = src[key]
+			score += 2
+		}
+		if valid {
+			return out, score, true
+		}
+	}
+	return nil, 0, false
+}
+
+func anthropicBlock(b object, nested bool) (object, int, bool) {
+	var best object
+	bestScore := -1
+	for _, kind := range []string{"text", "thinking", "image", "tool_use", "tool_result", "tool_reference", "server_tool_use", "web_search_tool_result", "unknown"} {
+		if nested && kind != "text" && kind != "image" && kind != "tool_reference" {
+			continue
+		}
+		if typ, has := b["type"]; has {
+			if _, ok := typ.(string); !ok || (kind != "unknown" && typ != kind) {
+				continue
+			}
+		} else if kind == "unknown" {
+			continue
+		}
+		required, optional := []string{}, []string{}
+		extra := false
+		switch kind {
+		case "text":
+			required = []string{"text"}
+		case "thinking":
+			required, optional = []string{"thinking"}, []string{"signature"}
+		case "image":
+			required = []string{"source"}
+		case "tool_use":
+			required = []string{"id", "name", "input"}
+		case "tool_result":
+			required, optional, extra = []string{"tool_use_id"}, []string{"content", "is_error"}, true
+		case "tool_reference":
+			required, extra = []string{"tool_name"}, true
+		case "server_tool_use":
+			required, optional, extra = []string{"id", "name"}, []string{"input"}, true
+		case "web_search_tool_result":
+			required, optional, extra = []string{"tool_use_id"}, []string{"content"}, true
+		case "unknown":
+			extra = true
+		}
+		out, known := object{"type": kind}, map[string]bool{"type": true}
+		score, valid := 0, true
+		if typ, has := b["type"]; has {
+			out["type"] = typ
+			score += 2
+		}
+		for _, key := range required {
+			if _, has := b[key]; !has {
+				valid = false
+			}
+		}
+		for _, key := range append(required, optional...) {
+			known[key] = true
+			value, has := b[key]
+			if !has {
+				continue
+			}
+			score += 2
+			switch key {
+			case "source":
+				var sourceScore int
+				var ok bool
+				value, sourceScore, ok = anthropicImageSource(obj(value))
+				valid = valid && ok
+				score += sourceScore
+			case "input":
+				if kind == "tool_use" {
+					if text, ok := value.(string); ok {
+						value, _ = decodeObject(text)
+						if obj(value) == nil {
+							value = object{}
+						}
+					}
+				}
+				valid = valid && obj(value) != nil
+			case "content":
+				if value == nil {
+					break
+				}
+				if _, ok := value.(string); ok {
+					break
+				}
+				items, ok := value.([]any)
+				if kind == "web_search_tool_result" {
+					if obj(value) != nil {
+						break
+					}
+					for _, item := range items {
+						ok = ok && obj(item) != nil
+					}
+					valid = valid && ok
+					break
+				}
+				values := make([]any, 0, len(items))
+				for _, item := range items {
+					block, blockScore, blockOK := anthropicBlock(obj(item), true)
+					ok = ok && blockOK
+					score += blockScore
+					values = append(values, block)
+				}
+				valid = valid && ok
+				value = values
+			case "is_error":
+				if value != nil {
+					var ok bool
+					value, ok = pydanticBool(value)
+					valid = valid && ok
+				}
+			default:
+				_, ok := value.(string)
+				valid = valid && ok
+			}
+			out[key] = value
+		}
+		if !valid {
+			continue
+		}
+		if extra {
+			// Smart-union scoring weights declared fields above preserved extras.
+			for key, value := range b {
+				if !known[key] {
+					out[key] = value
+					score++
+				}
+			}
+		}
+		switch kind {
+		case "thinking":
+			if _, has := out["signature"]; !has {
+				out["signature"] = ""
+			}
+		case "tool_result":
+			for _, key := range []string{"content", "is_error"} {
+				if _, has := out[key]; !has {
+					out[key] = nil
+				}
+			}
+		case "server_tool_use":
+			if _, has := out["input"]; !has {
+				out["input"] = object{}
+			}
+		case "web_search_tool_result":
+			if _, has := out["content"]; !has {
+				out["content"] = nil
+			}
+		}
+		if score > bestScore {
+			best, bestScore = out, score
+		}
+	}
+	return best, bestScore, best != nil
+}
+
 func parseMessage(m object, protocol string) (message, error) {
 	result := message{role: str(m["role"])}
 	// models_anthropic.py:86: content 必填,null 与缺省同样 422;
@@ -1090,7 +1334,7 @@ func parseMessage(m object, protocol string) (message, error) {
 			result.text = pythonicString(m["content"])
 			blocks = nil
 		}
-		for _, v := range blocks {
+		for i, v := range blocks {
 			if s, ok := v.(string); ok {
 				// extract_text_content: openai 列表里的裸字符串直接拼接;
 				// anthropic 的 ContentBlock 联合类型不含字符串项,422。
@@ -1107,6 +1351,14 @@ func parseMessage(m object, protocol string) (message, error) {
 					return result, fmt.Errorf("content blocks must be objects")
 				}
 				continue
+			}
+			if protocol == "anthropic" {
+				var ok bool
+				b, _, ok = anthropicBlock(b, false)
+				if !ok {
+					return result, fmt.Errorf("content block does not match a supported type")
+				}
+				blocks[i] = b
 			}
 			switch str(b["type"]) {
 			case "text":
@@ -1196,19 +1448,8 @@ func parseMessage(m object, protocol string) (message, error) {
 				result.images = append(result.images, images...)
 				result.results = append(result.results, toolResult(id, text))
 			default:
-				// extract_text_content: openai 未知块带 text 键则收割,
-				// 否则跳过。
 				if protocol == "openai" {
 					result.text += str(b["text"])
-					continue
-				}
-				// extensions/server_tool_blocks.py:81-98(app_entry 恒装):
-				// UnknownContentBlock 兜底接受任何带字符串 type 的块
-				// (server_tool_use/web_search_tool_result 等),转换层只读
-				// text/tool_use/tool_result,未知块静默忽略;type 缺失或非
-				// 字符串仍 422。
-				if _, ok := b["type"].(string); !ok {
-					return result, fmt.Errorf("content block type is required")
 				}
 			}
 		}
@@ -1333,6 +1574,66 @@ func pythonicString(v any) string {
 		return x
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+var integerString = regexp.MustCompile(`^-?[0-9]+(?:_[0-9]+)*$`)
+
+func pydanticInteger(v any) (*big.Int, bool) {
+	s := ""
+	switch x := v.(type) {
+	case bool:
+		if x {
+			return big.NewInt(1), true
+		}
+		return big.NewInt(0), true
+	case json.Number:
+		s = x.String()
+		if strings.ContainsAny(s, ".eE") {
+			f, err := x.Float64()
+			if err != nil || f < -9223372036854775808.0 || f >= 9223372036854775808.0 || f != float64(int64(f)) {
+				return nil, false
+			}
+			return big.NewInt(int64(f)), true
+		}
+	case string:
+		s = strings.TrimSpace(x)
+		negative := strings.HasPrefix(s, "-")
+		if strings.HasPrefix(s, "+") || negative {
+			s = s[1:]
+			if strings.HasPrefix(s, "+") || strings.HasPrefix(s, "-") {
+				return nil, false
+			}
+		}
+		if whole, fraction, has := strings.Cut(s, "."); has {
+			if fraction == "" || strings.Trim(fraction, "0") != "" {
+				return nil, false
+			}
+			s = whole
+		}
+		if strings.HasPrefix(s, "0") {
+			if strings.HasSuffix(s, "_") {
+				return nil, false
+			}
+			s = strings.TrimLeft(s, "0_")
+			if s == "" {
+				s = "0"
+			}
+		}
+		if negative {
+			s = "-" + s
+		}
+	default:
+		return nil, false
+	}
+	if !integerString.MatchString(s) {
+		return nil, false
+	}
+	s = strings.ReplaceAll(s, "_", "")
+	if len(strings.TrimPrefix(s, "-")) > 4300 {
+		return nil, false
+	}
+	n, ok := new(big.Int).SetString(s, 10)
+	return n, ok
 }
 
 func pydanticBool(v any) (bool, bool) {
