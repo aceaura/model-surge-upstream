@@ -240,11 +240,18 @@ void main() {
         before,
       );
       final panel = tester.getRect(_key('panel'));
-      expect(panel.width, lessThanOrEqualTo(520));
-      expect(panel.right, tester.getRect(_key('fetch')).right);
+      expect(panel.width, lessThanOrEqualTo(480));
+      expect(panel.center, const Offset(450, 350));
+      expect(tester.widget<ListView>(_key('list')).itemExtent, 36);
+      expect(
+        tester.getTopLeft(_option('QWEN-Max')).dy -
+            tester.getTopLeft(_option('manual-model')).dy,
+        36,
+      );
 
       await tester.enterText(_key('search'), 'qwen');
       await tester.pump();
+      expect(tester.getRect(_key('panel')), panel);
       expect(_option('QWEN-Max'), findsOneWidget);
       expect(_option('claude-sonnet'), findsNothing);
       expect(find.text('找到 1 / 3 个模型'), findsOneWidget);
@@ -655,7 +662,7 @@ void main() {
   });
 
   testWidgets(
-    'bottom anchor flips upward in narrow dark viewport without overflow',
+    'bottom input still opens centered panel in narrow dark viewport',
     (tester) async {
       await _pump(
         tester,
@@ -669,12 +676,11 @@ void main() {
       );
       await _open(tester);
       final panel = tester.getRect(_key('panel'));
-      final fetch = tester.getRect(_key('fetch'));
-      expect(panel.bottom, lessThan(fetch.top));
-      expect(panel.top, greaterThanOrEqualTo(8));
-      expect(panel.left, greaterThanOrEqualTo(8));
-      expect(panel.right, lessThanOrEqualTo(312));
-      expect(panel.height, lessThanOrEqualTo(420));
+      expect(panel.center, const Offset(160, 260));
+      expect(panel.top, greaterThanOrEqualTo(16));
+      expect(panel.left, greaterThanOrEqualTo(16));
+      expect(panel.right, lessThanOrEqualTo(304));
+      expect(panel.height, lessThanOrEqualTo(440));
       expect(panel.width, lessThanOrEqualTo(288));
       expect(
         tester.getRect(find.byKey(const ValueKey('unchanged-card'))),
@@ -689,6 +695,26 @@ void main() {
       expect(_key('panel'), findsNothing);
     },
   );
+
+  testWidgets('panel recenters on resize and avoids the keyboard', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      _client((_) async => _reply(List.generate(40, (i) => 'model-$i'))),
+    );
+    await _open(tester);
+    expect(tester.getRect(_key('panel')).center, const Offset(450, 350));
+    tester.view.physicalSize = const Size(700, 500);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(_key('panel')).center, const Offset(350, 250));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 220);
+    await tester.pumpAndSettle();
+    final panel = tester.getRect(_key('panel'));
+    expect(panel.center, const Offset(350, 140));
+    expect(panel.bottom, lessThanOrEqualTo(264));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'short viewport keeps status and retry scrollable without overflow',

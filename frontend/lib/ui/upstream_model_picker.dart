@@ -31,11 +31,11 @@ class UpstreamModelPicker extends StatefulWidget {
 }
 
 class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
-  static const _rowHeight = 56.0;
-  static const _gap = 6.0;
+  static const _rowHeight = 36.0;
+  static const _headerHeight = 56.0;
+  static const _searchHeight = 36.0;
+  static const _footerHeight = 28.0;
   final _portal = OverlayPortalController();
-  final _link = LayerLink();
-  final _anchorKey = GlobalKey();
   final _tapGroup = Object();
   final _search = TextEditingController();
   final _scroll = ScrollController();
@@ -247,36 +247,30 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
         child: TapRegion(
           groupId: _tapGroup,
           onTapOutside: (_) => _close(),
-          child: CompositedTransformTarget(
-            key: _anchorKey,
-            link: _link,
-            // 不替换、不读取或写入 child 的 controller/validator。
-            // IntrinsicHeight 让按钮跟随既有单行输入高度（默认主题为 48）。
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(child: widget.child),
-                  const SizedBox(width: 8),
-                  OutlinedButton.icon(
-                    key: const ValueKey('upstream-model-fetch'),
-                    focusNode: _fetchFocus,
-                    onPressed: _canFetch && !_loading ? _fetch : null,
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: t.primarySoft,
-                      foregroundColor: t.primaryInk,
-                      disabledBackgroundColor: t.primarySoft,
-                      disabledForegroundColor: t.faint,
-                      side: BorderSide(color: t.primary.withValues(alpha: .30)),
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      minimumSize: const Size(0, 48),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    icon: const Icon(Icons.refresh_rounded, size: 16),
-                    label: const Text('获取模型'),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: widget.child),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  key: const ValueKey('upstream-model-fetch'),
+                  focusNode: _fetchFocus,
+                  onPressed: _canFetch && !_loading ? _fetch : null,
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: t.primarySoft,
+                    foregroundColor: t.primaryInk,
+                    disabledBackgroundColor: t.primarySoft,
+                    disabledForegroundColor: t.faint,
+                    side: BorderSide(color: t.primary.withValues(alpha: .30)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: const Size(0, 48),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                ],
-              ),
+                  icon: const Icon(Icons.refresh_rounded, size: 16),
+                  label: const Text('获取模型'),
+                ),
+              ],
             ),
           ),
         ),
@@ -286,70 +280,56 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
 
   Widget _buildOverlay(BuildContext context) {
     if (!_open) return const SizedBox.shrink();
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final anchor = _anchorKey.currentContext?.findRenderObject();
-        final overlay = Overlay.of(context).context.findRenderObject();
-        if (anchor is! RenderBox || overlay is! RenderBox || !anchor.hasSize) {
-          return const SizedBox.shrink();
-        }
-        final media = MediaQuery.of(context);
-        final origin = anchor.localToGlobal(Offset.zero, ancestor: overlay);
-        final rect = origin & anchor.size;
-        final left = media.padding.left + 8;
-        final right = constraints.maxWidth - media.padding.right - 8;
-        final top = media.padding.top + 8;
-        final bottom =
-            constraints.maxHeight -
-            math.max(media.padding.bottom, media.viewInsets.bottom) -
-            8;
-        final width = math.min(
-          520.0,
-          math.min(rect.width, math.max(0.0, right - left)),
-        );
-        final options = _filtered;
-        final hasSearch =
-            _listing?.queryable == true &&
-            (_listing?.models.isNotEmpty ?? false);
-        final desired = hasSearch
-            ? math.min(420.0, 168.0 + math.max(1, options.length) * _rowHeight)
-            : 252.0;
-        final below = math.max(0.0, bottom - rect.bottom - _gap);
-        final above = math.max(0.0, rect.top - top - _gap);
-        final up = below < desired && above > below;
-        final height = math.min(desired, up ? above : below);
-        if (width <= 0 || height <= 0) return const SizedBox.shrink();
-        final panelRight = rect.right.clamp(left + width, right);
-        // Follower 跟随滚动；布局时按可用空间翻转，并将右缘约束在安全视口。
-        return Stack(
-          children: [
-            Positioned(
-              left: 0,
-              top: 0,
-              child: CompositedTransformFollower(
-                link: _link,
-                showWhenUnlinked: false,
-                targetAnchor: up ? Alignment.topRight : Alignment.bottomRight,
-                followerAnchor: up ? Alignment.bottomRight : Alignment.topRight,
-                offset: Offset(panelRight - rect.right, up ? -_gap : _gap),
-                child: TapRegion(
-                  groupId: _tapGroup,
-                  onTapOutside: (_) => _close(),
-                  child: Focus(
-                    focusNode: _panelFocus,
-                    onKeyEvent: _onKey,
-                    child: SizedBox(
-                      width: width,
-                      height: height,
-                      child: _panel(context, options, hasSearch, height),
-                    ),
+    return MediaQuery.fromView(
+      view: View.of(context),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final media = MediaQuery.of(context);
+          final insets = EdgeInsets.fromLTRB(
+            media.padding.left + 16,
+            media.padding.top + 16,
+            media.padding.right + 16,
+            math.max(media.padding.bottom, media.viewInsets.bottom) + 16,
+          );
+          final width = math.min(
+            480.0,
+            math.max(0.0, constraints.maxWidth - insets.horizontal),
+          );
+          final options = _filtered;
+          final hasSearch =
+              _listing?.queryable == true &&
+              (_listing?.models.isNotEmpty ?? false);
+          final desired = hasSearch
+              ? (140.0 + _listing!.models.length * _rowHeight).clamp(
+                  240.0,
+                  440.0,
+                )
+              : 240.0;
+          final height = math.min(
+            desired,
+            math.max(0.0, constraints.maxHeight - insets.vertical),
+          );
+          if (width <= 0 || height <= 0) return const SizedBox.shrink();
+          return Padding(
+            padding: insets,
+            child: Center(
+              child: TapRegion(
+                groupId: _tapGroup,
+                onTapOutside: (_) => _close(),
+                child: Focus(
+                  focusNode: _panelFocus,
+                  onKeyEvent: _onKey,
+                  child: SizedBox(
+                    width: width,
+                    height: height,
+                    child: _panel(context, options, hasSearch, height),
                   ),
                 ),
               ),
             ),
-          ],
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -383,7 +363,7 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
         child: Column(
           children: [
             SizedBox(
-              height: math.min(compact ? 44.0 : 72.0, height * .35),
+              height: math.min(compact ? 44.0 : _headerHeight, height * .35),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Row(
@@ -431,9 +411,9 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
             ),
             if (showSearch)
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                 child: SizedBox(
-                  height: 40,
+                  height: _searchHeight,
                   child: TextField(
                     key: const ValueKey('upstream-model-search'),
                     controller: _search,
@@ -469,7 +449,7 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
               ),
             Expanded(child: _body(context, options)),
             SizedBox(
-              height: math.min(34.0, height * .15),
+              height: math.min(_footerHeight, height * .15),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   border: Border(top: BorderSide(color: t.border)),
@@ -615,6 +595,7 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
                                   style: TextStyle(
                                     fontFamily: AppConst.fontMono,
                                     fontSize: 13,
+                                    height: 1.2,
                                     fontWeight: selected
                                         ? FontWeight.w600
                                         : FontWeight.w400,
@@ -629,6 +610,7 @@ class _UpstreamModelPickerState extends State<UpstreamModelPicker> {
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontSize: 11,
+                                      height: 1.2,
                                       color: t.dim,
                                     ),
                                   ),
