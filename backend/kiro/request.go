@@ -707,10 +707,10 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				return fail(fmt.Errorf("invalid Anthropic tool_choice structure"))
 			}
 			if _, has := m["type"]; !has {
-				// Only typed extra-forbid matches inject defaults; Dict fallback keeps type missing.
-				if len(m) == 0 {
-					m["type"] = "auto"
-				} else if _, ok := m["name"].(string); ok && len(m) == 1 {
+				// pydantic smart union 实测:{} 落 Dict[str,Any] 兜底,type 缺省
+				// 不生效,parse_tool_choice_policy 拒绝;仅 {"name":...} 命中
+				// ToolChoiceTool(type 缺省 "tool")。
+				if _, ok := m["name"].(string); ok && len(m) == 1 {
 					m["type"] = "tool"
 				}
 			}

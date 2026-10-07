@@ -1547,7 +1547,9 @@ func TestRound18Fixes(t *testing.T) {
 
 func TestRound24RequestBoundaries(t *testing.T) {
 	t.Run("Anthropic tool choice defaults", func(t *testing.T) {
-		for _, tc := range []object{{}, {"name": "f"}} {
+		// 三十五轮实测更正:{} 在 pydantic smart union 落 Dict 兜底被拒绝,
+		// 只有 {"name":...} 命中 ToolChoiceTool 的 type 缺省。
+		for _, tc := range []object{{"name": "f"}} {
 			_, opts := convert(t, object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": "f", "input_schema": object{}}}, "tool_choice": tc}, "anthropic")
 			if _, named := tc["name"]; named && (opts.policyMode != "named" || opts.policyTool != "f") {
 				t.Fatalf("options=%+v", opts)
@@ -1599,7 +1601,7 @@ func TestRound25RequestToolChoice(t *testing.T) {
 		mode   string
 		bad    bool
 	}{
-		{object{}, "", false},
+		{object{}, "", true}, // 三十五轮实测:smart union 落 Dict 兜底,type=None 拒绝
 		{object{"name": "f"}, "named", false},
 		{object{"type": "auto", "extra": true}, "", false},
 		{object{"type": "none", "extra": true}, "none", false},
