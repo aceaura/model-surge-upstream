@@ -40,7 +40,13 @@ var kiroFallbackModels = []string{
 	"deepseek-3.2", "glm-5", "minimax-m2.1", "minimax-m2.5", "qwen3-coder-next",
 }
 
-func kiroFallbackReport(account string) Report {
+func (l *Lister) kiroFallbackReport(account string) Report {
+	l.mu.RLock()
+	cached, ok := l.cached[account]
+	l.mu.RUnlock()
+	if ok {
+		return cached.report
+	}
 	out := make([]Entry, 0, len(kiroFallbackModels))
 	for _, id := range kiroFallbackModels {
 		out = append(out, Entry{ID: id})
@@ -111,7 +117,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 	}
 	query := endpoint.Query()
 	query.Set("origin", "AI_EDITOR")
-	if acc.Credential.ProfileARN != "" {
+	if acc.Credential.ClientID == "" && acc.Credential.ProfileARN != "" {
 		query.Set("profileArn", acc.Credential.ProfileARN)
 	}
 	out := []Entry{}
@@ -144,7 +150,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 			resp, err := l.client.Do(req)
 			if err != nil {
 				if !kiroRetryable(err, 0) || attempt == kiroMaxAttempts-1 {
-					return kiroFallbackReport(acc.Name), nil
+					return l.kiroFallbackReport(acc.Name), nil
 				}
 				continue
 			}
@@ -152,7 +158,7 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 			resp.Body.Close()
 			if readErr != nil {
 				if attempt == kiroMaxAttempts-1 {
-					return kiroFallbackReport(acc.Name), nil
+					return l.kiroFallbackReport(acc.Name), nil
 				}
 				continue
 			}
@@ -161,30 +167,30 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 					continue
 				}
 				// account_manager.py:534-538: 拉取失败回退静态已知模型表。
-				return kiroFallbackReport(acc.Name), nil
+				return l.kiroFallbackReport(acc.Name), nil
 			}
 			if len(data) > bodyLimit {
-				return kiroFallbackReport(acc.Name), nil
+				return l.kiroFallbackReport(acc.Name), nil
 			}
 			body = data
 			break
 		}
 		if body == nil {
-			return kiroFallbackReport(acc.Name), nil
+			return l.kiroFallbackReport(acc.Name), nil
 		}
 		var payload struct {
 			Models    json.RawMessage `json:"models"`
 			NextToken string          `json:"nextToken"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil {
-			return kiroFallbackReport(acc.Name), nil
+			return l.kiroFallbackReport(acc.Name), nil
 		}
 		var models []map[string]any
 		if len(payload.Models) == 0 || string(payload.Models) == "null" {
-			return kiroFallbackReport(acc.Name), nil
+			return l.kiroFallbackReport(acc.Name), nil
 		}
 		if err := json.Unmarshal(payload.Models, &models); err != nil {
-			return kiroFallbackReport(acc.Name), nil
+			return l.kiroFallbackReport(acc.Name), nil
 		}
 		gotValid = true
 		for _, model := range parseEntries(body) {
@@ -207,9 +213,12 @@ func (l *Lister) fetchKiro(ctx context.Context, spec provider.Spec, acc account.
 		seenTokens[payload.NextToken] = true
 		query.Set("nextToken", payload.NextToken)
 	}
+	if !seenModels["auto-kiro"] {
+		out = append(out, Entry{ID: "auto-kiro"})
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	if !gotValid {
-		return kiroFallbackReport(acc.Name), nil
+		return l.kiroFallbackReport(acc.Name), nil
 	}
 	return Report{Account: acc.Name, Queryable: true, Models: out, At: time.Now().UTC()}, nil
 }

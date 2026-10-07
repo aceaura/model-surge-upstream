@@ -87,6 +87,42 @@ func TestKiroRefreshDesktopAndSSO(t *testing.T) {
 	}
 }
 
+func TestKiroRefreshExpiryBuffer(t *testing.T) {
+	for _, sso := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, field string
+			want        time.Duration
+		}{
+			{"default", "", 59 * time.Minute},
+			{"normal", `,"expiresIn":3600`, 59 * time.Minute},
+			{"short", `,"expiresIn":30`, -30 * time.Second},
+			{"zero", `,"expiresIn":0`, -time.Minute},
+		} {
+			t.Run(tc.name+map[bool]string{false: "/desktop", true: "/sso"}[sso], func(t *testing.T) {
+				acc := kiroAccount()
+				if sso {
+					acc.Credential.ClientID, acc.Credential.ClientSecret = "client", "secret"
+				}
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					io.WriteString(w, `{"accessToken":"new-token"`+tc.field+`}`)
+				}))
+				defer srv.Close()
+				store := &fakeStore{}
+				m := newManager(store, &http.Client{Transport: kiroRefreshTransport{base: srv.Client().Transport, url: srv.URL}}, TokenURL, ClientID)
+				before := time.Now().Add(tc.want)
+				if _, err := m.AccessToken(context.Background(), acc); err != nil {
+					t.Fatal(err)
+				}
+				after := time.Now().Add(tc.want)
+				expiry := store.last().Expiry
+				if expiry.Before(before) || expiry.After(after) {
+					t.Fatalf("expiry=%v range=%v..%v", expiry, before, after)
+				}
+			})
+		}
+	}
+}
+
 func TestKiroRefreshErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

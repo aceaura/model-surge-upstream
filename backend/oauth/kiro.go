@@ -67,7 +67,7 @@ func (m *Manager) refreshKiro(ctx context.Context, acc account.Account) (string,
 		AccessToken  string `json:"accessToken"`
 		RefreshToken string `json:"refreshToken"`
 		ProfileARN   string `json:"profileArn"`
-		ExpiresIn    int64  `json:"expiresIn"`
+		ExpiresIn    *int64 `json:"expiresIn"`
 	}
 	if err := json.Unmarshal(body, &data); err != nil {
 		return "", fmt.Errorf("kiro: refresh response is not valid json")
@@ -86,14 +86,10 @@ func (m *Manager) refreshKiro(ctx context.Context, acc account.Account) (string,
 		return "", fmt.Errorf("kiro: invalid refreshed credential: %w", err)
 	}
 	ttl := defaultTTL
-	if data.ExpiresIn > 0 {
-		ttl = time.Duration(data.ExpiresIn) * time.Second
-		// auth.py: expires_in 落库减 60 秒缓冲,边缘过期提前一轮续期。
-		if ttl > time.Minute {
-			ttl -= time.Minute
-		}
+	if data.ExpiresIn != nil {
+		ttl = time.Duration(*data.ExpiresIn) * time.Second
 	}
-	cred.Expiry = time.Now().UTC().Add(ttl)
+	cred.Expiry = time.Now().UTC().Add(ttl - time.Minute)
 	if err := m.store.UpdateCredential(ctx, acc.Name, cred); err != nil {
 		return "", fmt.Errorf("kiro: persist refreshed token: %w", err)
 	}

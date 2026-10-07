@@ -38,11 +38,6 @@ func kiroMeters(ctx context.Context, q *Quota, spec provider.Spec, acc account.A
 	if q.tokens == nil {
 		return nil, apperr.New(apperr.QuotaUnavailable, "kiro quota requires a token source")
 	}
-	region := kiro.Region(acc.Credential.APIRegion, acc.Credential.ProfileARN)
-	if region == "" {
-		return nil, apperr.New(apperr.InvalidRequest,
-			"kiro quota requires a credential region or profile ARN")
-	}
 	// 账号还没落 ARN 时先续期一次:续期过程回填 profileArn,重读账号拿新值。
 	if strings.TrimSpace(acc.Credential.ProfileARN) == "" {
 		if _, err := q.tokens.AccessToken(ctx, acc); err == nil {
@@ -59,6 +54,7 @@ func kiroMeters(ctx context.Context, q *Quota, spec provider.Spec, acc account.A
 	if err != nil {
 		return nil, apperr.Wrap(apperr.QuotaUnavailable, "refresh kiro access token", err)
 	}
+	region := acc.Credential.KiroAPIRegion()
 
 	var pages []map[string]any
 	nextToken := ""
@@ -131,8 +127,10 @@ func kiroPagesMeters(pages []map[string]any, now time.Time) ([]Meter, error) {
 		// ccswitch-usage-script.js: 超额状态在页面级 overageConfiguration,
 		// 上限在条目级 overageCap(WithPrecision 优先)。
 		extraDoc := map[string]any{}
-		if sub, ok := page["subscriptionInfo"]; ok && sub != nil {
-			extraDoc["subscriptionInfo"] = sub
+		for _, key := range []string{"subscriptionInfo", "userInfo"} {
+			if value := page[key]; value != nil {
+				extraDoc[key] = value
+			}
 		}
 		if oc, ok := page["overageConfiguration"].(map[string]any); ok {
 			if status, _ := oc["overageStatus"].(string); status != "" {
@@ -155,13 +153,14 @@ func kiroPagesMeters(pages []map[string]any, now time.Time) ([]Meter, error) {
 				}
 				itemReset = r
 			}
-			itemDoc := extraDoc
+			itemDoc := maps.Clone(extraDoc)
+			if enabled, ok := u["overageEnabled"].(bool); ok {
+				itemDoc["overageEnabled"] = enabled
+			}
 			if extraDoc["overageStatus"] == "ENABLED" {
 				if v, ok := numberOf(u["overageCapWithPrecision"]); ok {
-					itemDoc = maps.Clone(extraDoc)
 					itemDoc["overageCap"] = v
 				} else if v, ok := numberOf(u["overageCap"]); ok {
-					itemDoc = maps.Clone(extraDoc)
 					itemDoc["overageCap"] = v
 				}
 			}
@@ -193,12 +192,16 @@ func kiroPagesMeters(pages []map[string]any, now time.Time) ([]Meter, error) {
 				if end != nil {
 					endISO = end.Format(time.RFC3339)
 				}
-				meta, _ := json.Marshal(map[string]any{
+				metaDoc := map[string]any{
 					"subscriptionInfo": page["subscriptionInfo"],
 					"status":           g.status,
 					"expiresAt":        endISO,
 					"bonusCode":        g.bonusCode,
-				})
+				}
+				if userInfo := page["userInfo"]; userInfo != nil {
+					metaDoc["userInfo"] = userInfo
+				}
+				meta, _ := json.Marshal(metaDoc)
 				if m, ok := kiroAllowanceMeter(g.body, g.suffix, nil, string(meta)); ok {
 					out = append(out, m)
 				}

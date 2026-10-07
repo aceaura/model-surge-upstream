@@ -1336,6 +1336,77 @@ func TestRound18Fixes(t *testing.T) {
 	})
 }
 
+func TestRound20ParserFixes(t *testing.T) {
+	t.Run("false followup preserves content", func(t *testing.T) {
+		for _, value := range []any{nil, false, json.Number("0"), "", []any{}, object{}, true, "yes"} {
+			s := newResponseState(requestOptions{protocol: "anthropic"})
+			if err := s.accept(wireEvent{kind: "assistantResponseEvent", data: object{"content": "Hello", "followupPrompt": value}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			want := "Hello"
+			if truthy(value) {
+				want = ""
+			}
+			if s.fullText.String() != want {
+				t.Fatalf("followup=%v content=%q want=%q", value, s.fullText.String(), want)
+			}
+		}
+	})
+	t.Run("start and standalone stop use truthiness", func(t *testing.T) {
+		for _, stop := range []any{true, json.Number("1"), "yes", []any{true}, object{"x": true}} {
+			for _, standalone := range []bool{false, true} {
+				s := newResponseState(requestOptions{protocol: "openai"})
+				start := object{"name": "lookup", "toolUseId": "truthy", "input": `{"x":1}`}
+				if !standalone {
+					start["stop"] = stop
+				}
+				if err := s.accept(wireEvent{kind: "toolUseEvent", data: start}); err != nil {
+					t.Fatal(err)
+				}
+				if standalone {
+					if err := s.accept(wireEvent{kind: "toolUseEvent", data: object{"stop": stop}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if s.tool != nil {
+					t.Fatalf("stop=%v standalone=%v did not end tool", stop, standalone)
+				}
+				if err := s.accept(wireEvent{kind: "toolUseEvent", data: object{"input": `{"y":2}`}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.finalize(); err != nil {
+					t.Fatal(err)
+				}
+				if len(s.finalTools) != 1 || s.finalTools[0].args != `{"x": 1}` {
+					t.Fatalf("tools=%v", s.finalTools)
+				}
+			}
+		}
+	})
+	t.Run("continuation stop ignored", func(t *testing.T) {
+		s := newResponseState(requestOptions{protocol: "openai"})
+		for _, data := range []object{
+			{"name": "lookup", "toolUseId": "continued", "input": ""},
+			{"input": `{"x":`, "stop": true},
+			{"input": `1}`},
+			{"stop": true},
+		} {
+			if err := s.accept(wireEvent{kind: "toolUseEvent", data: data}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.finalize(); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.finalTools) != 1 || s.finalTools[0].args != `{"x": 1}` || s.finalTools[0].invalid {
+			t.Fatalf("tools=%v", s.finalTools)
+		}
+	})
+}
+
 func TestRound19Fixes(t *testing.T) {
 	t.Run("strict validates deduplicated tools", func(t *testing.T) {
 		for _, firstName := range []string{"lookup", "forbidden"} {

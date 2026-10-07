@@ -464,7 +464,8 @@ func (s *responseState) finishTool() error {
 	return nil
 }
 func (s *responseState) toolEvent(d object) error {
-	if _, hasName := d["name"]; hasName {
+	_, hasName := d["name"]
+	if hasName {
 		// parsers.py:330/376-401: name 键出现即开启新工具,空名同样建
 		// 工具(参考实现不校验,交由上游判定)。
 		if s.tool != nil {
@@ -503,7 +504,7 @@ func (s *responseState) toolEvent(d object) error {
 		}
 		s.tool.args.WriteString(piece)
 	}
-	if stop, _ := d["stop"].(bool); stop {
+	if hasName && truthy(d["stop"]) {
 		return s.finishTool()
 	}
 	return nil
@@ -601,7 +602,7 @@ func (s *responseState) accept(e wireEvent) error {
 		}
 		s.stopSequence = str(d["stopSequence"])
 	}
-	if _, ok := d["followupPrompt"]; ok {
+	if truthy(d["followupPrompt"]) {
 		return nil
 	}
 	if _, has := d["name"]; has {
@@ -610,7 +611,7 @@ func (s *responseState) accept(e wireEvent) error {
 	if _, ok := d["input"]; ok {
 		return s.toolEvent(d)
 	}
-	if stop, _ := d["stop"].(bool); stop {
+	if truthy(d["stop"]) {
 		if s.tool == nil {
 			return nil // parsers.py:421-427: 无开启工具的 stop 帧静默忽略
 		}

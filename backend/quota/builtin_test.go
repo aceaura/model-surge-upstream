@@ -160,8 +160,8 @@ func TestBuiltinKiroPaginatesAndGrants(t *testing.T) {
 	var pages int64
 	var sawNextToken bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host := r.Header.Get("X-Original-Host"); host != "q.us-east-1.amazonaws.com" {
-			t.Errorf("host = %q, region should derive from the profile ARN", host)
+		if host := r.Header.Get("X-Original-Host"); host != "q.ap-northeast-1.amazonaws.com" {
+			t.Errorf("host = %q, explicit API region should override the profile ARN", host)
 		}
 		if r.Header.Get("Authorization") != "Bearer at-kiro" {
 			t.Errorf("auth = %q", r.Header.Get("Authorization"))
@@ -180,7 +180,8 @@ func TestBuiltinKiroPaginatesAndGrants(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"usageBreakdownList":[{"displayName":"Agentic requests",` +
 				`"usageLimitWithPrecision":1000,"currentUsageWithPrecision":250,` +
-				`"overageCapWithPrecision":2000}],` +
+				`"overageCapWithPrecision":2000,"overageEnabled":true}],` +
+				`"userInfo":{"email":"test@example.com","provider":"IAM"},` +
 				`"nextToken":"t2","nextDateReset":1893456000,"subscriptionInfo":{"type":"PRO"},` +
 				`"overageConfiguration":{"overageStatus":"ENABLED"}}`))
 			return
@@ -189,7 +190,7 @@ func TestBuiltinKiroPaginatesAndGrants(t *testing.T) {
 			sawNextToken = true
 		}
 		_, _ = w.Write([]byte(`{"usageBreakdownList":[{"displayName":"Agentic requests",` +
-			`"usageLimit":500,"currentUsage":100,` +
+			`"usageLimit":500,"currentUsage":100,"overageEnabled":false,` +
 			`"freeTrialInfo":{"freeTrialStatus":"ACTIVE","freeTrialExpiry":"2099-12-01T00:00:00Z",` +
 			`"usageLimitWithPrecision":50,"currentUsageWithPrecision":5}}]}`))
 	}))
@@ -200,6 +201,7 @@ func TestBuiltinKiroPaginatesAndGrants(t *testing.T) {
 		Kind:         provider.CredKiroRefresh,
 		RefreshToken: "rt-kiro",
 		ProfileARN:   "arn:aws:codewhisperer:us-east-1:123456789012:profile/ABC",
+		APIRegion:    "ap-northeast-1",
 	}
 	q := builtinQuota(srv.URL, a)
 	tokens := &fakeTokens{token: "at-kiro"}
@@ -227,6 +229,12 @@ func TestBuiltinKiroPaginatesAndGrants(t *testing.T) {
 	}
 	if !strings.Contains(main.Extra, `"overageStatus":"ENABLED"`) || !strings.Contains(main.Extra, `"overageCap":2000`) {
 		t.Errorf("page1 extra = %q, overage status and cap should ride along", main.Extra)
+	}
+	if !strings.Contains(main.Extra, `"overageEnabled":true`) || !strings.Contains(main.Extra, `"email":"test@example.com"`) || !strings.Contains(main.Extra, `"provider":"IAM"`) {
+		t.Errorf("page1 extra = %q, userInfo and per-resource overage should ride along", main.Extra)
+	}
+	if !strings.Contains(got.Meters[1].Extra, `"overageEnabled":false`) || strings.Contains(got.Meters[1].Extra, "test@example.com") {
+		t.Errorf("page2 extra = %q, metadata must not bleed between pages", got.Meters[1].Extra)
 	}
 	if main.Label != "本月" {
 		t.Errorf("page1 label = %q, 月度窗标签应与其他供应商统一", main.Label)

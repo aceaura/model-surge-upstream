@@ -1,6 +1,8 @@
 package kiro
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -173,6 +175,111 @@ func TestNetworkErrorNotRetryable(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("calls=%d", calls.Load())
+	}
+}
+
+func TestWrappedTLSFailureNotRetried(t *testing.T) {
+	for _, cause := range []error{
+		&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}},
+		x509.UnknownAuthorityError{},
+		x509.HostnameError{Certificate: &x509.Certificate{}, Host: "invalid.test"},
+		x509.CertificateInvalidError{Cert: &x509.Certificate{}, Reason: x509.Expired},
+		tls.RecordHeaderError{Msg: "invalid TLS record"},
+	} {
+		t.Run(fmt.Sprintf("%T", cause), func(t *testing.T) {
+			var calls atomic.Int32
+			wrapped := &net.OpError{Op: "remote error", Net: "tcp", Err: cause}
+			broken := roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return nil, wrapped
+			})
+			if _, err := NewTransport(broken).RoundTrip(clientRequest(tbOf(t), "http://unused", "openai", true)); !errors.Is(err, wrapped) {
+				t.Fatalf("err=%v", err)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("calls=%d", calls.Load())
+			}
+		})
+	}
+}
+
+func TestStrictToolFinalValidationProtocols(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, stream := range []bool{false, true} {
+			for _, args := range []string{`[]`, `null`, `1`, `"text"`, `true`, `{"x":`} {
+				t.Run(fmt.Sprintf("%s/%v/%s", protocol, stream, args), func(t *testing.T) {
+					id := "matrix-healed"
+					wire := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": id, "input": args, "stop": true}), endFrame())
+					if args == `{"x":` {
+						wire = joinedFrames(frame("toolUseEvent", object{"name": "lookup", "toolUseId": id, "input": args, "stop": true}),
+							frame("toolUseEvent", object{"name": "lookup", "toolUseId": id, "input": `{"x":1}`, "stop": true}), endFrame())
+					}
+					good := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "input": `{"x":1}`, "stop": true}), endFrame())
+					var calls atomic.Int32
+					server := seqStub(t, [][]byte{wire, good}, func(n int, _ object) { calls.Store(int32(n + 1)) })
+					r := clientRequest(tbOf(t), server.URL, protocol, stream)
+					body, err := io.ReadAll(r.Body)
+					r.Body.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					root, err := decodeObject(string(body))
+					if err != nil {
+						t.Fatal(err)
+					}
+					root["tool_choice"] = "required"
+					if protocol == "anthropic" {
+						root["tool_choice"] = object{"type": "any"}
+					}
+					request, err := http.NewRequest("POST", r.URL.String(), strings.NewReader(jsonText(root)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					request.Header = r.Header.Clone()
+					resp, err := NewTransport(nil).RoundTrip(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					want := int32(2)
+					if args == `{"x":` {
+						want = 1
+					}
+					if err != nil || resp.StatusCode != 200 || calls.Load() != want || !strings.Contains(string(data), "lookup") {
+						t.Fatalf("status=%d calls=%d want=%d data=%s err=%v", resp.StatusCode, calls.Load(), want, data, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestOrdinaryScalarToolStream(t *testing.T) {
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, args := range []string{`[1, 2]`, `null`, `1`, `"text"`, `true`} {
+			t.Run(protocol+"/"+args, func(t *testing.T) {
+				wire := joinedFrames(frame("toolUseEvent", object{"name": "lookup", "input": args, "stop": true}), endFrame())
+				server := stub(t, wire, nil)
+				_, data, err := do(t, server.URL, protocol, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got string
+				for _, event := range events(t, data) {
+					if protocol == "anthropic" {
+						got += str(obj(event["delta"])["partial_json"])
+					} else if choices := list(event["choices"]); len(choices) > 0 {
+						for _, call := range list(obj(obj(choices[0])["delta"])["tool_calls"]) {
+							got += str(obj(obj(call)["function"])["arguments"])
+						}
+					}
+				}
+				if got != args {
+					t.Fatalf("got=%q want=%q data=%s", got, args, data)
+				}
+			})
+		}
 	}
 }
 

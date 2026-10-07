@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -592,9 +594,17 @@ func peekFirstChunk(ctx context.Context, body io.ReadCloser, wait time.Duration)
 	}
 }
 
-// retryableNetErr 对齐 network_errors.py: 超时/DNS/连接拒绝/重置可重试,
-// SSL 类错误(net.Error 之外的 TLS/x509 失败)不重试。
+// retryableNetErr 不重试 TLS/证书错误，即使外层包装成 net.Error。
 func retryableNetErr(err error) bool {
+	var verifyErr *tls.CertificateVerificationError
+	var authorityErr x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidErr x509.CertificateInvalidError
+	var recordErr tls.RecordHeaderError
+	if errors.As(err, &verifyErr) || errors.As(err, &authorityErr) || errors.As(err, &hostnameErr) ||
+		errors.As(err, &invalidErr) || errors.As(err, &recordErr) {
+		return false
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
