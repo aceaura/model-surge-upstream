@@ -813,6 +813,60 @@ void main() {
     expect(() => loadKiroAppCredentials(), throwsA(isA<FormatException>()));
   });
 
+  File writeKiroProfile(Map<String, dynamic>? json) {
+    final file = File(
+      '${kiroGlobalStorageDir()}${Platform.pathSeparator}profile.json',
+    );
+    file.parent.createSync(recursive: true);
+    file.writeAsStringSync(json == null ? 'not json' : jsonEncode(json));
+    return file;
+  }
+
+  test('Kiro local import backfills profileArn from App profile.json', () {
+    useKiroTempHome();
+    writeKiroCache('kiro-auth-token.json', {
+      'refreshToken': 'idc-rt',
+      'clientIdHash': 'abc123',
+      'authMethod': 'IdC',
+    });
+    writeKiroCache('abc123.json', {
+      'clientId': 'registered-client',
+      'clientSecret': 'registered-secret',
+    });
+    writeKiroProfile({
+      'arn': 'arn:aws:codewhisperer:us-east-1:570461445070:profile/MDVVYDD7X7AU',
+      'name': 'KiroProfile-us-east-1',
+    });
+    final credential = loadKiroAppCredentials();
+    expect(
+      credential['profile_arn'],
+      'arn:aws:codewhisperer:us-east-1:570461445070:profile/MDVVYDD7X7AU',
+    );
+  });
+
+  test('Kiro token file profileArn wins over App profile.json', () {
+    useKiroTempHome();
+    writeKiroCache('kiro-auth-token.json', {
+      'refreshToken': 'rt',
+      'profileArn': 'arn:aws:codewhisperer:us-east-1:1:profile/TOKENFILE',
+    });
+    writeKiroProfile({'arn': 'arn:aws:codewhisperer:us-east-1:1:profile/APP'});
+    expect(
+      loadKiroAppCredentials()['profile_arn'],
+      'arn:aws:codewhisperer:us-east-1:1:profile/TOKENFILE',
+    );
+  });
+
+  test('Kiro local import tolerates missing or corrupt App profile.json', () {
+    useKiroTempHome();
+    writeKiroCache('kiro-auth-token.json', {'refreshToken': 'idc-rt'});
+    expect(loadKiroAppCredentials()['profile_arn'], '');
+    final profile = writeKiroProfile(null);
+    expect(loadKiroAppCredentials()['profile_arn'], '');
+    profile.writeAsStringSync('{"arn": 42}');
+    expect(loadKiroAppCredentials()['profile_arn'], '');
+  });
+
   testWidgets(
     'Kiro App button imports temporary SSO cache and submits initial tokens',
     (tester) async {

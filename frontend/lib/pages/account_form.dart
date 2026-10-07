@@ -166,9 +166,51 @@ Map<String, String> importKiroCredentialJson(String text) {
   return parseKiroCredentialJson(jsonEncode(data));
 }
 
-Map<String, String> loadKiroAppCredentials() => importKiroCredentialJson(
-  jsonEncode(_readKiroCacheDocument('kiro-auth-token.json')),
-);
+/// Kiro App 当前登录 profile 的存放目录(Windows %APPDATA%\Kiro,macOS
+/// ~/Library/Application Support/Kiro,其余 ~/.config/Kiro);测试随
+/// debugKiroHomeOverride 落到临时 home,不碰真实应用数据。
+String kiroGlobalStorageDir() {
+  const tail = ['Kiro', 'User', 'globalStorage', 'kiro.kiroagent'];
+  final override = debugKiroHomeOverride;
+  final sep = Platform.pathSeparator;
+  if (override != null) return [override, ...tail].join(sep);
+  if (Platform.isWindows) {
+    final appData = Platform.environment['APPDATA'] ?? '';
+    return [appData, ...tail].join(sep);
+  }
+  final home = userHomeDir();
+  if (Platform.isMacOS) {
+    return [home, 'Library', 'Application Support', ...tail].join(sep);
+  }
+  return [home, '.config', ...tail].join(sep);
+}
+
+/// IdC/IAM 账号的 kiro-auth-token.json 不含 profileArn(App 把它存在
+/// globalStorage/profile.json),且其续期走 AWS OIDC 不回传 arn,导入时
+/// 必须从这里补,否则额度查询恒缺 profileArn。
+Map<String, String> loadKiroAppCredentials() {
+  final credential = importKiroCredentialJson(
+    jsonEncode(_readKiroCacheDocument('kiro-auth-token.json')),
+  );
+  if (credential['profile_arn']!.isEmpty) {
+    final profile = File(
+      [kiroGlobalStorageDir(), 'profile.json'].join(Platform.pathSeparator),
+    );
+    if (profile.existsSync()) {
+      String? arn;
+      try {
+        final value = _kiroJson(profile.readAsStringSync())['arn'];
+        if (value is String) arn = value.trim();
+      } on FormatException {
+        // profile.json 只是补充来源,损坏不阻断 token 导入。
+      }
+      if (arn != null && arn.isNotEmpty) {
+        credential['profile_arn'] = arn;
+      }
+    }
+  }
+  return credential;
+}
 
 /// kimi-desktop 本地存储目录(leveldb 里存着网页会话的 refresh/access token)。
 String kimiDesktopLeveldbDir() {
@@ -1199,7 +1241,7 @@ class _AccountFormState extends State<AccountForm> {
         'account-profile-arn',
         'Profile ARN',
         _profileArn,
-        hint: '可选;Desktop 刷新可自动回填',
+        hint: '可选;随 App 导入自动带入',
       ),
       const SizedBox(height: 20),
       _kiroField(
