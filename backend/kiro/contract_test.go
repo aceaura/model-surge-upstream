@@ -417,6 +417,20 @@ func TestSchemaPropertyNamesAreNotKeywords(t *testing.T) {
 	if _, ok := obj(obj(props["required"])["items"])["required"]; ok {
 		t.Fatal(clean)
 	}
+	for _, namespace := range []string{"$defs", "definitions", "patternProperties"} {
+		schema := object{namespace: object{"additionalProperties": object{"type": "string", "additionalProperties": false}, "required": object{"type": "array", "required": []any{}}}}
+		clean := obj(sanitizeSchema(schema))
+		members := obj(clean[namespace])
+		if obj(members["additionalProperties"])["type"] != "string" || obj(members["required"])["type"] != "array" {
+			t.Fatalf("%s member names mistaken for schema keywords: %v", namespace, clean)
+		}
+		if _, ok := obj(members["additionalProperties"])["additionalProperties"]; ok {
+			t.Fatalf("%s nested unsupported keyword preserved: %v", namespace, clean)
+		}
+		if _, ok := obj(members["required"])["required"]; ok {
+			t.Fatalf("%s nested empty required preserved: %v", namespace, clean)
+		}
+	}
 }
 
 func TestRealtimeTextWhileSingleToolBuffered(t *testing.T) {

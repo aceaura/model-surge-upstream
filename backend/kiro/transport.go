@@ -333,6 +333,13 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				data, _ := io.ReadAll(io.LimitReader(rawBody, 1<<20))
 				rawBody.Close()
 				cancel()
+				// The buffered/rebuilt body no longer has the upstream wire metadata.
+				out.Header.Del("Content-Length")
+				out.Header.Del("Content-Encoding")
+				out.Header.Del("ETag")
+				out.TransferEncoding = nil
+				out.Trailer = nil
+				out.Uncompressed = false
 				msg := enhanceKiroError(data)
 				var shape object
 				if options.protocol == "openai" {
@@ -345,7 +352,6 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 					out.Body = io.NopCloser(bytes.NewReader(encoded))
 					out.ContentLength = int64(len(encoded))
 					out.Header.Set("Content-Type", "application/json")
-					out.Header.Del("Content-Encoding")
 					return &out, nil
 				}
 				out.Body = io.NopCloser(bytes.NewReader(data))
@@ -645,6 +651,11 @@ func retryableNetErr(err error) bool {
 	var recordErr tls.RecordHeaderError
 	if errors.As(err, &verifyErr) || errors.As(err, &authorityErr) || errors.As(err, &hostnameErr) ||
 		errors.As(err, &invalidErr) || errors.As(err, &recordErr) {
+		return false
+	}
+	// TLS alerts can be plain errors wrapped by net.OpError, not typed TLS errors.
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "ssl") || strings.Contains(message, "tls") || strings.Contains(message, "certificate") {
 		return false
 	}
 	var netErr net.Error

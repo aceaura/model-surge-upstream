@@ -2,8 +2,10 @@ package proxyplane
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -35,6 +37,151 @@ func kiroTestFrame(event, payload string) []byte {
 	crc := make([]byte, 4)
 	binary.BigEndian.PutUint32(crc, crc32.ChecksumIEEE(frame))
 	return append(frame, crc...)
+}
+
+func TestRound28KiroSelectedAliasHTTP(t *testing.T) {
+	for _, protocol := range []string{provider.ProtocolAnthropic, provider.ProtocolChatCompletions} {
+		for _, stream := range []bool{false, true} {
+			for _, mode := range []string{"named", "none"} {
+				t.Run(fmt.Sprintf("%s/%v/%s", protocol, stream, mode), func(t *testing.T) {
+					var name, alias string
+					calls := 0
+					up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls++
+						var payload struct {
+							ConversationState struct {
+								CurrentMessage struct {
+									UserInputMessage struct {
+										UserInputMessageContext struct {
+											Tools []struct {
+												ToolSpecification struct{ Name, Description string }
+											}
+										}
+									}
+								}
+							}
+						}
+						if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+							t.Error(err)
+							return
+						}
+						tools := payload.ConversationState.CurrentMessage.UserInputMessage.UserInputMessageContext.Tools
+						if mode == "none" {
+							if len(tools) != 0 {
+								t.Error("none sent tools")
+							}
+							_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+						} else {
+							if len(tools) != 1 || tools[0].ToolSpecification.Name != alias || tools[0].ToolSpecification.Description != "Tool: "+alias {
+								t.Errorf("selected native tools=%v want alias=%s", tools, alias)
+							}
+							data, _ := json.Marshal(map[string]any{"name": alias, "toolUseId": "r28", "input": "{}", "stop": true})
+							_, _ = w.Write(kiroTestFrame("toolUseEvent", string(data)))
+						}
+						_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":1}`))
+					}))
+					defer up.Close()
+					name = "round28.wire." + up.URL + "__selected"
+					digest := sha256.Sum256([]byte(name))
+					alias = fmt.Sprintf("t_%x_selected", digest[:6])
+					var choice any = mode
+					path := "/v1/chat/completions"
+					if protocol == provider.ProtocolAnthropic {
+						path = "/v1/messages"
+						choice = map[string]any{"type": "none"}
+						if mode == "named" {
+							choice = map[string]any{"type": "tool", "name": name}
+						}
+					} else if mode == "named" {
+						choice = map[string]any{"type": "function", "function": map[string]any{"name": name}}
+					}
+					target := resolve.ResolvedTarget{ModelID: "kiro-r28", ProviderID: kiro.ProviderID, Protocol: protocol, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+					h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+					body, _ := json.Marshal(map[string]any{"model": target.ModelID, "max_tokens": 1024, "stream": stream, "messages": []any{map[string]any{"role": "user", "content": "q"}}, "tool_choice": choice,
+						"tools": []any{map[string]any{"name": name, "input_schema": map[string]any{}}, map[string]any{"name": alias, "input_schema": map[string]any{}}}})
+					r := httptest.NewRequest("POST", path, strings.NewReader(string(body)))
+					r.Header.Set("Authorization", "Bearer "+testKey)
+					w := httptest.NewRecorder()
+					h.ServeHTTP(w, r)
+					if w.Code != 200 || calls != 1 || mode == "named" && !strings.Contains(w.Body.String(), name) {
+						t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRound28KiroLargeIntegerHTTP(t *testing.T) {
+	for _, sign := range []string{"", "-"} {
+		for _, source := range []string{"client", "defaults", "overrides"} {
+			t.Run(sign+"/"+source, func(t *testing.T) {
+				want := sign + "1" + strings.Repeat("0", 400)
+				calls := 0
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					var payload struct {
+						ConversationState struct {
+							CurrentMessage struct{ UserInputMessage struct{ Content string } }
+						}
+					}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Error(err)
+					}
+					if !strings.HasSuffix(payload.ConversationState.CurrentMessage.UserInputMessage.Content, "[Tool Result (r28)]\n"+want) {
+						t.Errorf("large integer lost at native HTTP boundary: %q", payload.ConversationState.CurrentMessage.UserInputMessage.Content)
+					}
+					_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+					_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":1}`))
+				}))
+				defer up.Close()
+				target := resolve.ResolvedTarget{ModelID: "kiro-r28-integer", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolAnthropic, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+				messages := json.RawMessage(`[{"role":"user","content":[{"type":"tool_result","tool_use_id":"r28","content":` + want + `}]}]`)
+				body := []byte(`{"model":"kiro-r28-integer","max_tokens":1024}`)
+				part, _ := json.Marshal(map[string]any{"messages": messages})
+				switch source {
+				case "client":
+					body, _ = json.Marshal(map[string]any{"model": target.ModelID, "max_tokens": 1024, "messages": messages})
+				case "defaults":
+					target.Defaults = part
+				case "overrides":
+					target.Overrides = part
+				}
+				h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+				r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
+				r.Header.Set("Authorization", "Bearer "+testKey)
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				if w.Code != 200 || calls != 1 {
+					t.Fatalf("status=%d calls=%d body=%s", w.Code, calls, w.Body)
+				}
+			})
+		}
+	}
+}
+
+func TestRound28KiroSystemValidationHTTP(t *testing.T) {
+	for _, field := range []string{"name", "tool_call_id", "tool_calls"} {
+		t.Run(field, func(t *testing.T) {
+			calls := 0
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+				_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":1}`))
+			}))
+			defer up.Close()
+			target := resolve.ResolvedTarget{ModelID: "kiro-r28-system", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+			h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+			body, _ := json.Marshal(map[string]any{"model": target.ModelID, "messages": []any{map[string]any{"role": "system", "content": "s", field: 7}, map[string]any{"role": "user", "content": "q"}}})
+			r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(string(body)))
+			r.Header.Set("Authorization", "Bearer "+testKey)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 400 || calls != 0 {
+				t.Fatalf("invalid system contacted upstream: status=%d calls=%d body=%s", w.Code, calls, w.Body)
+			}
+		})
+	}
 }
 
 func TestKiroNativeProxy(t *testing.T) {

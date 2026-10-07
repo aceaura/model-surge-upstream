@@ -2,6 +2,7 @@ package kiro
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -20,6 +21,197 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
+
+func TestRound28WireHTTPErrorLength(t *testing.T) {
+	const raw = `{"message":"quota","reason":"MONTHLY_REQUEST_COUNT"}`
+	var compressed bytes.Buffer
+	zw := gzip.NewWriter(&compressed)
+	if _, err := zw.Write([]byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, protocol := range []string{"openai", "anthropic"} {
+		for _, stream := range []bool{false, true} {
+			for _, mode := range []string{"plain", "identity", "chunked", "gzip", "decoded-gzip"} {
+				t.Run(fmt.Sprintf("%s/stream=%v/%s", protocol, stream, mode), func(t *testing.T) {
+					wire := []byte(raw)
+					encoding := ""
+					if mode == "identity" {
+						encoding = "identity"
+					}
+					if mode == "gzip" || mode == "decoded-gzip" {
+						wire, encoding = compressed.Bytes(), "gzip"
+					}
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path != "/generateAssistantResponse" || r.Header.Get("Accept-Encoding") != "identity" {
+							t.Errorf("unexpected upstream request: path=%s headers=%v", r.URL.Path, r.Header)
+						}
+						w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+						w.Header().Set("ETag", `"upstream-body"`)
+						w.Header().Set("Cache-Control", "no-store")
+						w.Header().Set("Retry-After", "7")
+						if encoding != "" {
+							w.Header().Set("Content-Encoding", encoding)
+						}
+						if mode != "chunked" {
+							w.Header().Set("Content-Length", fmt.Sprint(len(wire)))
+						}
+						w.WriteHeader(http.StatusBadRequest)
+						if mode == "chunked" {
+							w.(http.Flusher).Flush()
+						}
+						if _, err := w.Write(wire); err != nil {
+							t.Error(err)
+						}
+					}))
+					defer upstream.Close()
+					base := http.DefaultTransport.(*http.Transport).Clone()
+					defer base.CloseIdleConnections()
+					var original *http.Response
+					tr := NewTransport(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+						resp, err := base.RoundTrip(r)
+						if err != nil {
+							return nil, err
+						}
+						if mode == "decoded-gzip" {
+							// A custom base may decode gzip while retaining its wire headers.
+							zr, err := gzip.NewReader(resp.Body)
+							if err != nil {
+								resp.Body.Close()
+								return nil, err
+							}
+							data, err := io.ReadAll(zr)
+							zr.Close()
+							resp.Body.Close()
+							if err != nil {
+								return nil, err
+							}
+							resp.Body = io.NopCloser(bytes.NewReader(data))
+							resp.Uncompressed = true
+						}
+						original = resp
+						return resp, nil
+					}))
+					want := []byte(jsonText(object{"error": object{"message": "Monthly request limit exceeded. Account has reached its monthly quota.", "type": "kiro_api_error", "code": 400}}))
+					if protocol == "anthropic" {
+						want = []byte(jsonText(object{"type": "error", "error": object{"type": "api_error", "message": "Monthly request limit exceeded. Account has reached its monthly quota."}}))
+					}
+					if mode == "gzip" {
+						want = wire
+					}
+					check := func(resp *http.Response, downstream bool) {
+						t.Helper()
+						data, err := io.ReadAll(resp.Body)
+						resp.Body.Close()
+						if err != nil || !bytes.Equal(data, want) || resp.StatusCode != 400 {
+							t.Errorf("downstream=%v status=%d read=%v body=%q want=%q", downstream, resp.StatusCode, err, data, want)
+						}
+						length := resp.Header.Get("Content-Length")
+						if length != "" && length != fmt.Sprint(len(want)) || resp.ContentLength != int64(len(want)) {
+							t.Errorf("downstream=%v stale length: header=%q field=%d body=%d", downstream, length, resp.ContentLength, len(want))
+						}
+						if resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Retry-After") != "7" {
+							t.Errorf("lost error policy headers: %v", resp.Header)
+						}
+						if mode == "gzip" {
+							if resp.Header.Get("Content-Encoding") != "gzip" || resp.Header.Get("ETag") != `"upstream-body"` {
+								t.Errorf("compressed passthrough metadata changed: %v", resp.Header)
+							}
+						} else if resp.Header.Get("Content-Encoding") != "" || resp.Header.Get("ETag") != "" ||
+							resp.Header.Get("Content-Type") != "application/json" || len(resp.TransferEncoding) != 0 || len(resp.Trailer) != 0 || resp.Uncompressed {
+							t.Errorf("stale rewritten-body metadata: headers=%v transfer=%v trailer=%v uncompressed=%v", resp.Header, resp.TransferEncoding, resp.Trailer, resp.Uncompressed)
+						}
+					}
+					resp, err := tr.RoundTrip(clientRequest(tbOf(t), upstream.URL, protocol, stream))
+					if err != nil {
+						t.Fatal(err)
+					}
+					check(resp, false)
+					if original.Header.Get("ETag") != `"upstream-body"` || original.Header.Get("Content-Encoding") != encoding ||
+						mode != "chunked" && original.Header.Get("Content-Length") != fmt.Sprint(len(wire)) {
+						t.Errorf("upstream header clone was mutated: %v", original.Header)
+					}
+					// Forward the real non-2xx RoundTrip result through an actual HTTP server.
+					proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						forward := r.Clone(r.Context())
+						forward.URL.Scheme, forward.URL.Host = "http", strings.TrimPrefix(upstream.URL, "http://")
+						forward.RequestURI = ""
+						resp, err := tr.RoundTrip(forward)
+						if err != nil {
+							t.Error(err)
+							http.Error(w, "RoundTrip failed", http.StatusBadGateway)
+							return
+						}
+						defer resp.Body.Close()
+						for key, values := range resp.Header {
+							w.Header()[key] = append([]string(nil), values...)
+						}
+						w.WriteHeader(resp.StatusCode)
+						if _, err := io.Copy(w, resp.Body); err != nil {
+							t.Errorf("downstream error-body write: %v", err)
+						}
+					}))
+					defer proxy.Close()
+					client := &http.Client{Transport: base}
+					request := clientRequest(tbOf(t), proxy.URL, protocol, stream)
+					request.Header.Set("Accept-Encoding", "identity")
+					resp, err = client.Do(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					check(resp, true)
+				})
+			}
+		}
+	}
+}
+
+func TestRound28WireNetworkRetryBoundary(t *testing.T) {
+	origBackoff := retryBackoff
+	retryBackoff = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { retryBackoff = origBackoff })
+	for _, tc := range []struct {
+		name  string
+		cause error
+		retry bool
+	}{
+		{"handshake", errors.New("tls: handshake failure"), false},
+		{"wrapped-handshake", fmt.Errorf("dial: %w", errors.New("remote error: TLS: handshake failure")), false},
+		{"wrapped-certificate", fmt.Errorf("verify: %w", errors.New("x509: certificate signed by unknown authority")), false},
+		{"wrapped-ssl", fmt.Errorf("connect: %w", errors.New("SSL handshake failed")), false},
+		{"connection-reset", errors.New("connection reset by peer"), true},
+		{"unexpected-eof", io.ErrUnexpectedEOF, true},
+		{"timeout", &net.DNSError{Err: "timeout", IsTimeout: true}, true},
+	} {
+		for _, kiro := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/kiro=%v", tc.name, kiro), func(t *testing.T) {
+				wrapped := fmt.Errorf("upstream: %w", &net.OpError{Op: "remote error", Net: "tcp", Err: tc.cause})
+				calls := 0
+				broken := roundTripFunc(func(*http.Request) (*http.Response, error) {
+					calls++
+					return nil, wrapped
+				})
+				request := clientRequest(tbOf(t), "http://unused", "openai", true)
+				if !kiro {
+					request.Header.Del(HeaderProvider)
+				}
+				resp, err := NewTransport(broken).RoundTrip(request)
+				if resp != nil || err != wrapped || !errors.Is(err, tc.cause) {
+					t.Fatalf("security/network error was changed or swallowed: resp=%v err=%v", resp, err)
+				}
+				wantCalls := 1
+				if kiro && tc.retry {
+					wantCalls = maxRetryAttempts
+				}
+				if calls != wantCalls {
+					t.Errorf("calls=%d want=%d cause=%v", calls, wantCalls, tc.cause)
+				}
+			})
+		}
+	}
+}
 
 func TestRound27StrictOpenAIContentKey(t *testing.T) {
 	for _, tc := range []struct {

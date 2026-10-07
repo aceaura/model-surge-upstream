@@ -538,10 +538,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	var tools []any
 	toolDocs := map[string]string{}
 	toolOriginalNames := map[string]string{}
-	// extensions/tool_name_alias.py:68-78(app_entry 恒装):先登记本轮全部
-	// 工具名——合法名进保留集防止被长名别名抢占,非法/超长名取
-	// t_<sha256[:12]>_<suffix> 别名上行,响应侧恢复原名。
-	var toolNames []string
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
 		if t == nil {
@@ -624,13 +620,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				continue
 			}
 		}
-		if n, ok := t["name"].(string); ok {
-			toolNames = append(toolNames, n)
-		}
-	}
-	if !countTokens {
-		// Counting must not reserve names or allocate process-wide aliases.
-		registerToolNames(toolNames)
 	}
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
@@ -660,11 +649,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		opts.allowedTools[name] = true
 		originalName := name
-		// Native conversion aliases empty-description placeholders, not migrated documentation.
-		if !countTokens {
-			name = aliasToolName(name)
-		}
-		toolOriginalNames[name] = originalName
 		schema := t["input_schema"]
 		if protocol == "openai" && !flat {
 			schema = t["parameters"]
@@ -685,10 +669,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			continue
 		}
 		description := str(t["description"])
-		if strings.TrimSpace(description) == "" {
-			// converters_core.py:701-704: 纯空白描述同样换占位。
-			description = "Tool: " + name
-		}
 		if utf8.RuneCountInString(description) > 10000 {
 			// converters_core.py:616-636: 超长描述迁入系统提示的
 			// "# Tool Documentation" 段,工具上只留指引占位。
@@ -766,10 +746,9 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			if !opts.allowedTools[named] {
 				return fail(fmt.Errorf("tool_choice references unknown tool %q", named))
 			}
-			namedAlias := aliasToolName(named)
 			filtered := []any{}
 			for _, t := range tools {
-				if str(obj(obj(t)["toolSpecification"])["name"]) == namedAlias {
+				if str(obj(obj(t)["toolSpecification"])["name"]) == named {
 					filtered = append(filtered, t)
 				}
 			}
@@ -778,6 +757,22 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		if mode != "" && mode != "auto" {
 			opts.policyMode, opts.policyTool, opts.policyDirective = mode, named, directive
+		}
+	}
+	// Filtering must precede process-wide alias allocation and reservation.
+	var toolNames []string
+	for _, tool := range tools {
+		toolNames = append(toolNames, str(obj(obj(tool)["toolSpecification"])["name"]))
+	}
+	registerToolNames(toolNames)
+	for _, tool := range tools {
+		spec := obj(obj(tool)["toolSpecification"])
+		original := str(spec["name"])
+		name := aliasToolName(original)
+		spec["name"] = name
+		toolOriginalNames[name] = original
+		if strings.TrimSpace(str(spec["description"])) == "" {
+			spec["description"] = "Tool: " + name
 		}
 	}
 	var messages []message
@@ -813,19 +808,15 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		// 归一化在合并之后(converters_core.py:1728-1740: merge → 首条
 		// user → normalize → alternating)。anthropic 内联 system 不进系统
 		// 提示(系统提示只读 root.system),作为普通消息走流水线。
-		if protocol == "openai" && role == "system" {
-			s, e := textOnly(m["content"])
-			if e != nil {
-				return fail(e)
-			}
-			systemMsgs = append(systemMsgs, s)
-			continue
-		}
-		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")
 		msg, e := parseMessage(m, protocol)
 		if e != nil {
 			return fail(e)
 		}
+		if protocol == "openai" && role == "system" {
+			systemMsgs = append(systemMsgs, msg.text)
+			continue
+		}
+		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")
 		if protocol == "openai" && role == "tool" && lastWasTool {
 			// converters_openai.py:186-212: 连续 tool 消息聚成一条 user,
 			// 不经过同角色合并(避免空文本 "\n" 连接 artifact)。
@@ -1024,7 +1015,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	var selectedDocs []string
 	for _, tool := range tools {
 		name := str(obj(obj(tool)["toolSpecification"])["name"])
-		if doc := toolDocs[name]; doc != "" {
+		if doc := toolDocs[toolOriginalNames[name]]; doc != "" {
 			selectedDocs = append(selectedDocs, doc)
 		}
 	}

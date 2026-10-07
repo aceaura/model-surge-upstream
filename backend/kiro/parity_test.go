@@ -29,6 +29,127 @@ func convert(t *testing.T, root object, protocol string) (object, requestOptions
 	return payload, opts
 }
 
+func TestRound28ToolChoiceAliasIsolation(t *testing.T) {
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, mode := range []string{"named", "none", "auto", "required"} {
+			t.Run(protocol+"/"+mode, func(t *testing.T) {
+				toolNameMu.Lock()
+				to, from, reserved := toolNameToAlias, toolNameFromAlias, toolNameReserved
+				toolNameToAlias, toolNameFromAlias, toolNameReserved = map[string]string{}, map[string]string{}, map[string]bool{}
+				toolNameMu.Unlock()
+				t.Cleanup(func() {
+					toolNameMu.Lock()
+					toolNameToAlias, toolNameFromAlias, toolNameReserved = to, from, reserved
+					toolNameMu.Unlock()
+				})
+				name := "round28.alias.selected"
+				short := buildToolAlias(name, 12)
+				var choice any = mode
+				if protocol == "anthropic" {
+					choice = object{"type": mode}
+					if mode == "named" {
+						choice = object{"type": "tool", "name": name}
+					} else if mode == "required" {
+						choice = object{"type": "any"}
+					}
+				} else if mode == "named" {
+					choice = object{"type": "function", "function": object{"name": name}}
+				}
+				root := object{"model": "model", "max_tokens": 1024, "messages": []any{object{"role": "user", "content": "x"}}, "tool_choice": choice,
+					"tools": []any{object{"name": name, "input_schema": object{}}, object{"name": short, "input_schema": object{}}}}
+				payload, _ := convert(t, root, protocol)
+				user := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+				tools := list(obj(user["userInputMessageContext"])["tools"])
+				toolNameMu.Lock()
+				allocated, restored, registered := len(toolNameToAlias), len(toolNameFromAlias), len(toolNameReserved)
+				toolNameMu.Unlock()
+				if mode == "none" {
+					if len(tools) != 0 || allocated != 0 || restored != 0 || registered != 0 {
+						t.Errorf("none allocated excluded tools: tools=%d aliases=%d/%d reserved=%d", len(tools), allocated, restored, registered)
+					}
+					if got := aliasToolName(name); got != short {
+						t.Errorf("none changed later alias: got=%q want=%q", got, short)
+					}
+					return
+				}
+				wantAlias, wantCount, wantReserved := buildToolAlias(name, 16), 2, 1
+				if mode == "named" {
+					wantAlias, wantCount, wantReserved = short, 1, 0
+				}
+				if len(tools) != wantCount {
+					t.Fatalf("tools=%d want=%d", len(tools), wantCount)
+				}
+				got := str(obj(obj(tools[0])["toolSpecification"])["name"])
+				if got != wantAlias || restoreToolName(got) != name || registered != wantReserved || allocated != 1 || restored != 1 {
+					t.Errorf("alias=%q want=%q reserved=%d want=%d allocated=%d/%d", got, wantAlias, registered, wantReserved, allocated, restored)
+				}
+				if str(obj(obj(tools[0])["toolSpecification"])["description"]) != "Tool: "+wantAlias {
+					t.Error("empty description did not use selected alias")
+				}
+			})
+		}
+	}
+}
+
+func TestRound28LargeIntegerToolResult(t *testing.T) {
+	large := "1" + strings.Repeat("0", 400)
+	for _, tc := range []struct{ raw, want string }{
+		{large, large}, {"-" + large, "-" + large}, {"0", ""}, {"-0", ""}, {"0.0", ""}, {"1e-400", ""}, {"1e-300", "1e-300"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			n := json.Number(tc.raw)
+			if truthy(n) != (tc.want != "") {
+				t.Errorf("truthy(%s)=%v want=%v", tc.raw, truthy(n), tc.want != "")
+			}
+			text, _, err := resultContent(n, "anthropic")
+			if err != nil || text != tc.want {
+				t.Errorf("resultContent=%q want=%q err=%v", text, tc.want, err)
+			}
+			root := object{"model": "model", "max_tokens": 1024, "tools": []any{object{"name": "f", "input_schema": object{}}}, "messages": []any{
+				object{"role": "user", "content": "q"},
+				object{"role": "assistant", "content": []any{object{"type": "tool_use", "id": "r28", "name": "f", "input": object{}}}},
+				object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "r28", "content": n}}},
+			}}
+			payload, _ := convert(t, root, "anthropic")
+			user := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+			results := list(obj(user["userInputMessageContext"])["toolResults"])
+			want := tc.want
+			if want == "" {
+				want = "(empty result)"
+			}
+			if len(results) != 1 || str(obj(list(obj(results[0])["content"])[0])["text"]) != want {
+				t.Errorf("native tool result lost integer text: %v", results)
+			}
+		})
+	}
+}
+
+func TestRound28OpenAISystemFieldValidation(t *testing.T) {
+	for _, field := range []string{"name", "tool_call_id", "tool_calls"} {
+		for _, value := range []any{json.Number("7"), true, object{}} {
+			t.Run(field+"/"+jsonText(value), func(t *testing.T) {
+				root := object{"model": "model", "messages": []any{
+					object{"role": "system", "content": "system text", field: value},
+					object{"role": "user", "content": "question"},
+				}}
+				if _, _, err := convertRequest([]byte(jsonText(root)), "openai", ""); err == nil || !strings.Contains(err.Error(), field) {
+					t.Errorf("invalid system %s accepted or wrong error: %v", field, err)
+				}
+			})
+		}
+	}
+	for _, content := range []any{"system text", json.Number("7"), []any{object{"type": "image_url", "image_url": "https://example.test/image"}, object{"type": "text", "text": "system text"}}, nil} {
+		root := object{"model": "model", "messages": []any{
+			object{"role": "system", "content": content, "name": "sender", "tool_call_id": nil, "tool_calls": []any{object{"id": "ignored"}}},
+			object{"role": "user", "content": "question"},
+		}}
+		payload, _ := convert(t, root, "openai")
+		if !strings.HasSuffix(currentContent(t, payload), "question") || strings.Contains(jsonText(payload), "toolUses") {
+			t.Error("valid system message changed generation/history")
+		}
+	}
+}
+
 func TestModelNameNormalization(t *testing.T) {
 	cases := map[string]string{
 		"claude-sonnet-4-5":          "claude-sonnet-4.5",

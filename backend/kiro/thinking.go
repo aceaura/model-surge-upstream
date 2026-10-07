@@ -18,6 +18,9 @@ func truthy(v any) bool {
 	case string:
 		return x != ""
 	case json.Number:
+		if !strings.ContainsAny(x.String(), ".eE") {
+			return strings.TrimLeft(x.String(), "-0") != ""
+		}
 		f, err := x.Float64()
 		return err == nil && f != 0
 	case []any:
