@@ -525,7 +525,10 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			toolNames = append(toolNames, n)
 		}
 	}
-	registerToolNames(toolNames)
+	if !countTokens {
+		// Counting must not reserve names or allocate process-wide aliases.
+		registerToolNames(toolNames)
+	}
 	for _, v := range list(root["tools"]) {
 		t := obj(v)
 		flat := false
@@ -548,14 +551,16 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		// allowedTools 键保持客户端原名(resolve_anthropic_tool_choice 的
 		// "client-visible allowed names":tool_choice 解析与响应校验都在
-		// 别名前用原名);Go 仍拒重名(B2 边界更严,保留)。
-		if opts.allowedTools[name] {
+		// 别名前用原名);生成仍拒重名(B2 边界更严,保留)。
+		if !countTokens && opts.allowedTools[name] {
 			return fail(fmt.Errorf("duplicate tool %q", name))
 		}
 		opts.allowedTools[name] = true
 		originalName := name
 		// Native conversion aliases empty-description placeholders, not migrated documentation.
-		name = aliasToolName(name)
+		if !countTokens {
+			name = aliasToolName(name)
+		}
 		toolOriginalNames[name] = originalName
 		schema := t["input_schema"]
 		if protocol == "openai" && !flat {
@@ -572,6 +577,9 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 		if obj(schema) == nil {
 			return fail(fmt.Errorf("tool %q schema must be an object", name))
+		}
+		if countTokens {
+			continue
 		}
 		description := str(t["description"])
 		if strings.TrimSpace(description) == "" {
@@ -670,9 +678,10 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		}
 	}
 	var messages []message
+	var messageSources [][]int
 	var systemMsgs []string
 	lastWasTool := false
-	for _, v := range list(root["messages"]) {
+	for sourceIndex, v := range list(root["messages"]) {
 		m := obj(v)
 		role := str(m["role"])
 		// models_openai.py: role 必填且须为字符串,缺省/null/非字符串 422。
@@ -687,6 +696,14 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		// normalize_message_roles 折为 user;其余角色仍被 422 拒绝。
 		if protocol == "anthropic" && role != "user" && role != "assistant" && role != "system" {
 			return fail(fmt.Errorf("role must be user, assistant or system"))
+		}
+		if countTokens {
+			// The count route validates the content union without converter-only semantics.
+			if err := validateAnthropicContent(m); err != nil {
+				return fail(err)
+			}
+			messages = append(messages, message{role: role})
+			continue
 		}
 		// converters_openai.py:169-175: 只有 openai 的 system 进系统提示,
 		// 多条 "\n" 连接并整体 strip;developer 等未知角色保留原角色,
@@ -712,6 +729,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			last := &messages[len(messages)-1]
 			last.results = append(last.results, msg.results...)
 			last.images = append(last.images, msg.images...)
+			messageSources[len(messageSources)-1] = append(messageSources[len(messageSources)-1], sourceIndex)
 			continue
 		}
 		if !parseable {
@@ -720,6 +738,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			msg.role = role
 		}
 		messages = append(messages, msg)
+		messageSources = append(messageSources, []int{sourceIndex})
 		lastWasTool = protocol == "openai" && role == "tool"
 	}
 	if len(systemMsgs) > 0 {
@@ -728,23 +747,16 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if len(messages) == 0 {
 		return fail(fmt.Errorf("messages must contain a user or assistant turn"))
 	}
-	// tokenizer.py estimate_request_tokens: 输入估算基于原始请求
-	// (messages/tools/system 未转换,不含注入段与合成占位),usage 兜底
-	// 不乘校正系数(streaming_anthropic.py:178-183、
-	// streaming_openai.py:322-326);count_tokens 端点在 transport 侧对
-	// 三部分分别乘 1.15(routes_anthropic.py:1124、tokenizer.py:208-209)。
-	opts.estimateParts = estimateOriginalTokens(root, protocol)
-	opts.inputEstimate = opts.estimateParts[0] + opts.estimateParts[1] + opts.estimateParts[2]
 	if countTokens {
 		// Counting must not consume one-shot recovery state or enter generation processing.
+		opts.estimateParts = estimateOriginalTokens(root, protocol)
+		opts.inputEstimate = opts.estimateParts[0] + opts.estimateParts[1] + opts.estimateParts[2]
 		return nil, opts, nil
 	}
-	// Truncation recovery (truncation_state.py): a previous response that was
-	// cut mid-stream earns a one-time synthetic notice in this request.
-	// routes_anthropic.py:230-254 在原始消息上注入,随后走整条流水线
-	// (strip/孤儿判定 → merge → 首条 user → normalize → alternating →
-	// repair),与参考实现同序。
-	messages = injectTruncationNotices(messages)
+	// Recovery must be counted before docs, reasoning and synthetic pairing alter the payload.
+	messages = injectTruncationNoticesForTokenizer(messages, root, messageSources, protocol)
+	opts.estimateParts = estimateOriginalTokens(root, protocol)
+	opts.inputEstimate = opts.estimateParts[0] + opts.estimateParts[1] + opts.estimateParts[2]
 	// converters_core.py:1712-1725: 工具内容剥离与孤儿 results 文本化在
 	// merge(1728)之前逐消息判定——带 results 的 user 前驱是无 results 的
 	// user 时按孤儿文本化,不会被 merge 后的相邻关系救回。
@@ -1005,30 +1017,73 @@ func toolResultsToText(results []any) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// injectTruncationNotices applies one-time recovery state to this request:
-// a user tool_result whose call was truncated gets the [API Limitation]
-// notice prepended, and an assistant message matching a truncated generation
-// is followed by a synthetic [System Notice] user turn (routes_anthropic.py).
+// Keep recovery-only callers independent of tokenizer synchronization.
 func injectTruncationNotices(messages []message) []message {
+	return injectTruncationNoticesForTokenizer(messages, nil, make([][]int, len(messages)), "")
+}
+
+// injectTruncationNoticesForTokenizer synchronizes only recovery edits so tokenizer input retains original blocks.
+func injectTruncationNoticesForTokenizer(messages []message, root object, sources [][]int, protocol string) []message {
+	originals := list(root["messages"])
+	notices := map[int]object{}
 	out := make([]message, 0, len(messages)+1)
-	for _, m := range messages {
+	for i, m := range messages {
 		for _, r := range m.results {
 			result := obj(r)
-			if !popToolTruncation(str(result["toolUseId"])) {
+			id := str(result["toolUseId"])
+			if !popToolTruncation(id) {
 				continue
 			}
 			for _, c := range list(result["content"]) {
 				block := obj(c)
-				if _, ok := block["text"]; ok {
-					block["text"] = truncationToolNotice + "\n\n---\n\nOriginal tool result:\n" + str(block["text"])
+				if _, ok := block["text"]; !ok {
+					continue
+				}
+				text := truncationToolNotice + "\n\n---\n\nOriginal tool result:\n" + str(block["text"])
+				block["text"] = text
+				synced := false
+				for _, index := range sources[i] {
+					source := obj(originals[index])
+					if str(source["role"]) == "tool" && str(source["tool_call_id"]) == id {
+						source["content"], synced = text, true
+					} else {
+						for _, v := range list(source["content"]) {
+							b := obj(v)
+							if str(b["type"]) == "tool_result" && str(b["tool_use_id"]) == id {
+								b["content"], synced = text, true
+								break
+							}
+						}
+					}
+					if synced {
+						break
+					}
 				}
 			}
 		}
 		out = append(out, m)
 		if m.role == "assistant" && m.text != "" && popContentTruncation(m.text) {
 			out = append(out, message{role: "user", text: truncationUserMessage})
+			var content any = truncationUserMessage
+			if protocol == "anthropic" {
+				content = []any{object{"type": "text", "text": truncationUserMessage}}
+			}
+			if root != nil {
+				notices[sources[i][0]] = object{"role": "user", "content": content}
+			}
 		}
 	}
+	if root == nil {
+		return out
+	}
+	tokenizerMessages := make([]any, 0, len(originals)+len(notices))
+	for i, m := range originals {
+		tokenizerMessages = append(tokenizerMessages, m)
+		if notice := notices[i]; notice != nil {
+			tokenizerMessages = append(tokenizerMessages, notice)
+		}
+	}
+	root["messages"] = tokenizerMessages
 	return out
 }
 
@@ -1303,6 +1358,32 @@ func anthropicBlock(b object, nested bool) (object, int, bool) {
 	return best, bestScore, best != nil
 }
 
+// validateAnthropicContent uses the model union because counting must not invoke generation converters.
+func validateAnthropicContent(m object) error {
+	if m["content"] == nil {
+		return fmt.Errorf("content is required")
+	}
+	if _, ok := m["content"].(string); ok {
+		return nil
+	}
+	blocks, ok := m["content"].([]any)
+	if !ok {
+		return fmt.Errorf("content must be text or blocks")
+	}
+	for i, v := range blocks {
+		b := obj(v)
+		if b == nil {
+			return fmt.Errorf("content blocks must be objects")
+		}
+		block, _, ok := anthropicBlock(b, false)
+		if !ok {
+			return fmt.Errorf("content block does not match a supported type")
+		}
+		blocks[i] = block
+	}
+	return nil
+}
+
 func parseMessage(m object, protocol string) (message, error) {
 	result := message{role: str(m["role"])}
 	// models_anthropic.py:86: content 必填,null 与缺省同样 422;
@@ -1562,8 +1643,7 @@ func resultContent(v any, protocol string) (string, []any, error) {
 	return text.String(), images, nil
 }
 
-// pythonicString 复刻 Python str():布尔 True/False,数字保留 JSON 原文
-// (json.loads 的 int/float 区分与 UseNumber 的原文保留一致)。
+// pythonicString normalizes decoded numbers because Python str() does not preserve JSON spelling.
 func pythonicString(v any) string {
 	switch x := v.(type) {
 	case bool:
@@ -1572,7 +1652,7 @@ func pythonicString(v any) string {
 		}
 		return "False"
 	case json.Number:
-		return x.String()
+		return pyNumber(x)
 	case string:
 		return x
 	}

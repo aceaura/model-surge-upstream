@@ -1310,3 +1310,251 @@ func TestRound25ResponseToolIDTruncation(t *testing.T) {
 		}
 	}
 }
+
+func TestRound26ResponseArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []string
+		want []string
+	}{
+		{"unicode", []string{`{"中":"中文😀","a":"é"}`, `{"\u4e2d":"\u4e2d\u6587\ud83d\ude00","a":"\u00e9"}`}, []string{`{"中": "中文😀", "a": "é"}`}},
+		{"key-order", []string{`{"中":1,"a":2}`, `{"a":2,"中":1}`}, []string{`{"中": 1, "a": 2}`, `{"a": 2, "中": 1}`}},
+		{"duplicate-keys", []string{`{"中":1,"a":2,"\u4e2d":"文"}`, `{"中":"文","a":2}`}, []string{`{"中": "文", "a": 2}`}},
+		{"isolated-surrogates", []string{`{"\ud800":"\ud801","\ud802":"中"}`, `{"\ud803":"\ud801","\ud802":"中"}`}, []string{`{"\ud800": "\ud801", "\ud802": "中"}`, `{"\ud803": "\ud801", "\ud802": "中"}`}},
+	} {
+		for _, protocol := range []string{"openai", "anthropic"} {
+			for _, path := range []struct {
+				name, policy string
+				stream       bool
+			}{{"ordinary-collect", "", false}, {"ordinary-stream", "", true}, {"strict-collect", "required", false}, {"strict-stream", "required", true}} {
+				t.Run(tc.name+"/"+protocol+"/"+path.name, func(t *testing.T) {
+					s := newResponseState(requestOptions{protocol: protocol, policyMode: path.policy, stream: path.stream, inputEstimate: 17})
+					s.outputRunes, s.terminal = 13, true
+					usage := s.openAIUsage()
+					s.options.allowedTools = map[string]bool{"lookup": true}
+					var emitted []object
+					s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+					var inputs []string
+					for i, raw := range tc.raw {
+						if err := s.toolEvent(object{"name": "lookup", "toolUseId": strings.Repeat("a", i+1), "input": raw, "stop": true}); err != nil {
+							t.Fatal(err)
+						}
+						ft := s.tools[i]
+						ascii, _ := normalizeOrderedJSON(raw, true)
+						if ft.args != ascii {
+							t.Fatalf("native arguments changed before dedup: %q want=%q", ft.args, ascii)
+						}
+						inputs = append(inputs, jsonText(ft.input))
+					}
+					if err := s.finalize(); err != nil {
+						t.Fatal(err)
+					}
+					if len(s.finalTools) != len(tc.want) || s.toolCount != len(tc.want) {
+						t.Fatalf("dedup count=%d want=%d", len(s.finalTools), len(tc.want))
+					}
+					for i, ft := range s.finalTools {
+						want := tc.want[i]
+						if path.policy == "" {
+							want, _ = normalizeOrderedJSON(want, true)
+						}
+						if ft.args != want || jsonText(ft.input) != inputs[i] {
+							t.Errorf("args=%q want=%q input=%s original=%s", ft.args, want, jsonText(ft.input), inputs[i])
+						}
+					}
+					if !reflect.DeepEqual(s.openAIUsage(), usage) {
+						t.Errorf("argument normalization changed token counts/source: got=%v want=%v", s.openAIUsage(), usage)
+					}
+					if protocol == "anthropic" && path.stream {
+						var partials []string
+						for _, event := range emitted {
+							delta := obj(event["delta"])
+							if delta["type"] == "input_json_delta" {
+								partials = append(partials, str(delta["partial_json"]))
+							}
+						}
+						if !reflect.DeepEqual(partials, tc.want) {
+							t.Errorf("UTF-8 partial arguments=%q want=%q", partials, tc.want)
+						}
+					}
+					if protocol == "openai" {
+						var calls []any
+						if path.stream {
+							s.finishStream()
+							for _, event := range emitted {
+								delta := obj(obj(list(event["choices"])[0])["delta"])
+								if got := list(delta["tool_calls"]); len(got) > 0 {
+									calls = got
+								}
+							}
+						} else {
+							calls = list(obj(obj(list(s.response()["choices"])[0])["message"])["tool_calls"])
+						}
+						if len(calls) != len(s.finalTools) {
+							t.Fatalf("output calls=%v", calls)
+						}
+						for i, call := range calls {
+							if obj(obj(call)["function"])["arguments"] != s.finalTools[i].args {
+								t.Errorf("output arguments diverged: %v", call)
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+	t.Run("strict-native-ascii-length-dedup", func(t *testing.T) {
+		s := newResponseState(requestOptions{protocol: "openai", policyMode: "required", allowedTools: map[string]bool{"lookup": true}})
+		for _, raw := range []string{`{"x":"中文"}`, `{"long":123456}`} {
+			if err := s.toolEvent(object{"name": "lookup", "toolUseId": "same-id", "input": raw, "stop": true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.finalize(); err != nil {
+			t.Fatal(err)
+		}
+		if len(s.finalTools) != 1 || s.finalTools[0].args != `{"x": "中文"}` || obj(s.finalTools[0].input)["x"] != "中文" {
+			t.Fatalf("native ASCII length selection changed: tools=%v", s.finalTools)
+		}
+	})
+}
+
+func TestRound26ResponseTruncationOutputID(t *testing.T) {
+	for _, path := range []struct {
+		name, protocol, policy string
+		stream                 bool
+	}{
+		{"anthropic-stream", "anthropic", "", true}, {"anthropic-collect", "anthropic", "", false},
+		{"openai-stream", "openai", "", true}, {"openai-collect", "openai", "", false},
+		{"strict-anthropic-stream", "anthropic", "required", true}, {"strict-anthropic-collect", "anthropic", "required", false},
+		{"strict-openai-stream", "openai", "required", true}, {"strict-openai-collect", "openai", "required", false},
+	} {
+		for _, tc := range []struct {
+			name string
+			id   any
+		}{{"empty", ""}, {"zero", json.Number("0")}, {"false", false}, {"nil", nil}, {"truthy-number", json.Number("26")}, {"truthy-bool", true}, {"string", "round26-truncated-" + path.name}} {
+			t.Run(path.name+"/"+tc.name, func(t *testing.T) {
+				original, isString := tc.id.(string)
+				popToolTruncation(original)
+				t.Cleanup(func() { popToolTruncation(original) })
+				s := newResponseState(requestOptions{protocol: path.protocol, policyMode: path.policy, stream: path.stream, allowedTools: map[string]bool{"lookup": true}})
+				var emitted []object
+				s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+				if err := s.toolEvent(object{"name": "lookup", "toolUseId": tc.id, "input": `{"x":`, "stop": true}); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.finalize(); path.policy != "" {
+					var violation *toolViolation
+					if !errors.As(err, &violation) || popToolTruncation(original) {
+						t.Fatalf("strict malformed tool: err=%v", err)
+					}
+					return
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				var outputID any
+				if path.protocol == "anthropic" {
+					if path.stream {
+						for _, event := range emitted {
+							if event["type"] == "content_block_start" && obj(event["content_block"])["type"] == "tool_use" {
+								outputID = obj(event["content_block"])["id"]
+							}
+						}
+					} else {
+						outputID = obj(list(s.response()["content"])[0])["id"]
+					}
+				} else {
+					outputID = s.finalTools[0].id
+				}
+				id, outputIsString := outputID.(string)
+				t.Cleanup(func() { popToolTruncation(id) })
+				want := outputIsString && id != "" && (path.protocol == "openai" && isString || path.protocol == "anthropic" && path.stream)
+				if path.protocol == "anthropic" && !toolIDTruthy(tc.id) && (!strings.HasPrefix(id, "toolu_") || len(id) != 30) {
+					t.Fatalf("missing fallback output id: %#v", outputID)
+				}
+				for attempt := 0; attempt < 2; attempt++ {
+					content := object{"text": "result"}
+					injectTruncationNotices([]message{{role: "user", results: []any{object{"toolUseId": outputID, "content": []any{content}}}}})
+					got := strings.Contains(str(content["text"]), truncationToolNotice)
+					if got != (want && attempt == 0) {
+						t.Errorf("output id=%#v attempt=%d notice=%v want=%v", outputID, attempt, got, want && attempt == 0)
+					}
+				}
+				if popToolTruncation(id) || popToolTruncation(original) || !reflect.DeepEqual(s.finalTools[0].id, tc.id) {
+					t.Fatal("truncation not consumed or native ID mutated")
+				}
+			})
+		}
+	}
+}
+
+func TestRound26ResponseAliasDedupMatrix(t *testing.T) {
+	const name = "mcp.lookup"
+	registerToolNames([]string{name})
+	alias := aliasToolName(name)
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, path := range []struct {
+			name, policy string
+			stream       bool
+		}{{"ordinary-stream", "", true}, {"ordinary-collect", "", false}, {"strict-stream", "named", true}, {"strict-collect", "named", false}} {
+			for _, bracket := range []bool{false, true} {
+				label := "native-only"
+				if bracket {
+					label = "with-bracket"
+				}
+				t.Run(protocol+"/"+path.name+"/"+label, func(t *testing.T) {
+					s := newResponseState(requestOptions{protocol: protocol, stream: path.stream, policyMode: path.policy, policyTool: name, allowedTools: map[string]bool{name: true}})
+					var emitted []object
+					s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+					for i, wireName := range []string{alias, name} {
+						if err := s.toolEvent(object{"name": wireName, "toolUseId": []string{"a", "b"}[i], "input": "{}", "stop": true}); err != nil {
+							t.Fatal(err)
+						}
+						if s.tools[i].name != wireName {
+							t.Errorf("native alias restored before raw dedup: name=%q wire=%q", s.tools[i].name, wireName)
+						}
+					}
+					if bracket {
+						if err := s.emitBlock("text", "[Called "+alias+" with args: {}]", false); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := s.finalize(); err != nil {
+						t.Fatal(err)
+					}
+					want := 2
+					if path.policy == "" && protocol == "openai" || bracket && (path.policy != "" || !path.stream) {
+						want = 1
+					} else if bracket {
+						want = 3
+					}
+					if len(s.finalTools) != want || s.toolCount != want {
+						t.Fatalf("final tools=%d want=%d", len(s.finalTools), want)
+					}
+					if s.finalTools[0].id != "a" || want > 1 && s.finalTools[1].id != "b" {
+						t.Fatalf("native call order/IDs changed: tools=%v", s.finalTools)
+					}
+					for _, ft := range s.finalTools {
+						if ft.name != name {
+							t.Fatalf("output name not restored: %q", ft.name)
+						}
+					}
+					if protocol == "anthropic" && path.stream {
+						count := 0
+						for _, event := range emitted {
+							block := obj(event["content_block"])
+							if event["type"] == "content_block_start" && block["type"] == "tool_use" {
+								count++
+								if block["name"] != name {
+									t.Errorf("stream name not restored: %v", block)
+								}
+							}
+						}
+						if count != want {
+							t.Errorf("output blocks=%d want=%d", count, want)
+						}
+					}
+				})
+			}
+		}
+	}
+}

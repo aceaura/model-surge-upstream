@@ -601,7 +601,7 @@ func (s *responseState) toolEvent(d object) error {
 			// parsers.py:395: 仅键缺省时生成 call_+8 hex;空串原样保留。
 			id = "call_" + strings.ReplaceAll(newID(), "-", "")[:8]
 		}
-		s.tool = &pendingTool{id: id, name: restoreToolName(str(d["name"]))}
+		s.tool = &pendingTool{id: id, name: str(d["name"])}
 	} else if s.tool == nil {
 		// parsers.py:408-427: 无开启工具的碎片帧静默忽略。
 		return nil
@@ -797,6 +797,10 @@ func (s *responseState) finalize() error {
 		return err
 	}
 	s.tools = dedupTools(s.tools)
+	for _, ft := range s.tools {
+		ft.name = restoreToolName(ft.name)
+	}
+	nativeCount := len(s.tools)
 	// Some models answer with [Called name with args: {...}] text instead of
 	// native tool events; those become real tool blocks after the text.
 	if !s.fullTextOverflow {
@@ -812,21 +816,10 @@ func (s *responseState) finalize() error {
 			}
 		}
 	}
-	// 去重矩阵(parsers.py:151-211 及各调用点):原生工具经 get_tool_calls
-	// (parsers.py:589-591)无条件去重,四路径皆然;openai 流收尾与括号恢复
-	// 合并后再去重(streaming_openai.py:283-284、streaming_core.py:499-501);
-	// 仅 anthropic 流式的括号恢复块追加不去重(streaming_anthropic.py:570-612)。
-	if s.options.protocol == "anthropic" && s.options.stream && s.options.policyMode == "" {
-		var native, bracket []*finishedTool
-		for _, ft := range s.tools {
-			if ft.bracket {
-				bracket = append(bracket, ft)
-			} else {
-				native = append(native, ft)
-			}
-		}
-		s.finalTools = append(dedupTools(native), bracket...)
-	} else {
+	// 原生 wire 名先去重；恢复后仅普通 OpenAI 或含括号工具的 collect 路径再去重。
+	s.finalTools = s.tools
+	if s.options.policyMode == "" && s.options.protocol == "openai" ||
+		len(s.tools) > nativeCount && (s.options.policyMode != "" || !s.options.stream) {
 		s.finalTools = dedupTools(s.tools)
 	}
 	s.toolCount = len(s.finalTools)
@@ -841,6 +834,9 @@ func (s *responseState) finalize() error {
 			}
 			if obj(ft.input) == nil {
 				return &toolViolation{msg: "tool '" + ft.name + "' arguments must be a JSON object"}
+			}
+			if args, ok := normalizeOrderedJSON(ft.args, false); ok {
+				ft.args = args
 			}
 		}
 		if ft.truncated && s.registersTruncation() {
@@ -859,6 +855,11 @@ func (s *responseState) finalize() error {
 			id := ft.id
 			if !toolIDTruthy(id) {
 				id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
+			}
+			if ft.truncated && s.registersTruncation() {
+				if outputID, ok := id.(string); ok {
+					saveToolTruncation(outputID, ft.name)
+				}
 			}
 			partial, _ := normalizeOrderedJSON(ft.args, false)
 			s.openBlock("tool_use", object{"type": "tool_use", "id": id, "name": ft.name, "input": object{}})

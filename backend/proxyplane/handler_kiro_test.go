@@ -232,6 +232,76 @@ func TestClientCannotSelectKiroAdapter(t *testing.T) {
 	_, _ = io.Copy(io.Discard, w.Result().Body)
 }
 
+func TestRound26KiroCountTokensHTTP(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer up.Close()
+	target := resolve.ResolvedTarget{ModelID: "kiro-count", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolAnthropic, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+	h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+	for _, tc := range []struct {
+		content string
+		status  int
+	}{
+		{`[{"type":"text"}]`, 200}, {`[{"type":"text","text":"x"}]`, 200}, {`[true]`, 400},
+	} {
+		r := httptest.NewRequest("POST", "/v1/messages/count_tokens", strings.NewReader(`{"model":"kiro-count","messages":[{"role":"user","content":`+tc.content+`}]}`))
+		r.Header.Set("Authorization", "Bearer "+testKey)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Errorf("content=%s status=%d body=%s", tc.content, w.Code, w.Body)
+		}
+		if tc.status == 200 {
+			var result struct {
+				InputTokens int `json:"input_tokens"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result.InputTokens <= 0 {
+				t.Errorf("invalid count result=%s err=%v", w.Body, err)
+			}
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("count_tokens contacted upstream %d times", calls)
+	}
+}
+
+func TestRound26KiroNumericContentHTTP(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{{"1e2", "100.0"}, {"1.00", "1.0"}, {"-0", "0"}, {"-0.0", "-0.0"}} {
+		t.Run(tc.raw, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload struct {
+					ConversationState struct {
+						CurrentMessage struct{ UserInputMessage struct{ Content string } }
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+					return
+				}
+				content := payload.ConversationState.CurrentMessage.UserInputMessage.Content
+				if content != tc.want && !strings.HasSuffix(content, "\n\n"+tc.want) {
+					t.Errorf("numeric content suffix differs, want=%s", tc.want)
+				}
+				_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+				_, _ = w.Write(kiroTestFrame("metadataEvent", `{"contextUsagePercentage":0}`))
+			}))
+			defer up.Close()
+			target := resolve.ResolvedTarget{ModelID: "kiro-number", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5", Headers: kiro.Headers("test-access", "")}
+			h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+			r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"kiro-number","messages":[{"role":"user","content":`+tc.raw+`}]}`))
+			r.Header.Set("Authorization", "Bearer "+testKey)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body)
+			}
+		})
+	}
+}
+
 func TestRound25KiroReasoningNumbers(t *testing.T) {
 	for _, raw := range []string{"2", "2.0", "2e0"} {
 		level, ok := reasoningLevel(json.Number(raw))

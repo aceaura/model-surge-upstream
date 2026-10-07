@@ -1649,6 +1649,211 @@ func TestRound25RequestCountTokens(t *testing.T) {
 	})
 }
 
+func TestRound26RequestRecoveryEstimate(t *testing.T) {
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, kind := range []string{"tool", "content"} {
+			t.Run(protocol+"/"+kind, func(t *testing.T) {
+				id, text := "round26-estimate-"+protocol+"-"+kind, "round26 truncated "+protocol+" "+kind
+				t.Cleanup(func() { popToolTruncation(id); popContentTruncation(text) })
+				assistant := object{"role": "assistant", "content": []any{object{"type": "text", "text": text}, object{"type": "unknown", "extra": strings.Repeat("X", 80)}}}
+				if protocol == "openai" && kind == "content" {
+					assistant["content"] = text
+				}
+				user := object{"role": "user", "content": "continue"}
+				if kind == "tool" {
+					assistant["content"] = []any{object{"type": "tool_use", "id": id, "name": "round26_estimate", "input": object{"n": json.Number("1e2")}}}
+					user["content"] = []any{object{"type": "tool_result", "tool_use_id": id, "content": "ok", "is_error": false}, object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": "YQ=="}}, object{"type": "unknown", "extra": strings.Repeat("Y", 100)}}
+					if protocol == "openai" {
+						assistant["content"] = text
+						assistant["tool_calls"] = []any{object{"id": id, "function": object{"name": "round26_estimate", "arguments": `{"n":1e2}`}}}
+						user = object{"role": "tool", "tool_call_id": id, "content": "ok"}
+					}
+					saveToolTruncation(id, "round26_estimate")
+				} else {
+					saveContentTruncation(text)
+				}
+				root := object{"model": "model", "system": []any{object{"type": "text", "text": "original system", "cache_control": object{"type": "ephemeral"}}}, "tools": []any{object{"name": "round26_estimate", "input_schema": object{}, "description": strings.Repeat("D", 10001)}}, "messages": []any{object{"role": "user", "content": "q"}, assistant, user}}
+				if protocol == "openai" && kind == "tool" {
+					assistant["tool_calls"] = append(list(assistant["tool_calls"]), object{"id": id + "-other", "function": object{"name": "round26_estimate", "arguments": "{}"}})
+					root["messages"] = []any{object{"role": "system", "content": "original inline system"}, list(root["messages"])[0], assistant, object{"role": "tool", "tool_call_id": id + "-other", "content": "unmodified result"}, user}
+				}
+				raw := []byte(jsonText(root))
+				original := estimateOriginalTokens(root, protocol)
+				if protocol == "anthropic" {
+					_, counted, err := convertRequest(raw, "count_tokens", "")
+					if err != nil || counted.estimateParts != original {
+						t.Fatalf("count estimate=%v want=%v err=%v", counted.estimateParts, original, err)
+					}
+				}
+				payload, opts, err := convertRequest(raw, protocol, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "tool" {
+					recovered := truncationToolNotice + "\n\n---\n\nOriginal tool result:\nok"
+					if protocol == "openai" {
+						user["content"] = recovered
+					} else {
+						obj(list(user["content"])[0])["content"] = recovered
+					}
+				} else {
+					var notice any = truncationUserMessage
+					if protocol == "anthropic" {
+						notice = []any{object{"type": "text", "text": truncationUserMessage}}
+					}
+					root["messages"] = []any{list(root["messages"])[0], assistant, object{"role": "user", "content": notice}, user}
+				}
+				want := estimateOriginalTokens(root, protocol)
+				if opts.estimateParts != want || opts.inputEstimate != want[0]+want[1]+want[2] || want[0] <= original[0] {
+					t.Errorf("generation estimate=%v total=%d want=%v original=%v", opts.estimateParts, opts.inputEstimate, want, original)
+				}
+				if !strings.Contains(jsonText(payload), "was truncated") || !strings.Contains(jsonText(payload), "# Tool Documentation") || !opts.fakeReasoning {
+					t.Errorf("generation did not exercise injected content/docs/reasoning: options=%+v", opts)
+				}
+				_, next, err := convertRequest(raw, protocol, "")
+				if err != nil || next.estimateParts != original {
+					t.Fatalf("one-shot estimate=%v want=%v err=%v", next.estimateParts, original, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRound26RequestCountModelOnly(t *testing.T) {
+	for i, blocks := range [][]any{{object{"type": "text"}}, {object{"type": "text", "text": true}}, {object{"type": "image", "source": object{"type": "base64", "data": "not base64", "media_type": "image/png"}}}} {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": blocks}}}
+		payload, opts, err := convertRequest([]byte(jsonText(root)), "count_tokens", "")
+		if err != nil || payload != nil || opts.estimateParts != estimateOriginalTokens(root, "anthropic") {
+			t.Errorf("model-valid count rejected: blocks=%v options=%+v err=%v", blocks, opts, err)
+		}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "anthropic", ""); (err != nil) != (i < 2) {
+			t.Errorf("generation semantic handling changed: blocks=%v err=%v", blocks, err)
+		}
+	}
+	for _, invalid := range []object{
+		{"messages": nil}, {"messages": []any{}}, {"messages": []any{true}},
+		{"messages": []any{object{"role": "tool", "content": "x"}}},
+		{"messages": []any{object{"role": true, "content": "x"}}},
+		{"messages": []any{object{"role": "user"}}},
+		{"messages": []any{object{"role": "user", "content": nil}}},
+		{"messages": []any{object{"role": "user", "content": true}}},
+		{"messages": []any{object{"role": "user", "content": json.Number("1")}}},
+		{"messages": []any{object{"role": "user", "content": object{}}}},
+		{"messages": []any{object{"role": "user", "content": []any{nil}}}},
+		{"messages": []any{object{"role": "user", "content": []any{true}}}},
+		{"messages": []any{object{"role": "user", "content": []any{"text"}}}},
+		{"messages": []any{object{"role": "user", "content": []any{object{"type": true}}}}},
+		{"tools": []any{object{"name": "round26_invalid"}}},
+		{"tools": []any{object{"name": true, "input_schema": object{}}}},
+		{"tools": []any{object{"name": "round26_invalid", "input_schema": true}}},
+		{"tools": []any{object{"name": "round26_invalid", "input_schema": object{}, "allowed_domains": []any{true}}}},
+		{"system": true}, {"system": []any{nil}},
+	} {
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}}
+		for key, value := range invalid {
+			root[key] = value
+		}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "count_tokens", ""); err == nil {
+			t.Errorf("count accepted invalid model: %v", invalid)
+		}
+	}
+	t.Run("duplicate tool names are not a model constraint", func(t *testing.T) {
+		tool := object{"name": "round26_duplicate", "input_schema": object{}}
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{tool, tool}}
+		if _, _, err := convertRequest([]byte(jsonText(root)), "count_tokens", ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestRound26RequestCountAliasIsolation(t *testing.T) {
+	toolNameMu.Lock()
+	to, from, reserved := toolNameToAlias, toolNameFromAlias, toolNameReserved
+	toolNameToAlias, toolNameFromAlias, toolNameReserved = map[string]string{}, map[string]string{}, map[string]bool{}
+	toolNameMu.Unlock()
+	t.Cleanup(func() {
+		toolNameMu.Lock()
+		toolNameToAlias, toolNameFromAlias, toolNameReserved = to, from, reserved
+		toolNameMu.Unlock()
+	})
+	name := "round26.count.alias"
+	short := buildToolAlias(name, 12)
+	root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": name, "input_schema": object{}}, object{"name": "round26_count_reserved", "input_schema": object{}}}}
+	if _, _, err := convertRequest([]byte(jsonText(root)), "count_tokens", ""); err != nil {
+		t.Fatal(err)
+	}
+	toolNameMu.Lock()
+	allocated, restored, registered := len(toolNameToAlias), len(toolNameFromAlias), len(toolNameReserved)
+	toolNameMu.Unlock()
+	if allocated != 0 || restored != 0 || registered != 0 {
+		t.Errorf("count mutated alias state: to=%d from=%d reserved=%d", allocated, restored, registered)
+	}
+	root["tools"] = []any{object{"name": name, "input_schema": object{}}, object{"name": short, "input_schema": object{}}}
+	payload, _ := convert(t, root, "anthropic")
+	user := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+	tools := list(obj(user["userInputMessageContext"])["tools"])
+	first := str(obj(obj(tools[0])["toolSpecification"])["name"])
+	second := str(obj(obj(tools[1])["toolSpecification"])["name"])
+	if first != buildToolAlias(name, 16) || second != short || restoreToolName(first) != name {
+		t.Errorf("alias collision after count: first=%s second=%s", first, second)
+	}
+}
+
+func TestRound26RequestNumericString(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{{"1e2", "100.0"}, {"1.00", "1.0"}, {"-0", "0"}, {"-0.0", "-0.0"}, {"1e-5", "1e-05"}} {
+		t.Run(tc.raw, func(t *testing.T) {
+			n := json.Number(tc.raw)
+			if got := pythonicString(n); got != tc.want {
+				t.Errorf("numeric str=%s want=%s", got, tc.want)
+			}
+			for _, role := range []string{"user", "system", "tool"} {
+				msg, err := parseMessage(object{"role": role, "content": n, "tool_call_id": "round26-numeric"}, "openai")
+				text := msg.text
+				if role == "system" {
+					text, err = textOnly(n)
+				} else if role == "tool" && len(msg.results) == 1 {
+					text = str(obj(list(obj(msg.results[0])["content"])[0])["text"])
+				}
+				if err != nil || text != tc.want {
+					t.Errorf("role=%s text=%s want=%s err=%v", role, text, tc.want, err)
+				}
+			}
+			for _, protocol := range []string{"openai", "anthropic"} {
+				text, _, err := resultContent(n, protocol)
+				want := tc.want
+				if protocol == "anthropic" && (tc.raw == "-0" || tc.raw == "-0.0") {
+					want = ""
+				}
+				if err != nil || text != want || len(obj(toolUse("i", "f", n)["input"])) != 0 {
+					t.Errorf("tool fallback protocol=%s text=%s want=%s err=%v", protocol, text, want, err)
+				}
+			}
+			root := object{"model": "model", "messages": []any{object{"role": "user", "content": n}}}
+			payload, opts := convert(t, root, "openai")
+			if !strings.HasSuffix(currentContent(t, payload), tc.want) || opts.estimateParts != [3]int{4 + estimateText("user", false) + 3, 0, 0} {
+				t.Errorf("scalar generation content=%s estimate=%v", currentContent(t, payload), opts.estimateParts)
+			}
+			root["messages"] = []any{object{"role": "user", "content": []any{n}}}
+			_, opts = convert(t, root, "openai")
+			want := 4 + estimateText("user", false) + estimateText(tc.want, false) + 3
+			if opts.estimateParts != [3]int{want, 0, 0} {
+				t.Errorf("bare numeric token estimate=%v want=%d", opts.estimateParts, want)
+			}
+			root["messages"] = []any{object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "i", "content": n}}}}
+			payload, opts = convert(t, root, "openai")
+			want += estimateText("i", false)
+			if opts.estimateParts != [3]int{want, 0, 0} || !strings.HasSuffix(currentContent(t, payload), tc.want) {
+				t.Errorf("result numeric content=%s token estimate=%v want=%d", currentContent(t, payload), opts.estimateParts, want)
+			}
+		})
+	}
+	for _, raw := range []string{"NaN", "Infinity", "-Infinity"} {
+		if _, _, err := convertRequest([]byte(`{"model":"model","messages":[{"role":"user","content":`+raw+`}]}`), "openai", ""); err == nil {
+			t.Errorf("accepted non-JSON number %s", raw)
+		}
+	}
+}
+
 func TestRound24ResponseEdges(t *testing.T) {
 	t.Run("array tool input", func(t *testing.T) {
 		for _, tc := range []struct {

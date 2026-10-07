@@ -21,6 +21,238 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
+func TestRound26AliasDedupWireMatrix(t *testing.T) {
+	const original = "round26.wire.lookup"
+	registerToolNames([]string{original})
+	alias := aliasToolName(original)
+	wire := joinedFrames(frame("toolUseEvent", object{"name": alias, "toolUseId": "a", "input": object{}, "stop": true}), frame("toolUseEvent", object{"name": original, "toolUseId": "b", "input": object{}, "stop": true}), endFrame())
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			for _, strict := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%v/strict=%v", protocol, stream, strict), func(t *testing.T) {
+					var choice any = "auto"
+					if strict {
+						choice = "required"
+					}
+					if protocol == "anthropic" {
+						choice = object{"type": "auto"}
+						if strict {
+							choice = object{"type": "any"}
+						}
+					}
+					tools := toolDefinition(protocol)
+					if protocol == "anthropic" {
+						obj(tools[0])["name"] = original
+					} else {
+						obj(obj(tools[0])["function"])["name"] = original
+					}
+					root := object{"model": "claude-sonnet-4-6", "max_tokens": 32, "stream": stream, "messages": []any{object{"role": "user", "content": "hello"}}, "tools": tools, "tool_choice": choice}
+					upstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(wire)), Request: r}, nil
+					})
+					request := clientRequest(tbOf(t), "http://unused", protocol, stream)
+					request.Body = io.NopCloser(strings.NewReader(jsonText(root)))
+					request.GetBody = nil
+					response, err := NewTransport(upstream).RoundTrip(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := io.ReadAll(response.Body)
+					response.Body.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := 2
+					if protocol == "openai" && !strict {
+						want = 1
+					}
+					if count := strings.Count(string(data), `"name":"`+original+`"`); count != want || strings.Contains(string(data), alias) {
+						t.Fatalf("restored tool count=%d want=%d body=%s", count, want, data)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRound26FallbackToolIDRecoveryWire(t *testing.T) {
+	for _, id := range []any{"", nil, false, json.Number("0")} {
+		t.Run(fmt.Sprintf("%T/%v", id, id), func(t *testing.T) {
+			calls := 0
+			upstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				payload, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(payload), "[API Limitation] Your tool call was truncated") != (calls == 2) {
+					t.Errorf("recovery notice differs on call %d: payload=%s", calls, payload)
+				}
+				wire := joinedFrames(frame("assistantResponseEvent", object{"content": "fixed"}), endFrame())
+				if calls == 1 {
+					wire = frame("toolUseEvent", object{"name": "lookup", "toolUseId": id, "input": `{"x":`, "stop": true})
+				}
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(wire)), Request: r}, nil
+			})
+			transport := NewTransport(upstream)
+			request := clientRequest(tbOf(t), "http://unused", "anthropic", true)
+			response, err := transport.RoundTrip(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			outputID := ""
+			for _, event := range events(t, data) {
+				if block := obj(event["content_block"]); block["type"] == "tool_use" {
+					outputID = str(block["id"])
+				}
+			}
+			if !strings.HasPrefix(outputID, "toolu_") {
+				t.Fatalf("missing fallback id: %s", data)
+			}
+			t.Cleanup(func() { popToolTruncation(outputID) })
+			root := object{"model": "claude-sonnet-4-6", "max_tokens": 32, "messages": []any{
+				object{"role": "user", "content": "q"},
+				object{"role": "assistant", "content": []any{object{"type": "tool_use", "id": outputID, "name": "lookup", "input": object{}}}},
+				object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": outputID, "content": "retry"}}},
+			}, "tools": toolDefinition("anthropic")}
+			for attempt := 0; attempt < 2; attempt++ {
+				retry := clientRequest(tbOf(t), "http://unused", "anthropic", false)
+				retry.Body = io.NopCloser(strings.NewReader(jsonText(root)))
+				retry.GetBody = nil
+				response, err := transport.RoundTrip(retry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = io.ReadAll(response.Body)
+				response.Body.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if calls != 3 {
+				t.Fatalf("calls=%d", calls)
+			}
+		})
+	}
+}
+
+func TestRound26WireBoundaryMatrix(t *testing.T) {
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			for _, policy := range []string{"auto", "required", "named"} {
+				t.Run(fmt.Sprintf("%s/stream=%v/%s", protocol, stream, policy), func(t *testing.T) {
+					rawFrame := func(raw string) []byte {
+						headers := append(stringHeader(":message-type", "event"), stringHeader(":event-type", "assistantResponseEvent")...)
+						return frameWithHeaders(headers, []byte(raw))
+					}
+					wire := joinedFrames(
+						rawFrame(`{"content":"visible","input":"{}","usage":99}`),
+						rawFrame(`{"text":"native reason"}`), rawFrame(`{"signature":"s1"}`), rawFrame(`{"signature":"s2"}`),
+						rawFrame(`{"name":"lookup","toolUseId":25,"input":{"x":1},"stop":true}`),
+						rawFrame(`{"name":"lookup","toolUseId":25.0,"input":{"x":2,"y":"中"},"stop":true}`),
+						rawFrame(`{"usage":{"inputTokens":17,"outputTokens":29}}`),
+						rawFrame(`{"usage":0.25}`), rawFrame(`{"contextUsagePercentage":0}`),
+					)
+					calls := 0
+					upstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+						calls++
+						return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(wire)), Request: r}, nil
+					})
+					var choice any = policy
+					if protocol == "anthropic" {
+						choice = object{"type": "auto"}
+						if policy == "required" {
+							choice = object{"type": "any"}
+						}
+						if policy == "named" {
+							choice = object{"type": "tool", "name": "lookup"}
+						}
+					} else if policy == "named" {
+						choice = object{"type": "function", "function": object{"name": "lookup"}}
+					}
+					root := object{"model": "claude-sonnet-4-6", "max_tokens": 32, "stream": stream, "messages": []any{object{"role": "user", "content": "hello"}}, "tools": toolDefinition(protocol), "tool_choice": choice}
+					request := clientRequest(tbOf(t), "http://unused", protocol, stream)
+					request.Body = io.NopCloser(strings.NewReader(jsonText(root)))
+					request.GetBody = nil
+					response, err := NewTransport(upstream).RoundTrip(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := io.ReadAll(response.Body)
+					response.Body.Close()
+					if err != nil || response.StatusCode != 200 || calls != 1 {
+						t.Fatalf("status=%d calls=%d err=%v body=%s", response.StatusCode, calls, err, data)
+					}
+					tools := []object{}
+					var usage object
+					if stream {
+						for _, event := range events(t, data) {
+							if protocol == "anthropic" {
+								if event["type"] == "message_start" && number(obj(obj(event["message"])["usage"])["output_tokens"]) != 0 {
+									t.Fatal("nonzero start usage")
+								}
+								if block := obj(event["content_block"]); block["type"] == "tool_use" {
+									tools = append(tools, block)
+								}
+								if event["type"] == "message_delta" {
+									usage = obj(event["usage"])
+								}
+							} else {
+								for _, choice := range list(event["choices"]) {
+									for _, tool := range list(obj(obj(choice)["delta"])["tool_calls"]) {
+										tools = append(tools, obj(tool))
+									}
+								}
+								if event["usage"] != nil {
+									usage = obj(event["usage"])
+								}
+							}
+						}
+					} else {
+						result := parseResult(t, data)
+						usage = obj(result["usage"])
+						if protocol == "anthropic" {
+							for _, block := range list(result["content"]) {
+								if obj(block)["type"] == "tool_use" {
+									tools = append(tools, obj(block))
+								}
+							}
+						} else {
+							for _, tool := range list(obj(obj(list(result["choices"])[0])["message"])["tool_calls"]) {
+								tools = append(tools, obj(tool))
+							}
+						}
+					}
+					if len(tools) != 1 || fmt.Sprint(tools[0]["id"]) != "25.0" || fmt.Sprint(usage["credits_used"]) != "0.25" || !strings.Contains(string(data), "visible") || !strings.Contains(string(data), "native reason") {
+						t.Fatalf("tools=%v usage=%v body=%s", tools, usage, data)
+					}
+					if protocol == "openai" {
+						want := `{"x": 2, "y": "中"}`
+						if policy == "auto" {
+							want = `{"x": 2, "y": "\u4e2d"}`
+						}
+						if str(obj(tools[0]["function"])["arguments"]) != want {
+							t.Fatalf("arguments=%v want=%s", obj(tools[0]["function"])["arguments"], want)
+						}
+					}
+					key := "output_tokens"
+					if protocol == "openai" {
+						key = "completion_tokens"
+					}
+					if number(usage[key]) != 29 {
+						t.Fatalf("final usage=%v", usage)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRound25EmptyNativeThinkingLifecycle(t *testing.T) {
 	for _, finish := range []string{"text", "finalize"} {
 		t.Run(finish, func(t *testing.T) {
