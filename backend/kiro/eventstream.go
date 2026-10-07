@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -92,21 +93,51 @@ func (p *eventReader) next() (wireEvent, error) {
 	nested := obj(data[kind])
 	if nested != nil {
 		data = nested
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return wireEvent{}, err
+		}
+		raw = fields[kind]
 	}
 	if len(obj(data["input"])) > 0 {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			return wireEvent{}, err
 		}
-		if nested != nil {
-			if err := json.Unmarshal(fields[kind], &fields); err != nil {
-				return wireEvent{}, err
-			}
-		}
 		data["input"] = string(fields["input"])
 	}
 	if _, ok := data["exception"]; ok {
 		return wireEvent{}, fmt.Errorf("kiro: upstream exception: %s", jsonText(data["exception"]))
+	}
+	// A payload is one primary event, not simultaneous content, tool and usage events.
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	_, _ = decoder.Token()
+	primary := ""
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return wireEvent{}, err
+		}
+		key, _ := token.(string)
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return wireEvent{}, err
+		}
+		switch key {
+		case "content", "name", "input", "stop", "followupPrompt", "usage", "contextUsagePercentage", "text", "signature":
+			primary = key
+		}
+		if primary != "" {
+			break
+		}
+	}
+	if primary != "" {
+		for _, key := range []string{"content", "name", "input", "stop", "followupPrompt", "usage", "contextUsagePercentage", "text", "signature"} {
+			if key == primary || ((primary == "name" || primary == "input" || primary == "stop") && (key == "name" || key == "input" || key == "stop")) || (primary == "content" && key == "followupPrompt") {
+				continue
+			}
+			delete(data, key)
+		}
 	}
 	return wireEvent{kind: kind, data: data}, nil
 }

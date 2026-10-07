@@ -434,6 +434,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	}
 	var tools []any
 	toolDocs := map[string]string{}
+	toolOriginalNames := map[string]string{}
 	// extensions/tool_name_alias.py:68-78(app_entry 恒装):先登记本轮全部
 	// 工具名——合法名进保留集防止被长名别名抢占,非法/超长名取
 	// t_<sha256[:12]>_<suffix> 别名上行,响应侧恢复原名。
@@ -552,11 +553,10 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			return fail(fmt.Errorf("duplicate tool %q", name))
 		}
 		opts.allowedTools[name] = true
-		// tool_name_alias.py:126-143: 宽化部署不再拒绝超长/非法名,统一
-		// 换别名上行;描述占位与长描述迁移段也用别名(参考实现在
-		// build_kiro_payload 的 convert_tools_to_kiro_format 里先别名后
-		// 转换)。
+		originalName := name
+		// Native conversion aliases empty-description placeholders, not migrated documentation.
 		name = aliasToolName(name)
+		toolOriginalNames[name] = originalName
 		schema := t["input_schema"]
 		if protocol == "openai" && !flat {
 			schema = t["parameters"]
@@ -581,8 +581,8 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		if utf8.RuneCountInString(description) > 10000 {
 			// converters_core.py:616-636: 超长描述迁入系统提示的
 			// "# Tool Documentation" 段,工具上只留指引占位。
-			toolDocs[name] = "## Tool: " + name + "\n\n" + description
-			description = "[Full documentation in system prompt under '## Tool: " + name + "']"
+			toolDocs[name] = "## Tool: " + originalName + "\n\n" + description
+			description = "[Full documentation in system prompt under '## Tool: " + originalName + "']"
 		}
 		tools = append(tools, object{"toolSpecification": object{"name": name, "description": description, "inputSchema": object{"json": sanitizeSchema(schema)}}})
 	}
@@ -610,14 +610,11 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 				return fail(fmt.Errorf("invalid Anthropic tool_choice structure"))
 			}
 			if _, has := m["type"]; !has {
-				m["type"] = "auto"
-				if _, named := m["name"]; named {
+				// Only typed extra-forbid matches inject defaults; Dict fallback keeps type missing.
+				if len(m) == 0 {
+					m["type"] = "auto"
+				} else if _, ok := m["name"].(string); ok && len(m) == 1 {
 					m["type"] = "tool"
-				}
-			}
-			for key := range m {
-				if key != "type" && key != "name" {
-					return fail(fmt.Errorf("unexpected Anthropic tool_choice field %q", key))
 				}
 			}
 			switch t := str(m["type"]); t {
@@ -692,7 +689,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			return fail(fmt.Errorf("role must be user, assistant or system"))
 		}
 		// converters_openai.py:169-175: 只有 openai 的 system 进系统提示,
-		// 多条 "\n" 连接并整体 strip;developer 等未知角色按 user 解析,但
+		// 多条 "\n" 连接并整体 strip;developer 等未知角色保留原角色,
 		// 归一化在合并之后(converters_core.py:1728-1740: merge → 首条
 		// user → normalize → alternating)。anthropic 内联 system 不进系统
 		// 提示(系统提示只读 root.system),作为普通消息走流水线。
@@ -705,14 +702,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			continue
 		}
 		parseable := role == "user" || role == "assistant" || (protocol == "openai" && role == "tool")
-		if !parseable {
-			// anthropic 内联 system 保留原角色:提取门控只认 user/assistant
-			// (converters_anthropic.py:297-319),system 消息只贡献文本,
-			// 且合并分组按原始角色(system 不与相邻 user 合并)。
-			if protocol != "anthropic" || role != "system" {
-				m["role"] = "user"
-			}
-		}
 		msg, e := parseMessage(m, protocol)
 		if e != nil {
 			return fail(e)
@@ -739,6 +728,17 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if len(messages) == 0 {
 		return fail(fmt.Errorf("messages must contain a user or assistant turn"))
 	}
+	// tokenizer.py estimate_request_tokens: 输入估算基于原始请求
+	// (messages/tools/system 未转换,不含注入段与合成占位),usage 兜底
+	// 不乘校正系数(streaming_anthropic.py:178-183、
+	// streaming_openai.py:322-326);count_tokens 端点在 transport 侧对
+	// 三部分分别乘 1.15(routes_anthropic.py:1124、tokenizer.py:208-209)。
+	opts.estimateParts = estimateOriginalTokens(root, protocol)
+	opts.inputEstimate = opts.estimateParts[0] + opts.estimateParts[1] + opts.estimateParts[2]
+	if countTokens {
+		// Counting must not consume one-shot recovery state or enter generation processing.
+		return nil, opts, nil
+	}
 	// Truncation recovery (truncation_state.py): a previous response that was
 	// cut mid-stream earns a one-time synthetic notice in this request.
 	// routes_anthropic.py:230-254 在原始消息上注入,随后走整条流水线
@@ -752,7 +752,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// 工具,未选工具的历史调用同样降级为文本)。
 	declared := map[string]bool{}
 	for _, t := range tools {
-		declared[str(obj(obj(t)["toolSpecification"])["name"])] = true
+		declared[toolOriginalNames[str(obj(obj(t)["toolSpecification"])["name"])]] = true
 	}
 	historyAsText := len(tools) == 0
 	for _, m := range messages {
@@ -940,13 +940,6 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 			history = append(history, nativeMessage(m, model, nil))
 		}
 	}
-	// tokenizer.py estimate_request_tokens: 输入估算基于原始请求
-	// (messages/tools/system 未转换,不含注入段与合成占位),usage 兜底
-	// 不乘校正系数(streaming_anthropic.py:178-183、
-	// streaming_openai.py:322-326);count_tokens 端点在 transport 侧对
-	// 三部分分别乘 1.15(routes_anthropic.py:1124、tokenizer.py:208-209)。
-	opts.estimateParts = estimateOriginalTokens(root, protocol)
-	opts.inputEstimate = opts.estimateParts[0] + opts.estimateParts[1] + opts.estimateParts[2]
 	state := object{"chatTriggerType": "MANUAL", "conversationId": newID(), "currentMessage": nativeMessage(messages[len(messages)-1], model, tools)}
 	if len(history) > 0 {
 		state["history"] = history
@@ -1346,8 +1339,13 @@ func parseMessage(m object, protocol string) (message, error) {
 		result.results = append(result.results, toolResult(str(m["tool_call_id"]), text))
 		return result, nil
 	}
+	if protocol == "openai" {
+		result.text, _ = textOnly(m["content"])
+	}
 	if s, ok := m["content"].(string); ok {
-		result.text = s
+		if protocol != "openai" {
+			result.text = s
+		}
 	} else if m["content"] != nil {
 		blocks, ok := m["content"].([]any)
 		if !ok {
@@ -1356,17 +1354,15 @@ func parseMessage(m object, protocol string) (message, error) {
 			if protocol != "openai" {
 				return result, fmt.Errorf("content must be text or blocks")
 			}
-			result.text = pythonicString(m["content"])
 			blocks = nil
 		}
 		for i, v := range blocks {
-			if s, ok := v.(string); ok {
+			if _, ok := v.(string); ok {
 				// extract_text_content: openai 列表里的裸字符串直接拼接;
 				// anthropic 的 ContentBlock 联合类型不含字符串项,422。
 				if protocol != "openai" {
 					return result, fmt.Errorf("content blocks must be objects")
 				}
-				result.text += s
 				continue
 			}
 			b := obj(v)
@@ -1395,8 +1391,8 @@ func parseMessage(m object, protocol string) (message, error) {
 					if _, ok := b["text"].(string); !ok {
 						return result, fmt.Errorf("text block requires a string text field")
 					}
+					result.text += str(b["text"])
 				}
-				result.text += str(b["text"])
 			case "thinking": // Native history has no reasoning channel.
 				// 缺 thinking 字段的畸形块经 pydantic smart union 落入
 				// UnknownContentBlock 兜底被接受,转换层不读 thinking 块,
@@ -1438,11 +1434,7 @@ func parseMessage(m object, protocol string) (message, error) {
 				if !truthy(id) || !truthy(name) {
 					continue
 				}
-				alias := name
-				if s, ok := name.(string); ok {
-					alias = aliasToolName(s)
-				}
-				u := toolUse(id, alias, b["input"])
+				u := toolUse(id, name, b["input"])
 				// converters_anthropic.py:254: unified arguments 恒为 coerce 后
 				// 的 dict,文本化渲染取其 Python repr。
 				u["argsText"] = pyRepr(u["input"])
@@ -1466,10 +1458,6 @@ func parseMessage(m object, protocol string) (message, error) {
 					continue
 				}
 				result.results = append(result.results, toolResult(id, text))
-			default:
-				if protocol == "openai" {
-					result.text += str(b["text"])
-				}
 			}
 		}
 	}
@@ -1495,11 +1483,7 @@ func parseMessage(m object, protocol string) (message, error) {
 		if name == nil {
 			name = ""
 		}
-		alias := name
-		if s, ok := name.(string); ok {
-			alias = aliasToolName(s)
-		}
-		u := toolUse(id, alias, f["arguments"])
+		u := toolUse(id, name, f["arguments"])
 		// 文本化渲染用 unified arguments 原文:字符串 verbatim,缺省
 		// "{}",非标量(dict 等,models_openai.py:81 List[Any] 无校验)
 		// 取 Python repr。
@@ -1867,7 +1851,14 @@ func nativeMessage(m message, model string, tools []any) object {
 		if len(m.uses) > 0 {
 			uses := make([]any, len(m.uses))
 			for i, u := range m.uses {
-				uses[i] = stripArgsText(u)
+				use := make(object, len(obj(u)))
+				for key, value := range stripArgsText(u) {
+					use[key] = value
+				}
+				if name, ok := use["name"].(string); ok {
+					use["name"] = aliasToolName(name)
+				}
+				uses[i] = use
 			}
 			a["toolUses"] = uses
 		}

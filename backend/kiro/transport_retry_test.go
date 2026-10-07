@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,122 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 )
 
+func TestRound25EmptyNativeThinkingLifecycle(t *testing.T) {
+	for _, finish := range []string{"text", "finalize"} {
+		t.Run(finish, func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: "anthropic", stream: true})
+			var emitted []object
+			s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+			for _, data := range []object{{"text": ""}, {"text": ""}, {"signature": "real-signature"}} {
+				if err := s.accept(wireEvent{kind: "assistantResponseEvent", data: data}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(emitted) != 2 || obj(emitted[0]["content_block"])["thinking"] != "" || obj(emitted[1]["delta"])["signature"] != "real-signature" || s.outputRunes != 0 {
+				t.Fatalf("empty thinking lifecycle=%v runes=%d", emitted, s.outputRunes)
+			}
+			if finish == "text" {
+				if err := s.accept(wireEvent{data: object{"content": "answer"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.terminal = true
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			stops := 0
+			for _, event := range emitted {
+				if event["type"] == "content_block_stop" && event["index"] == 0 {
+					stops++
+				}
+			}
+			if stops != 1 {
+				t.Fatalf("thinking stops=%d events=%v", stops, emitted)
+			}
+		})
+	}
+	for _, options := range []requestOptions{{protocol: "anthropic"}, {protocol: "openai", stream: true}, {protocol: "anthropic", stream: true, policyMode: "none"}} {
+		s := newResponseState(options)
+		if err := s.accept(wireEvent{data: object{"text": ""}}); err != nil {
+			t.Fatal(err)
+		}
+		if s.blockIndex != -1 || len(s.blocks) != 0 {
+			t.Fatalf("empty frame leaked into collect/OpenAI: %+v", options)
+		}
+	}
+}
+
+func TestRound25ThinkingPayloadDispatch(t *testing.T) {
+	base := frame("assistantResponseEvent", object{})
+	hlen := binary.BigEndian.Uint32(base[4:8])
+	reader := eventReader{r: bytes.NewReader(frameWithHeaders(base[12:12+hlen], []byte(`{"text":"native reasoning"}`)))}
+	e, err := reader.next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newResponseState(requestOptions{protocol: "anthropic"})
+	if err := s.accept(e); err != nil {
+		t.Fatal(err)
+	}
+	if s.fullThinking.String() != "native reasoning" {
+		t.Fatalf("thinking=%q", s.fullThinking.String())
+	}
+}
+
+func TestRound25SingleFrameDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		raw, text string
+		terminal  bool
+	}{
+		{`{"content":"visible","usage":0.25}`, "visible", false},
+		{`{"usage":0.25,"content":"hidden"}`, "", true},
+		{`{"content":"visible","input":"{}"}`, "visible", false},
+		{`{"content":"visible","contextUsagePercentage":25}`, "visible", false},
+		{`{"contextUsagePercentage":25,"content":"hidden"}`, "", true},
+		{`{"followupPrompt":"suggestion","content":"hidden","usage":0.25}`, "", false},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			base := frame("assistantResponseEvent", object{})
+			hlen := binary.BigEndian.Uint32(base[4:8])
+			reader := eventReader{r: bytes.NewReader(frameWithHeaders(base[12:12+hlen], []byte(tc.raw)))}
+			e, err := reader.next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := newResponseState(requestOptions{protocol: "openai"})
+			if err := s.accept(e); err != nil {
+				t.Fatal(err)
+			}
+			if s.fullText.String() != tc.text || s.terminal != tc.terminal {
+				t.Fatalf("text=%q terminal=%v event=%v", s.fullText.String(), s.terminal, e.data)
+			}
+		})
+	}
+}
+
+func TestRound25ThinkingBudgetIntegers(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`5000`, "5000"}, {`5000.0`, "disabled"}, {`5e3`, "disabled"},
+		{`1099511627777`, "10000"}, {`999999999999999999999999999999999999999`, "10000"},
+		{`0`, "disabled"}, {`-1`, "disabled"}, {`true`, "disabled"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			root, err := decodeObject(`{"thinking":{"budget_tokens":` + tc.raw + `},"reasoning_effort":"none"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := extractThinking(root, "anthropic")
+			if tc.want == "disabled" {
+				if !cfg.disabled {
+					t.Fatalf("cfg=%+v", cfg)
+				}
+			} else if cfg.disabled || !strings.Contains(thinkingTagsPrefix(cfg), "<max_thinking_length>"+tc.want+"</max_thinking_length>") {
+				t.Fatalf("cfg=%+v prefix=%s", cfg, thinkingTagsPrefix(cfg))
+			}
+		})
+	}
+}
+
 // stubTimeout 把首 token 等待缩到毫秒级。
 func stubTimeout(t *testing.T, d time.Duration) {
 	t.Helper()
@@ -32,15 +149,14 @@ func TestFirstTokenTimeoutRetry(t *testing.T) {
 	stubTimeout(t, 50*time.Millisecond)
 	var calls atomic.Int32
 	wire := joinedFrames(frame("assistantResponseEvent", object{"content": "hi"}), endFrame())
-	server := stub(t, wire, nil)
 	// 第一次请求 200 但不出字节,触发首 token 超时重发;第二次正常返回。
 	slow := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if calls.Add(1) == 1 {
 			return newHangResponse(r), nil
 		}
-		return http.DefaultTransport.RoundTrip(r)
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(wire)), Request: r}, nil
 	})
-	r := clientRequest(tbOf(t), server.URL, "openai", true)
+	r := clientRequest(tbOf(t), "http://unused", "openai", true)
 	resp, err := NewTransport(slow).RoundTrip(r)
 	if err != nil {
 		t.Fatal(err)
@@ -140,17 +256,16 @@ func TestMidStreamStallTimeout(t *testing.T) {
 func TestNetworkErrorRetry(t *testing.T) {
 	var calls atomic.Int32
 	wire := joinedFrames(frame("assistantResponseEvent", object{"content": "ok"}), endFrame())
-	server := stub(t, wire, nil)
 	flaky := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if calls.Add(1) <= 2 {
 			return nil, &net.OpError{Op: "read", Err: errors.New("connection reset by peer")}
 		}
-		return http.DefaultTransport.RoundTrip(r)
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(wire)), Request: r}, nil
 	})
 	origBackoff := retryBackoff
 	retryBackoff = func(int) time.Duration { return time.Millisecond }
 	t.Cleanup(func() { retryBackoff = origBackoff })
-	r := clientRequest(tbOf(t), server.URL, "openai", true)
+	r := clientRequest(tbOf(t), "http://unused", "openai", true)
 	resp, err := NewTransport(flaky).RoundTrip(r)
 	if err != nil {
 		t.Fatal(err)

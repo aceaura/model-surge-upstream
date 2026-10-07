@@ -1346,7 +1346,7 @@ func TestRound24RequestBoundaries(t *testing.T) {
 		}
 	})
 	t.Run("Anthropic tool choice validation", func(t *testing.T) {
-		for _, tc := range []object{{"type": nil}, {"name": 1}, {"type": "auto", "name": "f"}, {"type": "none", "extra": true}} {
+		for _, tc := range []object{{"type": nil}, {"name": 1}, {"type": "auto", "name": "f"}, {"extra": true}} {
 			_, _, err := convertRequest([]byte(jsonText(object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": "f", "input_schema": object{}}}, "tool_choice": tc})), "anthropic", "")
 			if err == nil {
 				t.Fatalf("accepted tool_choice %v", tc)
@@ -1380,6 +1380,271 @@ func TestRound24RequestBoundaries(t *testing.T) {
 					t.Fatalf("protocol=%s mode=%s documentation selection failed", protocol, mode)
 				}
 			}
+		}
+	})
+}
+
+func TestRound25RequestToolChoice(t *testing.T) {
+	for _, tc := range []struct {
+		choice object
+		mode   string
+		bad    bool
+	}{
+		{object{}, "", false},
+		{object{"name": "f"}, "named", false},
+		{object{"type": "auto", "extra": true}, "", false},
+		{object{"type": "none", "extra": true}, "none", false},
+		{object{"type": "any", "extra": true}, "required", false},
+		{object{"type": "tool", "name": "f", "extra": true}, "named", false},
+		{object{"extra": true}, "", true},
+		{object{"name": "f", "extra": true}, "", true},
+		{object{"name": nil}, "", true},
+		{object{"name": 1}, "", true},
+		{object{"type": nil, "extra": true}, "", true},
+		{object{"type": "bogus", "extra": true}, "", true},
+		{object{"type": "auto", "name": "f", "extra": true}, "", true},
+		{object{"type": "none", "name": nil, "extra": true}, "", true},
+		{object{"type": "any", "name": "f", "extra": true}, "", true},
+		{object{"type": "tool", "extra": true}, "", true},
+		{object{"type": "tool", "name": 1, "extra": true}, "", true},
+		{object{"type": "tool", "name": "", "extra": true}, "", true},
+		{object{"type": "tool", "name": "unknown", "extra": true}, "", true},
+	} {
+		t.Run(jsonText(tc.choice), func(t *testing.T) {
+			root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": "f", "input_schema": object{}}}, "tool_choice": tc.choice}
+			_, opts, err := convertRequest([]byte(jsonText(root)), "anthropic", "")
+			if (err != nil) != tc.bad {
+				t.Fatalf("error=%v want rejection=%v", err, tc.bad)
+			}
+			if !tc.bad && (opts.policyMode != tc.mode || opts.forbidTools != (tc.mode == "none") || tc.mode == "named" && opts.policyTool != "f") {
+				t.Fatalf("options=%+v", opts)
+			}
+		})
+	}
+}
+
+func TestRound25RequestOpenAIContent(t *testing.T) {
+	blocks := []any{
+		object{"type": "text", "text": "plain|"}, "bare|",
+		object{"type": "thinking", "text": "thinking|"},
+		object{"type": "tool_use", "id": "ignored", "name": "f", "text": "use|"},
+		object{"type": "tool_result", "tool_use_id": "i", "text": "result|", "content": []any{object{"type": "text", "text": "nested"}, object{"type": "image_url", "image_url": object{"url": "data:image/png;base64,YQ=="}}}},
+		object{"type": "unknown", "text": "unknown|"},
+		object{"type": "image", "text": "skip-image", "source": object{"type": "base64", "media_type": "image/png", "data": "YQ=="}},
+		object{"type": "image_url", "text": "skip-url", "image_url": object{"url": "data:image/png;base64,YQ=="}},
+		object{"type": "tool_reference", "text": "skip-reference"}, 1,
+	}
+	for _, role := range []string{"user", "assistant", "developer", "unknown"} {
+		t.Run(role, func(t *testing.T) {
+			msg, err := parseMessage(object{"role": role, "content": blocks}, "openai")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if msg.text != "plain|bare|thinking|use|result|unknown|" || len(msg.uses) != 0 {
+				t.Fatalf("message=%+v", msg)
+			}
+			if role == "user" {
+				if len(msg.images) != 3 || len(msg.results) != 1 || str(obj(list(obj(msg.results[0])["content"])[0])["text"]) != "nested" {
+					t.Fatalf("user extraction=%+v", msg)
+				}
+			} else if len(msg.images) != 0 || len(msg.results) != 0 {
+				t.Fatalf("non-user extraction=%+v", msg)
+			}
+		})
+	}
+}
+
+func TestRound25RequestUnknownRoles(t *testing.T) {
+	for _, role := range []string{"developer", "unknown"} {
+		t.Run(role, func(t *testing.T) {
+			root := object{"model": "model", "messages": []any{
+				object{"role": "user", "content": "before"},
+				object{"role": role, "content": []any{object{"type": "text", "text": "body|"}, object{"type": "image_url", "image_url": object{"url": "data:image/png;base64,YQ=="}}, object{"type": "tool_result", "tool_use_id": "i", "text": "attached", "content": "nested"}}, "tool_calls": []any{object{"id": "ignored", "function": object{"name": "f", "arguments": "{}"}}}},
+				object{"role": "user", "content": "after"},
+			}}
+			payload, _ := convert(t, root, "openai")
+			history := list(obj(payload["conversationState"])["history"])
+			if len(history) != 4 {
+				t.Fatalf("history=%v", history)
+			}
+			user := obj(obj(history[2])["userInputMessage"])
+			if str(user["content"]) != "body|attached" || user["images"] != nil || user["userInputMessageContext"] != nil {
+				t.Fatalf("unknown role normalized too early: %v", user)
+			}
+			if str(obj(obj(history[1])["assistantResponseMessage"])["content"]) != "(empty placeholder)" || str(obj(obj(history[3])["assistantResponseMessage"])["content"]) != "(empty placeholder)" {
+				t.Fatalf("merge grouping lost: %v", history)
+			}
+		})
+	}
+}
+
+func TestRound25RequestToolNames(t *testing.T) {
+	names := []string{"mcp." + strings.Repeat("round25_first_", 7), "mcp." + strings.Repeat("round25_second_", 7)}
+	for _, protocol := range []string{"anthropic", "openai"} {
+		t.Run(protocol, func(t *testing.T) {
+			for _, mode := range []string{"auto", "named", "none"} {
+				t.Run("docs-"+mode, func(t *testing.T) {
+					var choice any = mode
+					if protocol == "anthropic" {
+						choice = object{"type": mode}
+						if mode == "named" {
+							choice = object{"type": "tool", "name": names[1]}
+						}
+					} else if mode == "named" {
+						choice = object{"type": "function", "function": object{"name": names[1]}}
+					}
+					root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tool_choice": choice, "tools": []any{object{"name": names[0], "input_schema": object{}, "description": strings.Repeat("A", 10001)}, object{"name": names[1], "input_schema": object{}, "description": strings.Repeat("B", 10001)}}}
+					payload, _ := convert(t, root, protocol)
+					content := currentContent(t, payload)
+					for i, name := range names {
+						if strings.Contains(content, "## Tool: "+name) != (mode != "none" && (mode == "auto" || i == 1)) || strings.Contains(content, "## Tool: "+aliasToolName(name)) {
+							t.Fatalf("documentation name/selection mismatch: mode=%s name=%s", mode, name)
+						}
+					}
+					if mode == "auto" && strings.Index(content, "## Tool: "+names[0]) >= strings.Index(content, "## Tool: "+names[1]) {
+						t.Fatal("documentation order changed")
+					}
+					user := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+					for _, tool := range list(obj(user["userInputMessageContext"])["tools"]) {
+						spec := obj(obj(tool)["toolSpecification"])
+						original := restoreToolName(str(spec["name"]))
+						if str(spec["name"]) == original || str(spec["description"]) != "[Full documentation in system prompt under '## Tool: "+original+"']" {
+							t.Fatalf("native specification=%v", spec)
+						}
+					}
+				})
+			}
+			for _, selection := range []string{"declared", "undeclared", "no-tools", "none", "named-other"} {
+				t.Run("history-"+selection, func(t *testing.T) {
+					assistant := object{"role": "assistant", "content": "call"}
+					user := object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": "r25", "content": "ok"}}}
+					if protocol == "anthropic" {
+						assistant["content"] = []any{object{"type": "tool_use", "id": "r25", "name": names[0], "input": object{}}}
+					} else {
+						assistant["tool_calls"] = []any{object{"id": "r25", "function": object{"name": names[0], "arguments": "{}"}}}
+					}
+					parsed, err := parseMessage(assistant, protocol)
+					if err != nil || len(parsed.uses) != 1 || str(obj(parsed.uses[0])["name"]) != names[0] {
+						t.Fatalf("unified name changed: message=%+v err=%v", parsed, err)
+					}
+					root := object{"model": "model", "messages": []any{object{"role": "user", "content": "q"}, assistant, user}}
+					switch selection {
+					case "declared", "none", "named-other":
+						root["tools"] = []any{object{"name": names[0], "input_schema": object{}}, object{"name": "other", "input_schema": object{}}}
+					case "undeclared":
+						root["tools"] = []any{object{"name": "other", "input_schema": object{}}}
+					}
+					if selection == "none" {
+						root["tool_choice"] = "none"
+						if protocol == "anthropic" {
+							root["tool_choice"] = object{"type": "none"}
+						}
+					} else if selection == "named-other" {
+						root["tool_choice"] = object{"type": "function", "function": object{"name": "other"}}
+						if protocol == "anthropic" {
+							root["tool_choice"] = object{"type": "tool", "name": "other"}
+						}
+					}
+					payload, _ := convert(t, root, protocol)
+					history := list(obj(payload["conversationState"])["history"])
+					response := obj(obj(history[1])["assistantResponseMessage"])
+					if selection == "declared" {
+						uses := list(response["toolUses"])
+						if len(uses) != 1 || str(obj(uses[0])["name"]) != aliasToolName(names[0]) || obj(uses[0])["argsText"] != nil {
+							t.Fatalf("native use=%v", response)
+						}
+					} else if response["toolUses"] != nil || !strings.Contains(str(response["content"]), "[Tool: "+names[0]+" (r25)]") || strings.Contains(str(response["content"]), aliasToolName(names[0])) {
+						t.Fatalf("textual name changed: %v", response)
+					}
+				})
+			}
+		})
+	}
+	t.Run("native alias does not mutate unified names", func(t *testing.T) {
+		msg := message{role: "assistant", uses: []any{toolUse("i", names[0], object{}), toolUse("j", json.Number("7"), object{})}}
+		uses := list(obj(nativeMessage(msg, "model", nil)["assistantResponseMessage"])["toolUses"])
+		if str(obj(uses[0])["name"]) != aliasToolName(names[0]) || obj(uses[1])["name"] != json.Number("7") || str(obj(msg.uses[0])["name"]) != names[0] {
+			t.Fatalf("uses=%v unified=%v", uses, msg.uses)
+		}
+	})
+	t.Run("empty description uses native alias", func(t *testing.T) {
+		payload, _ := convert(t, object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "tools": []any{object{"name": names[0], "input_schema": object{}, "description": " \n\t"}}}, "anthropic")
+		user := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+		spec := obj(obj(list(obj(user["userInputMessageContext"])["tools"])[0])["toolSpecification"])
+		if str(spec["description"]) != "Tool: "+aliasToolName(names[0]) {
+			t.Fatalf("placeholder=%v", spec)
+		}
+	})
+}
+
+func TestRound25RequestCountTokens(t *testing.T) {
+	for _, kind := range []string{"tool", "content"} {
+		t.Run(kind+" recovery survives counting", func(t *testing.T) {
+			id, content := "round25-count-tool", "round25 truncated content survives counting"
+			t.Cleanup(func() { popToolTruncation(id); popContentTruncation(content) })
+			s := newResponseState(requestOptions{protocol: "anthropic", stream: true})
+			root := object{"model": "claude-sonnet-4.6", "system": "count system", "messages": []any{object{"role": "user", "content": "q"}}, "thinking": object{"type": "adaptive"}, "output_config": object{"effort": "high"}}
+			if kind == "tool" {
+				if err := s.toolEvent(object{"name": "f", "toolUseId": id, "input": `{"x":`, "stop": true}); err != nil {
+					t.Fatal(err)
+				}
+				root["tools"] = []any{object{"name": "f", "input_schema": object{}}}
+				root["messages"] = append(list(root["messages"]), object{"role": "assistant", "content": []any{object{"type": "tool_use", "id": id, "name": "f", "input": object{}}}}, object{"role": "user", "content": []any{object{"type": "tool_result", "tool_use_id": id, "content": "ok"}}})
+			} else {
+				if err := s.accept(wireEvent{kind: "assistantResponseEvent", data: object{"content": content}}); err != nil {
+					t.Fatal(err)
+				}
+				root["messages"] = append(list(root["messages"]), object{"role": "assistant", "content": content}, object{"role": "user", "content": "continue"})
+			}
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte(jsonText(root))
+			payload, opts, err := convertRequest(raw, "count_tokens", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := estimateOriginalTokens(root, "anthropic")
+			if payload != nil || opts.estimateParts != want || opts.inputEstimate != want[0]+want[1]+want[2] || opts.fakeReasoning || opts.effort != "" {
+				t.Errorf("count ran generation pipeline: payload present=%v options=%+v want=%v", payload != nil, opts, want)
+			}
+			generation, _, err := convertRequest(raw, "anthropic", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			notice := "[System Notice] Your previous response was truncated"
+			if kind == "tool" {
+				notice = "[API Limitation] Your tool call was truncated"
+			}
+			if !strings.Contains(jsonText(generation), notice) {
+				t.Error("count_tokens consumed recovery state")
+			}
+			generation, _, err = convertRequest(raw, "anthropic", "")
+			if err != nil || strings.Contains(jsonText(generation), notice) {
+				t.Fatalf("recovery was not one-shot: err=%v", err)
+			}
+		})
+	}
+	t.Run("structure still validated but generation fields ignored", func(t *testing.T) {
+		for _, invalid := range []object{
+			{"messages": []any{object{"role": "user", "content": nil}}},
+			{"messages": []any{object{"role": "user", "content": []any{true}}}},
+			{"tools": []any{object{"name": "f"}}},
+			{"tools": []any{object{"name": "f", "input_schema": []any{}}}},
+			{"system": []any{true}},
+		} {
+			root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}}
+			for key, value := range invalid {
+				root[key] = value
+			}
+			if _, _, err := convertRequest([]byte(jsonText(root)), "count_tokens", ""); err == nil {
+				t.Fatalf("accepted malformed structure=%v", invalid)
+			}
+		}
+		root := object{"model": "model", "messages": []any{object{"role": "user", "content": "x"}}, "thinking": "invalid", "output_config": true, "tool_choice": []any{true}, "stream": object{}, "top_p": -1}
+		payload, opts, err := convertRequest([]byte(jsonText(root)), "count_tokens", "")
+		if err != nil || payload != nil || opts.effort != "" || opts.fakeReasoning || opts.stream {
+			t.Fatalf("count generation extras: payload present=%v options=%+v err=%v", payload != nil, opts, err)
 		}
 	})
 }

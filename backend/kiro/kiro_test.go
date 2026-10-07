@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,10 +49,10 @@ func exceptionFrame() []byte {
 }
 func joinedFrames(fs ...[]byte) []byte { return bytes.Join(fs, nil) }
 func endFrame() []byte {
-	return frame("metadataEvent", object{"contextUsagePercentage": 95, "usage": 0.25})
+	return joinedFrames(frame("metadataEvent", object{"usage": 0.25}), frame("metadataEvent", object{"contextUsagePercentage": 95}))
 }
 func tokenFrame() []byte {
-	return frame("usageEvent", object{"usage": object{"inputTokens": 17, "outputTokens": 9}, "contextUsagePercentage": 95})
+	return joinedFrames(frame("usageEvent", object{"usage": object{"inputTokens": 17, "outputTokens": 9}}), frame("metadataEvent", object{"contextUsagePercentage": 95}))
 }
 func toolDefinition(protocol string) []any {
 	schema := object{"type": "object", "properties": object{"x": object{"type": "integer"}}, "required": []any{}, "additionalProperties": false}
@@ -977,5 +979,334 @@ func TestNonstreamCancellation(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("nonstream cancel blocked")
+	}
+}
+
+func TestRound25ResponseConsecutiveSignatures(t *testing.T) {
+	for _, ending := range []string{"text", "tool", "finalize"} {
+		t.Run(ending, func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: "anthropic", stream: true})
+			var emitted []object
+			s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+			for _, data := range []object{{"text": "secret"}, {"signature": "s1"}, {"signature": "s2"}, {"text": "more"}} {
+				if err := s.accept(wireEvent{kind: "reasoningContentEvent", data: data}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if s.blockType != "thinking" || s.blockIndex != 0 || len(emitted) != 5 {
+				t.Fatalf("thinking closed early: block=%s index=%d events=%v", s.blockType, s.blockIndex, emitted)
+			}
+			for i, signature := range []string{"s1", "s2"} {
+				event := emitted[i+2]
+				if event["type"] != "content_block_delta" || event["index"] != 0 || obj(event["delta"])["signature"] != signature {
+					t.Fatalf("signature not in original block: %v", event)
+				}
+			}
+			if ending == "text" {
+				if err := s.accept(wireEvent{data: object{"content": "answer"}}); err != nil {
+					t.Fatal(err)
+				}
+				before := len(emitted)
+				if err := s.accept(wireEvent{data: object{"signature": "late"}}); err != nil || len(emitted) != before {
+					t.Fatalf("late signature emitted: events=%v err=%v", emitted, err)
+				}
+			} else if ending == "tool" {
+				if err := s.toolEvent(object{"name": "lookup", "toolUseId": "call25", "input": "{}", "stop": true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.terminal = true
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			stops := 0
+			for _, event := range emitted {
+				if event["type"] == "content_block_stop" && event["index"] == 0 {
+					stops++
+				}
+			}
+			if stops != 1 || s.blockType != "" {
+				t.Fatalf("thinking stop count=%d block=%s events=%v", stops, s.blockType, emitted)
+			}
+		})
+	}
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol+"/collect-last-wins", func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: protocol})
+			for _, data := range []object{{"text": "secret"}, {"signature": "s1"}, {"signature": "s2"}, {"content": "answer"}, {"signature": "late"}} {
+				if err := s.accept(wireEvent{kind: "reasoningContentEvent", data: data}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.terminal = true
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			if s.fullThinking.String() != "secret" || s.fullText.String() != "answer" || s.thinkingSignature != "late" {
+				t.Fatalf("collection changed: thinking=%q text=%q signature=%q", s.fullThinking.String(), s.fullText.String(), s.thinkingSignature)
+			}
+			if protocol == "anthropic" && obj(s.blocks[0])["signature"] != "late" {
+				t.Fatalf("last signature lost: %v", s.blocks)
+			}
+		})
+	}
+	t.Run("openai/stream-drops-signatures", func(t *testing.T) {
+		s := newResponseState(requestOptions{protocol: "openai", stream: true})
+		var emitted []object
+		s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+		for _, data := range []object{{"text": "secret"}, {"signature": "s1"}, {"signature": "s2"}, {"text": "more"}} {
+			if err := s.accept(wireEvent{kind: "reasoningContentEvent", data: data}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(emitted) != 2 || s.fullThinking.String() != "secretmore" {
+			t.Fatalf("OpenAI signature affected output: %v", emitted)
+		}
+	})
+}
+
+func TestRound25ResponseAnthropicStartUsage(t *testing.T) {
+	for _, absolute := range []bool{false, true} {
+		name := "estimated"
+		if absolute {
+			name = "absolute"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: "anthropic", policyMode: "none", inputEstimate: 17})
+			if err := s.accept(wireEvent{data: object{"content": "answer"}}); err != nil {
+				t.Fatal(err)
+			}
+			usage := object{"cacheReadInputTokens": json.Number("7"), "cacheCreationInputTokens": json.Number("3")}
+			if absolute {
+				usage["outputTokens"] = json.Number("29")
+			}
+			if err := s.accept(wireEvent{data: object{"usage": usage}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			final := s.anthropicUsage()
+			s.options.stream = true
+			var emitted []object
+			s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+			s.start()
+			s.finishStream()
+			start := obj(obj(emitted[0]["message"])["usage"])
+			if start["output_tokens"] != 0 || final["output_tokens"] == 0 {
+				t.Fatalf("start=%v final=%v", start, final)
+			}
+			for key, want := range final {
+				if key != "output_tokens" && !reflect.DeepEqual(start[key], want) {
+					t.Fatalf("usage superset lost: key=%s start=%v final=%v", key, start, final)
+				}
+			}
+			if !reflect.DeepEqual(obj(emitted[1]["usage"]), final) || !reflect.DeepEqual(s.anthropicUsage(), final) {
+				t.Fatalf("start changed final usage: events=%v final=%v", emitted, final)
+			}
+		})
+	}
+}
+
+func TestRound25ResponseCacheUsageReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name, protocol, policy string
+		stream, replace        bool
+	}{
+		{"strict-anthropic-stream", "anthropic", "none", true, true},
+		{"strict-anthropic-collect", "anthropic", "none", false, true},
+		{"strict-openai-stream", "openai", "none", true, true},
+		{"strict-openai-collect", "openai", "none", false, true},
+		{"ordinary-anthropic-collect", "anthropic", "", false, true},
+		{"ordinary-anthropic-stream", "anthropic", "", true, false},
+		{"ordinary-openai-stream", "openai", "", true, false},
+		{"ordinary-openai-collect", "openai", "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: tc.protocol, policyMode: tc.policy, stream: tc.stream})
+			seed := object{"inputTokens": json.Number("17"), "outputTokens": json.Number("29"), "cacheReadInputTokens": json.Number("7"), "cacheCreationInputTokens": json.Number("3")}
+			for _, usage := range []any{object{"cacheReadInputTokens": json.Number("0")}, object{"cacheReadInputTokens": "invalid", "cacheCreationInputTokens": nil}, object{}, json.Number("0.25"), false, "invalid", []any{}} {
+				if err := s.accept(wireEvent{data: object{"usage": seed}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.accept(wireEvent{data: object{"usage": usage}}); err != nil {
+					t.Fatal(err)
+				}
+				read, create, hasRead, hasCreate := 7, 3, true, true
+				if tc.replace {
+					read, create, hasRead, hasCreate = 0, 0, false, false
+				}
+				if _, ok := obj(usage)["cacheReadInputTokens"].(json.Number); ok {
+					read, hasRead = 0, true
+				}
+				if s.cacheRead != read || s.cacheCreation != create || s.cacheReadAbs != hasRead || s.cacheCreateAbs != hasCreate {
+					t.Errorf("usage=%v cache=%d/%d presence=%v/%v want=%d/%d %v/%v", usage, s.cacheRead, s.cacheCreation, s.cacheReadAbs, s.cacheCreateAbs, read, create, hasRead, hasCreate)
+				}
+				if s.inputTokens != 17 || s.outputCount() != 29 || !s.inputAbsolute || !s.outputAbsolute {
+					t.Fatalf("absolute usage extension lost: %v", s.anthropicUsage())
+				}
+			}
+			if err := s.accept(wireEvent{data: object{"usage": seed}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range []wireEvent{{data: object{"usage": nil}}, {kind: "metadataEvent", data: object{"outputTokens": json.Number("31")}}} {
+				if err := s.accept(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if s.cacheRead != 7 || s.cacheCreation != 3 || !s.cacheReadAbs || !s.cacheCreateAbs || s.outputCount() != 31 {
+				t.Fatalf("null/metadata reset cache: %v", s.anthropicUsage())
+			}
+		})
+	}
+}
+
+func TestRound25ResponseNativeThinkingNonString(t *testing.T) {
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			s := newResponseState(requestOptions{protocol: protocol, stream: stream})
+			for _, value := range []any{nil, false, json.Number("25"), object{"text": "private"}, []any{"private"}} {
+				if err := s.accept(wireEvent{kind: "reasoningContentEvent", data: object{"text": value}}); err != nil {
+					t.Errorf("protocol=%s stream=%v native thinking frame aborted: %v", protocol, stream, err)
+				}
+				if s.outputRunes != 0 || s.blockIndex != -1 || s.fullThinking.Len() != 0 {
+					t.Fatalf("invalid native thinking changed state: %+v", s)
+				}
+			}
+			if err := s.accept(wireEvent{kind: "reasoningContentEvent", data: object{"text": "secret"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.accept(wireEvent{data: object{"content": "answer", "contextUsagePercentage": json.Number("0")}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.finalize(); err != nil || s.fullThinking.String() != "secret" || s.fullText.String() != "answer" {
+				t.Fatalf("valid followup lost: thinking=%q text=%q err=%v", s.fullThinking.String(), s.fullText.String(), err)
+			}
+		}
+	}
+}
+
+func TestRound25ResponseToolScalarIDs(t *testing.T) {
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			for _, id := range []any{json.Number("25"), json.Number("25.5"), json.Number("1e2"), json.Number("9007199254740993"), json.Number("1" + strings.Repeat("0", 310)), float64(25), int(25), int64(25), true, "25", json.Number("0"), json.Number("-0.0"), float64(0), int(0), int64(0), false, nil, ""} {
+				falsy := id == nil || id == false || id == "" || id == json.Number("0") || id == json.Number("-0.0") || id == float64(0) || id == int(0) || id == int64(0)
+				s := newResponseState(requestOptions{protocol: protocol, stream: stream})
+				var emitted []object
+				s.emit = func(_ string, event object) { emitted = append(emitted, event) }
+				if err := s.toolEvent(object{"name": "lookup", "toolUseId": id, "input": "{}", "stop": true}); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.finalize(); err != nil {
+					t.Fatal(err)
+				}
+				if len(s.finalTools) != 1 || !reflect.DeepEqual(s.finalTools[0].id, id) {
+					t.Errorf("protocol=%s stream=%v lost scalar id=%#v tools=%v", protocol, stream, id, s.finalTools)
+				}
+				var got any
+				if !stream {
+					result := s.response()
+					if protocol == "anthropic" {
+						got = obj(list(result["content"])[0])["id"]
+					} else {
+						message := obj(obj(list(result["choices"])[0])["message"])
+						got = obj(list(message["tool_calls"])[0])["id"]
+					}
+				} else {
+					s.finishStream()
+					for _, event := range emitted {
+						if protocol == "anthropic" && event["type"] == "content_block_start" {
+							got = obj(event["content_block"])["id"]
+						} else if protocol == "openai" {
+							delta := obj(obj(list(event["choices"])[0])["delta"])
+							if calls := list(delta["tool_calls"]); len(calls) > 0 {
+								got = obj(calls[0])["id"]
+							}
+						}
+					}
+				}
+				if protocol == "anthropic" && falsy {
+					if !strings.HasPrefix(str(got), "toolu_") || len(str(got)) != 30 {
+						t.Errorf("Anthropic falsy id did not fallback: id=%#v got=%#v", id, got)
+					}
+				} else if !reflect.DeepEqual(got, id) {
+					t.Errorf("protocol=%s stream=%v output id=%#v want=%#v", protocol, stream, got, id)
+				}
+				if encoded, err := json.Marshal(object{"id": got}); err != nil || !json.Valid(encoded) {
+					t.Fatalf("id output is not JSON: err=%v", err)
+				}
+			}
+		}
+	}
+}
+
+func TestRound25ResponseToolIDDedup(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a, b any
+		want int
+	}{
+		{"int-float", json.Number("1"), json.Number("1.0"), 1},
+		{"int-exponent", json.Number("1"), json.Number("1e0"), 1},
+		{"int-bool", json.Number("1"), true, 1},
+		{"int-string", json.Number("1"), "1", 2},
+		{"bool-string", true, "true", 2},
+		{"distinct-numbers", json.Number("1"), json.Number("2"), 2},
+		{"large-int-rounded-float", json.Number("9007199254740993"), json.Number("9007199254740993.0"), 2},
+		{"large-int-equal-float", json.Number("9007199254740992"), json.Number("9007199254740993.0"), 1},
+		{"large-distinct-ints", json.Number("9007199254740992"), json.Number("9007199254740993"), 2},
+		{"falsy-number-bool", json.Number("0"), false, 2},
+		{"falsy-null-empty", nil, "", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newResponseState(requestOptions{protocol: "openai"})
+			for i, id := range []any{tc.a, tc.b} {
+				args := "{}"
+				if i == 1 {
+					args = `{"x": 25}`
+				}
+				if err := s.toolEvent(object{"name": "lookup", "toolUseId": id, "input": args, "stop": true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.finalize(); err != nil {
+				t.Fatal(err)
+			}
+			if len(s.finalTools) != tc.want {
+				t.Fatalf("dedup count=%d want=%d ids=%#v/%#v", len(s.finalTools), tc.want, tc.a, tc.b)
+			}
+			last := s.finalTools[len(s.finalTools)-1]
+			if !reflect.DeepEqual(last.id, tc.b) || last.args != `{"x": 25}` {
+				t.Fatalf("better arguments/id not retained: id=%#v args=%q", last.id, last.args)
+			}
+		})
+	}
+}
+
+func TestRound25ResponseToolIDTruncation(t *testing.T) {
+	const stringID = "round25-string-truncated"
+	popToolTruncation(stringID)
+	defer popToolTruncation(stringID)
+	for _, id := range []any{json.Number("250025"), true, nil, stringID} {
+		truncationStore.Lock()
+		before := len(truncationStore.tools)
+		truncationStore.Unlock()
+		s := newResponseState(requestOptions{protocol: "openai"})
+		if err := s.toolEvent(object{"name": "lookup", "toolUseId": id, "input": `{"x":`, "stop": true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.finalize(); err != nil {
+			t.Fatal(err)
+		}
+		truncationStore.Lock()
+		after := len(truncationStore.tools)
+		truncationStore.Unlock()
+		if id == stringID {
+			if after != before+1 || !popToolTruncation(stringID) {
+				t.Fatal("string truncation registration lost")
+			}
+		} else if after != before {
+			t.Errorf("non-string id registered truncation: id=%#v before=%d after=%d", id, before, after)
+		}
 	}
 }

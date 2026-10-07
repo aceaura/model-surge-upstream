@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,15 +33,17 @@ type toolViolation struct{ msg string }
 func (e *toolViolation) Error() string { return "kiro: tool policy violation: " + e.msg }
 
 type pendingTool struct {
-	id, name string
-	args     strings.Builder
+	id   any
+	name string
+	args strings.Builder
 }
 
 // finishedTool 是收尾后的工具调用:args 为保序归一化的 JSON 文本(去重键
 // 与上行参数都用它,parsers.py 的 json.dumps(json.loads(raw)) 保序语义),
 // invalid 对应 parsers.py 的 _arguments_invalid。
 type finishedTool struct {
-	id, name  string
+	id        any
+	name      string
 	args      string
 	input     any
 	invalid   bool
@@ -262,20 +265,73 @@ func encodeOrderedValue(dec *json.Decoder, buf *strings.Builder, raw string, asc
 	return true
 }
 
+type toolIDKey struct {
+	kind  byte
+	value string
+}
+
+func toolIDTruthy(id any) bool {
+	switch x := id.(type) {
+	case json.Number:
+		if strings.IndexAny(x.String(), ".eE") < 0 {
+			return strings.Trim(x.String(), "-0") != ""
+		}
+	case float64:
+		return x != 0
+	case int:
+		return x != 0
+	case int64:
+		return x != 0
+	}
+	return truthy(id)
+}
+
+func comparableToolID(id any) (toolIDKey, bool) {
+	var number *big.Rat
+	switch x := id.(type) {
+	case string:
+		return toolIDKey{kind: 's', value: x}, x != ""
+	case bool:
+		if x {
+			number = big.NewRat(1, 1)
+		}
+	case json.Number:
+		if strings.IndexAny(x.String(), ".eE") < 0 {
+			if integer, ok := new(big.Int).SetString(x.String(), 10); ok {
+				number = new(big.Rat).SetInt(integer)
+			}
+		} else if f, err := x.Float64(); err == nil {
+			number = new(big.Rat).SetFloat64(f)
+		}
+	case float64:
+		number = new(big.Rat).SetFloat64(x)
+	case int:
+		number = new(big.Rat).SetInt64(int64(x))
+	case int64:
+		number = new(big.Rat).SetInt64(x)
+	}
+	if number == nil || number.Sign() == 0 {
+		return toolIDKey{}, false
+	}
+	// Python hashes equal int/float/bool IDs together, without rounding arbitrary-size ints.
+	return toolIDKey{kind: 'n', value: number.RatString()}, true
+}
+
 // dedupTools 对齐 parsers.py deduplicate_tool_calls:先按 id 原位替换为参数
 // 更全者(合法非空参数压过无效/空/更短者),再按 name+args 保序去重;无 id
 // 的调用只参与 name+args 阶段。
 func dedupTools(in []*finishedTool) []*finishedTool {
-	byID := map[string]*finishedTool{}
+	byID := map[toolIDKey]*finishedTool{}
 	var withID, noID []*finishedTool
 	for _, tc := range in {
-		if tc.id == "" {
+		key, hasID := comparableToolID(tc.id)
+		if !hasID {
 			noID = append(noID, tc)
 			continue
 		}
-		ex := byID[tc.id]
+		ex := byID[key]
 		if ex == nil {
-			byID[tc.id] = tc
+			byID[key] = tc
 			withID = append(withID, tc)
 			continue
 		}
@@ -286,7 +342,7 @@ func dedupTools(in []*finishedTool) []*finishedTool {
 					break
 				}
 			}
-			byID[tc.id] = tc
+			byID[key] = tc
 		} else if tc.invalid && (ex.invalid || ex.args == "{}") {
 			ex.invalid = true
 		}
@@ -366,7 +422,9 @@ func (s *responseState) chunk(delta object, finish any) object {
 }
 func (s *responseState) start() {
 	if s.options.protocol == "anthropic" {
-		s.send("message_start", object{"type": "message_start", "message": object{"id": s.id, "type": "message", "role": "assistant", "model": s.options.model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": s.anthropicUsage()}})
+		usage := s.anthropicUsage()
+		usage["output_tokens"] = 0
+		s.send("message_start", object{"type": "message_start", "message": object{"id": s.id, "type": "message", "role": "assistant", "model": s.options.model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": usage}})
 	}
 	// streaming_openai.py:140-142: openai 不发空 role 首帧,role 附在首个
 	// 真实 content/reasoning delta 上。
@@ -538,7 +596,7 @@ func (s *responseState) toolEvent(d object) error {
 				return err
 			}
 		}
-		id := str(d["toolUseId"])
+		id := d["toolUseId"]
 		if _, hasID := d["toolUseId"]; !hasID {
 			// parsers.py:395: 仅键缺省时生成 call_+8 hex;空串原样保留。
 			id = "call_" + strings.ReplaceAll(newID(), "-", "")[:8]
@@ -628,6 +686,10 @@ func (s *responseState) accept(e wireEvent) error {
 	// Terminal metering events are emitted at the end in the observed protocol;
 	// clean EOF alone is insufficient evidence of a completed generation.
 	if v, ok := d["usage"]; ok && v != nil {
+		if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) {
+			s.cacheRead, s.cacheCreation = 0, 0
+			s.cacheReadAbs, s.cacheCreateAbs = false, false
+		}
 		// 普通 OpenAI 两种输出均走生成器语义；仅 collect 路径认假值 usage。
 		if s.options.policyMode != "" || (s.options.protocol == "anthropic" && !s.options.stream) || (s.options.protocol == "openai" && truthy(v)) {
 			s.terminal = true
@@ -694,10 +756,13 @@ func (s *responseState) accept(e wireEvent) error {
 		}
 		return s.text("text", text)
 	}
-	if v, ok := d["text"]; ok && (strings.Contains(strings.ToLower(e.kind), "reason") || strings.Contains(strings.ToLower(e.kind), "thinking")) {
+	if v, ok := d["text"]; ok {
 		text, ok := v.(string)
 		if !ok {
-			return fmt.Errorf("kiro: reasoning content is not text")
+			return nil
+		}
+		if text == "" && s.options.protocol == "anthropic" && s.options.stream && s.options.policyMode == "" && s.blockType != "thinking" {
+			s.openBlock("thinking", object{"type": "thinking", "thinking": "", "signature": ""})
 		}
 		return s.emitBlock("thinking", text, false)
 	}
@@ -715,7 +780,6 @@ func (s *responseState) accept(e wireEvent) error {
 		if !s.options.stream {
 			s.block["signature"] = signature
 		}
-		s.closeBlock()
 	}
 	return nil
 }
@@ -780,7 +844,9 @@ func (s *responseState) finalize() error {
 			}
 		}
 		if ft.truncated && s.registersTruncation() {
-			saveToolTruncation(ft.id, ft.name)
+			if id, ok := ft.id.(string); ok {
+				saveToolTruncation(id, ft.name)
+			}
 		}
 	}
 	if s.options.stream && s.options.protocol == "anthropic" {
@@ -791,7 +857,7 @@ func (s *responseState) finalize() error {
 		// 的 UTF-8 形式(streaming_anthropic.py:518)。
 		for _, ft := range s.finalTools {
 			id := ft.id
-			if id == "" {
+			if !toolIDTruthy(id) {
 				id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
 			}
 			partial, _ := normalizeOrderedJSON(ft.args, false)
@@ -845,7 +911,7 @@ func (s *responseState) finalize() error {
 		// thinking → text → tool_use。
 		for _, ft := range s.finalTools {
 			id := ft.id
-			if id == "" && s.options.protocol == "anthropic" {
+			if !toolIDTruthy(id) && s.options.protocol == "anthropic" {
 				// streaming_anthropic.py:785: 空 id 回退 toolu_<24hex>。
 				id = "toolu_" + strings.ReplaceAll(newID(), "-", "")[:24]
 			}

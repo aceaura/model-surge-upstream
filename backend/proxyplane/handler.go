@@ -206,12 +206,13 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 		writeFamilyError(w, fam, apperr.New(apperr.InvalidRequest, "read request body failed"))
 		return
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
 		writeFamilyError(w, fam, apperr.New(apperr.InvalidJSON, "request body is not valid json"))
 		return
 	}
-	alias, _ := obj["model"].(string)
+	var alias string
+	_ = json.Unmarshal(fields["model"], &alias)
 	if alias == "" {
 		writeFamilyError(w, fam, apperr.New(apperr.InvalidRequest, "model is required"))
 		return
@@ -229,14 +230,25 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
+	keepNumbers := target.ProviderID == kiro.ProviderID
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if keepNumbers {
+		// Preserve integer versus float identity for Kiro's thinking budget rules.
+		decoder.UseNumber()
+	}
+	var obj map[string]any
+	if err := decoder.Decode(&obj); err != nil {
+		writeFamilyError(w, fam, apperr.New(apperr.InvalidJSON, "request body is not valid json"))
+		return
+	}
 	obj["model"] = target.NativeModel
 	// reasoning_level 是网关自有的顶层数字档:命中模型声明的档位即消费
 	// (不进上游)并给思考开关/档位参数赋值。映射在 defaults 合并后施加——
 	// 映射恒压 defaults 与客户端参数;overrides 最后合并仍可压盖(强制值
 	// 优先级最高)。
-	merged := mergeParams(rawObject(target.Defaults), obj)
+	merged := mergeParams(rawObject(target.Defaults, keepNumbers), obj)
 	applyReasoningLevel(target, merged)
-	merged = mergeParams(merged, rawObject(target.Overrides))
+	merged = mergeParams(merged, rawObject(target.Overrides, keepNumbers))
 	// OpenAI 流式默认不回 usage，统计会全盲。仅当客户端要流式时注入
 	// include_usage：非流式响应本就带 usage，不碰请求体。
 	if wantProtocol == provider.ProtocolChatCompletions {
@@ -316,9 +328,9 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 	} else {
 		obj = map[string]any{}
 	}
-	merged := mergeParams(rawObject(target.Defaults), obj)
+	merged := mergeParams(rawObject(target.Defaults, false), obj)
 	applyReasoningLevel(target, merged)
-	merged = mergeParams(merged, rawObject(target.Overrides))
+	merged = mergeParams(merged, rawObject(target.Overrides, false))
 
 	newSuffix := "/v1beta/models/" + target.NativeModel
 	if tail != "" {
@@ -603,6 +615,10 @@ func reasoningLevel(v any) (string, bool) {
 	case string:
 		s := strings.TrimSpace(t)
 		return s, s != ""
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			return reasoningLevel(f)
+		}
 	case float64:
 		if t >= 0 && t == math.Trunc(t) {
 			return strconv.FormatInt(int64(t), 10), true
@@ -612,12 +628,18 @@ func reasoningLevel(v any) (string, bool) {
 }
 
 // rawObject 把 defaults/overrides 的 RawMessage 读成对象；空或 null 视为 {}。
-func rawObject(raw json.RawMessage) map[string]any {
+func rawObject(raw json.RawMessage, keepNumbers bool) map[string]any {
 	out := map[string]any{}
 	if len(raw) == 0 {
 		return out
 	}
-	_ = json.Unmarshal(raw, &out)
+	if keepNumbers {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		_ = decoder.Decode(&out)
+	} else {
+		_ = json.Unmarshal(raw, &out)
+	}
 	if out == nil {
 		return map[string]any{}
 	}

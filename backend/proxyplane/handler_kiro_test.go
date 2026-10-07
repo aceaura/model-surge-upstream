@@ -231,3 +231,65 @@ func TestClientCannotSelectKiroAdapter(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, w.Result().Body)
 }
+
+func TestRound25KiroReasoningNumbers(t *testing.T) {
+	for _, raw := range []string{"2", "2.0", "2e0"} {
+		level, ok := reasoningLevel(json.Number(raw))
+		if !ok || level != "2" {
+			t.Fatalf("number=%s level=%q ok=%v", raw, level, ok)
+		}
+	}
+	for _, raw := range []string{"-1", "1.5", "1e400"} {
+		if level, ok := reasoningLevel(json.Number(raw)); ok {
+			t.Fatalf("number=%s accepted as %q", raw, level)
+		}
+	}
+}
+
+func TestRound25KiroBudgetNumberIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, client, defaults, overrides, want string
+	}{
+		{"client_float", `,"thinking":{"budget_tokens":5000.0}`, "", "", "4000"},
+		{"client_integer", `,"thinking":{"budget_tokens":5000}`, "", "", "5000"},
+		{"default_float", "", `{"thinking":{"budget_tokens":5000.0}}`, "", "4000"},
+		{"override_float", `,"thinking":{"budget_tokens":5000}`, "", `{"thinking":{"budget_tokens":5000.0}}`, "4000"},
+		{"large_integer_beats_none", `,"thinking":{"budget_tokens":1099511627777},"reasoning_effort":"none"`, "", "", "10000"},
+		{"huge_integer_beats_none", `,"thinking":{"budget_tokens":999999999999999999999999999999999999999},"reasoning_effort":"none"`, "", "", "10000"},
+		{"unbounded_integer_beats_none", `,"thinking":{"budget_tokens":` + strings.Repeat("9", 400) + `},"reasoning_effort":"none"`, "", "", "10000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload struct {
+					ConversationState struct {
+						CurrentMessage struct {
+							UserInputMessage struct{ Content string }
+						}
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+					return
+				}
+				content := payload.ConversationState.CurrentMessage.UserInputMessage.Content
+				if !strings.Contains(content, "<max_thinking_length>"+tc.want+"</max_thinking_length>") {
+					t.Errorf("expected budget=%s", tc.want)
+				}
+				_, _ = w.Write(kiroTestFrame("assistantResponseEvent", `{"content":"ok"}`))
+				_, _ = w.Write(kiroTestFrame("messageStopEvent", `{"stopReason":"end_turn"}`))
+			}))
+			defer up.Close()
+			target := resolve.ResolvedTarget{ModelID: "kiro-budget", ProviderID: kiro.ProviderID,
+				Protocol: provider.ProtocolAnthropic, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5",
+				Headers: kiro.Headers("test-access", ""), Defaults: json.RawMessage(tc.defaults), Overrides: json.RawMessage(tc.overrides)}
+			h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+			r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"kiro-budget","max_tokens":32,"messages":[{"role":"user","content":"hello"}]`+tc.client+`}`))
+			r.Header.Set("Authorization", "Bearer "+testKey)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body)
+			}
+		})
+	}
+}

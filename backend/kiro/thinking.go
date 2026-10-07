@@ -132,9 +132,15 @@ func extractThinking(root object, protocol string) thinkingConfig {
 		cfg.disabled = true
 		return cfg
 	}
-	if n, ok := absoluteTokens(thinking["budget_tokens"]); ok && n > 0 {
-		cfg.budget = n
-		return cfg
+	if raw, ok := thinking["budget_tokens"].(json.Number); ok && strings.IndexAny(raw.String(), ".eE-") < 0 {
+		n, err := strconv.Atoi(raw.String())
+		if err != nil || n > fakeReasoningBudgetCap {
+			n = fakeReasoningBudgetCap
+		}
+		if n > 0 {
+			cfg.budget = n
+			return cfg
+		}
 	}
 	if effort == "none" {
 		cfg.disabled = true
