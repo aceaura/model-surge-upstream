@@ -15,6 +15,47 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
+func TestListOpenCodeWire(t *testing.T) {
+	for _, id := range []string{"opencode.global.api.zen", "opencode.global.subscribe.go"} {
+		t.Run(id, func(t *testing.T) {
+			spec, _ := provider.Get(id)
+			basePath := "/zen"
+			if spec.Plan == "Go" {
+				basePath += "/go"
+			}
+			for _, ua := range []string{"", "coding-agent/custom"} {
+				t.Run(ua, func(t *testing.T) {
+					var got http.Header
+					up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						got = r.Header.Clone()
+						if r.Method != http.MethodGet || r.URL.Path != basePath+"/v1/models" {
+							t.Errorf("request=%s %s", r.Method, r.URL.Path)
+						}
+						_, _ = w.Write([]byte(`{"data":[{"id":"model-b"},{"id":"model-a"}]}`))
+					}))
+					defer up.Close()
+					acc := acct("a", id, up.URL+basePath+"/")
+					if ua != "" {
+						acc.Headers["User-Agent"] = ua
+					}
+					l := New(fakeAccounts{"a": acc}, time.Minute)
+					report, err := l.List(context.Background(), "a")
+					if err != nil || !report.Queryable || len(report.Models) != 2 || report.Models[0].ID != "model-a" {
+						t.Fatalf("report=%+v err=%v", report, err)
+					}
+					wantUA := ua
+					if wantUA == "" {
+						wantUA = "ModelSurgeUpstream/1.0"
+					}
+					if got.Get("Authorization") != "Bearer sk-abcdefghijkl" || got.Get("x-api-key") != "" || got.Get("User-Agent") != wantUA || got.Get("x-opencode-session") != "" {
+						t.Fatal(got)
+					}
+				})
+			}
+		})
+	}
+}
+
 type fakeAccounts map[string]account.Account
 
 func (f fakeAccounts) Get(_ context.Context, name string) (account.Account, error) {

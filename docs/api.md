@@ -203,7 +203,7 @@ Authorization: Bearer <密钥>
 | `models.path` | string | 同上 | 列举端点路径 |
 | `models.method` | string | 同上 | HTTP 方法，当前恒为 `GET` |
 
-当前注册序（固定顺序，共 10 家）。id 命名：`厂商.区域.计费.服务` 四段点式恒在——区域 `cn`/`global` 不省略，计费 `api`=按量、`subscribe`=订阅，服务段 `standard`=默认服务、订阅有套餐名则用套餐 slug（`codex`/`token-plan`/`coding-plan`/`coding`）：
+当前注册序（固定顺序，共 12 个规格）。id 命名：`厂商.区域.计费.服务` 四段点式恒在——区域 `cn`/`global` 不省略，计费 `api`=按量、`subscribe`=订阅，服务段 `standard`=默认服务、订阅有套餐名则用套餐 slug（`codex`/`token-plan`/`coding-plan`/`coding`）：
 
 | id | base_url | protocols | auth | quota_queryable | models |
 |---|---|---|---|---|---|
@@ -214,13 +214,19 @@ Authorization: Bearer <密钥>
 | `kimi.global.subscribe.coding` | `https://api.kimi.com/coding` | `anthropic`, `chat_completions` | `anthropic_key` | ✓ | `/v1/models` |
 | `ark.global.api.standard` | `https://ark.cn-beijing.volces.com/api/v3` | `anthropic`, `chat_completions` | `bearer` | — | — |
 | `deepseek.global.api.standard` | `https://api.deepseek.com` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/models` |
+| `opencode.global.api.zen` | `https://opencode.ai/zen` | `anthropic`, `chat_completions`, `responses` | `bearer` | — | `GET /v1/models` |
+| `opencode.global.subscribe.go` | `https://opencode.ai/zen/go` | `anthropic`, `chat_completions`, `responses` | `bearer` | ✓ | `GET /v1/models` |
 | `kiro.global.subscribe.standard` | `https://runtime.us-east-1.kiro.dev` | `anthropic`, `chat_completions` | `bearer` | ✓ | `/ListAvailableModels` |
 | `bailian.cn.subscribe.token-plan` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` | `chat_completions`, `responses` | `bearer` | ✓ | `GET /v1/models` |
 | `bailian.cn.subscribe.coding-plan` | `https://coding.dashscope.aliyuncs.com` | `chat_completions` | `bearer` | — | `GET /v1/models` |
 
 > `bailian.cn.subscribe.token-plan` / `bailian.cn.subscribe.coding-plan` 是阿里云百炼订阅的两种套餐（均 `subscription` / `CN` / `api_key`，密钥不通用：Token Plan 用套餐密钥，Coding Plan 用 `sk-sp-` 专属密钥）。BaseURL 不含 `/v1`：转发面会拼接 `/v1/chat/completions`，最终路径为 `/compatible-mode/v1/chat/completions`。Token Plan 真实探针已验证模型列举和 Responses 可用；Coding Plan 探针实测 chat completions 与 `GET /v1/models` 存在、`responses` 恒 404 故未列入，其 Anthropic 兼容在 `/apps/anthropic` 独立路径、单 BaseURL 规格表达不了，不接入。Coding Plan 额度按请求数计（月 9 万次）且控制台无开放查询 API，不声明额度查询。Token Plan 额度查询独立使用百炼 CLI 控制台 `console_access_token`（不是推理 Key，也不需要新建 AccessKey），通过固定控制台主机的 `/cli/api.json` 聚合 usage、subscription、quota-config；按实际套餐返回 Credits，未知总额时返回百分比，缺失的用量窗口不补零。登录过期需重新执行 `bl auth login --console` 后导入。
 
-> `kimi.global.subscribe.coding` / `deepseek.global.api.standard` / `kiro.global.subscribe.standard` / `bailian.cn.subscribe.token-plan` / `openai.global.subscribe.codex` 五家 `quota_queryable: true`。速率窗口维度不依赖内置实现的主链路，只要额度端点通了就会从响应头一并读出（见 3.6）。
+> `kimi.global.subscribe.coding` / `deepseek.global.api.standard` / `kiro.global.subscribe.standard` / `bailian.cn.subscribe.token-plan` / `openai.global.subscribe.codex` / `opencode.global.subscribe.go` 六个规格 `quota_queryable: true`。速率窗口维度不依赖内置实现的主链路，只要额度端点通了就会从响应头一并读出（见 3.6）。
+
+> `opencode.global.api.zen` 为 Zen 按量服务，`opencode.global.subscribe.go` 为 Go 订阅服务（Go / Go Plus 是订阅档位，不拆供应商规格）。两者使用 API Key、支持三种协议，并从各自 `GET /v1/models` 拉取模型清单；每个模型实际支持的协议应以官方清单为准，不做协议转换。Messages 使用 `x-api-key`，Chat Completions、Responses、Models 和额度查询使用 Bearer。Go 请求保留客户端原生会话头，缺失时补充稳定的 `x-opencode-session` 与应用 User-Agent。Go 内置额度查询调用 `GET /v1/usage`，读取 `usage.rolling`、`usage.weekly`、`usage.monthly` 的已用百分比及 `resetsAt`；不推算美元金额。Zen 未发现 API Key 可调用的余额契约，不声明内置额度查询。
+
+> `deepseek.global.api.standard` 的 Chat Completions、模型清单和余额继续使用根地址；Anthropic 消息请求使用 `/anthropic/v1/messages`，转发、管理端对话、连通性检测和压缩摘要使用同一映射。
 
 > `ark.global.api.standard` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
@@ -334,6 +340,7 @@ Authorization: Bearer <密钥>
 
 **数值来源**：计量项只有一条路径——provider 声明 `quota_queryable: true` 时由 quota 包内按供应商整合的 Go 内置实现产出（账号级 JS 脚本通道已废除）：
 
+- `opencode.global.subscribe.go`：`GET {base}/v1/usage` 的 `usage.rolling` / `weekly` / `monthly`，以已用百分比输出五小时、周、月三窗口，总量恒 100；使用 API Key Bearer，缺失或损坏的窗口不补零，全无可识别窗口时报额度不可用。Zen 按量服务没有内置 API Key 余额查询。
 - `deepseek.global.api.standard`：`GET {base}/user/balance` 余额（按币种一条，`prepaid`）+ 响应头速率窗口；
 - `kimi.global.subscribe.coding`：`GET {base}/v1/usages` 的 5 小时/7 天窗口（`rolling`）；账号另配了网页刷新令牌时追加会员本月用量（`monthly`，增强维度失败不拖垮主报告）；
 - `kiro.global.subscribe.standard`：`POST https://q.{region}.amazonaws.com/` GetUsageLimits（`nextToken` 翻页），订阅配额 `monthly`，未过期赠额另出一条；

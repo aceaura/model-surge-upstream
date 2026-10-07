@@ -157,6 +157,7 @@ func (l *Lister) fetch(ctx context.Context, spec provider.Spec, acc account.Acco
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	provider.ApplyRequestHeaders(spec.ID, "", acc.Name, "", req.Header)
 	// 清单是 JSON GET:凭据形态头里给 SSE 转发准备的 Accept 在此不适用。
 	req.Header.Set("Accept", "application/json")
 

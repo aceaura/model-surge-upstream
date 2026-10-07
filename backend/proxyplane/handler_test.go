@@ -16,6 +16,99 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
 
+func TestProviderOutboundWire(t *testing.T) {
+	for _, id := range []string{"deepseek.global.api.standard", "opencode.global.api.zen", "opencode.global.subscribe.go", "anthropic.global.api.standard", "openai.global.api.standard"} {
+		spec, _ := provider.Get(id)
+		for _, protocol := range spec.Protocols {
+			t.Run(id+"/"+protocol, func(t *testing.T) {
+				path := map[string]string{provider.ProtocolAnthropic: "/v1/messages", provider.ProtocolChatCompletions: "/v1/chat/completions", provider.ProtocolResponses: "/v1/responses"}[protocol]
+				cap := &captured{}
+				up := httptest.NewServer(cap.handler(http.StatusOK, `{"ok":true}`))
+				defer up.Close()
+				basePath := ""
+				isOpenCode := spec.DisplayName == "OpenCode"
+				if isOpenCode {
+					basePath = strings.TrimPrefix(spec.BaseURL, "https://opencode.ai")
+				}
+				target := resolve.ResolvedTarget{ModelID: "alias", Account: "a", ProviderID: id, Protocol: protocol,
+					BaseURL: up.URL + basePath, NativeModel: "native", Headers: map[string]string{"Authorization": "Bearer upstream-key"}}
+				if spec.Auth == provider.AuthAnthropicKey {
+					target.Headers = map[string]string{"x-api-key": "upstream-key", "anthropic-version": provider.AnthropicVersion()}
+				}
+				request := func(headers map[string]string, key string) http.Header {
+					t.Helper()
+					h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{"alias": target}}, nil)
+					if headers == nil {
+						headers = map[string]string{}
+					}
+					headers["Authorization"] = "Bearer " + testKey
+					headers["x-api-key"] = testKey
+					rec := doRequest(t, h, http.MethodPost, path+"?key="+testKey+"&keep=1", headers,
+						`{"model":"alias","prompt_cache_key":"`+key+`","messages":[{"role":"user","content":"hi"}],"input":"hi"}`)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("proxy status=%d: %s", rec.Code, rec.Body.String())
+					}
+					raw, got, gotPath := cap.snapshot()
+					wantPath := basePath + path + "?keep=1"
+					if id == "deepseek.global.api.standard" && protocol == provider.ProtocolAnthropic {
+						wantPath = "/anthropic" + path + "?keep=1"
+					}
+					if gotPath != wantPath {
+						t.Errorf("path=%q, want %q", gotPath, wantPath)
+					}
+					if spec.Auth == provider.AuthBearer && !(isOpenCode && protocol == provider.ProtocolAnthropic) {
+						if got.Get("Authorization") != "Bearer upstream-key" || got.Get("x-api-key") != "" {
+							t.Errorf("auth=%v", got)
+						}
+					} else if got.Get("x-api-key") != "upstream-key" || got.Get("Authorization") != "" || got.Get("anthropic-version") != provider.AnthropicVersion() {
+						t.Errorf("auth=%v", got)
+					}
+					var body map[string]any
+					if err := json.Unmarshal(raw, &body); err != nil || body["model"] != "native" {
+						t.Errorf("body=%s", raw)
+					}
+					return got
+				}
+				first := request(nil, "cache-1")
+				if id == "deepseek.global.api.standard" && protocol == provider.ProtocolAnthropic {
+					target.BaseURL = up.URL + "/anthropic/"
+					request(nil, "cache-1")
+				}
+				if !isOpenCode {
+					if first.Get("x-opencode-session") != "" || first.Get("User-Agent") == "ModelSurgeUpstream/1.0" {
+						t.Fatal("OpenCode headers leaked")
+					}
+					return
+				}
+				sid := first.Get("x-opencode-session")
+				if sid == "" || first.Get("User-Agent") != "ModelSurgeUpstream/1.0" || request(nil, "cache-1").Get("x-opencode-session") != sid {
+					t.Fatal("missing/unstable defaults")
+				}
+				if request(nil, "cache-2").Get("x-opencode-session") == sid {
+					t.Fatal("cache keys not isolated")
+				}
+				target.Account = "b"
+				if request(nil, "cache-1").Get("x-opencode-session") == sid {
+					t.Fatal("accounts not isolated")
+				}
+				for _, name := range []string{"x-opencode-session", "session_id", "x-session-id", "conversation_id", "x-conversation-id"} {
+					got := request(map[string]string{name: "native-session", "User-Agent": "coding-agent/custom"}, "ignored")
+					if got.Get(name) != "native-session" || got.Get("x-opencode-session") != "native-session" || got.Get("User-Agent") != "coding-agent/custom" {
+						t.Errorf("native header %s lost: %v", name, got)
+					}
+				}
+				got := request(map[string]string{"x-opencode-session": "preferred", "session_id": "second"}, "ignored")
+				if got.Get("x-opencode-session") != "preferred" || got.Get("session_id") != "second" {
+					t.Fatal(got)
+				}
+				if request(nil, "").Get("x-opencode-session") == "" {
+					t.Fatal("missing body cache key must still yield a session")
+				}
+			})
+		}
+	}
+}
+
 // fakeResolver 按别名表解析，List 返回固定清单。
 type fakeResolver struct {
 	targets map[string]resolve.ResolvedTarget

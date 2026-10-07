@@ -71,7 +71,7 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	url := strings.TrimRight(target.BaseURL, "/") + suffix
+	url := provider.UpstreamURL(target.ProviderID, target.BaseURL, suffix)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
 	if err != nil {
 		return Result{Error: apperr.Wrap(apperr.UpstreamUnavailable, "build probe request", err).Error()}
@@ -80,6 +80,8 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 	for k, v := range target.Headers {
 		req.Header.Set(k, v)
 	}
+	provider.ApplyRequestHeaders(target.ProviderID, target.Protocol, target.Account,
+		"probe:"+target.ModelID+":"+target.Protocol, req.Header)
 
 	start := time.Now()
 	resp, err := (&http.Client{Transport: kiro.NewTransport(nil)}).Do(req)

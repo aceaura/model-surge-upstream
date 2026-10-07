@@ -112,6 +112,33 @@ func init() {
 		Models:         &ModelsAPI{Path: "/models", Method: "GET"},
 	})
 	register(Spec{
+		ID:          "opencode.global.api.zen",
+		DisplayName: "OpenCode",
+		Website:     "https://opencode.ai/zen",
+		BaseURL:     "https://opencode.ai/zen",
+		Protocols:   []string{ProtocolAnthropic, ProtocolChatCompletions, ProtocolResponses},
+		Auth:        AuthBearer,
+		Credential:  CredAPIKey,
+		Billing:     BillingPayGo,
+		Region:      RegionGlobal,
+		Plan:        "Zen",
+		Models:      &ModelsAPI{Path: "/v1/models", Method: "GET"},
+	})
+	register(Spec{
+		ID:             "opencode.global.subscribe.go",
+		DisplayName:    "OpenCode",
+		Website:        "https://opencode.ai/go",
+		BaseURL:        "https://opencode.ai/zen/go",
+		Protocols:      []string{ProtocolAnthropic, ProtocolChatCompletions, ProtocolResponses},
+		Auth:           AuthBearer,
+		Credential:     CredAPIKey,
+		Billing:        BillingSubscription,
+		Region:         RegionGlobal,
+		Plan:           "Go",
+		QuotaQueryable: true,
+		Models:         &ModelsAPI{Path: "/v1/models", Method: "GET"},
+	})
+	register(Spec{
 		ID:             "kiro.global.subscribe.standard",
 		DisplayName:    "Kiro",
 		Website:        "https://kiro.dev",

@@ -15,6 +15,87 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
 
+func TestCompleteProviderOutboundWire(t *testing.T) {
+	for _, id := range []string{"deepseek.global.api.standard", "opencode.global.api.zen", "opencode.global.subscribe.go", "anthropic.global.api.standard", "openai.global.api.standard"} {
+		spec, _ := provider.Get(id)
+		for _, protocol := range spec.Protocols {
+			t.Run(id+"/"+protocol, func(t *testing.T) {
+				var got http.Header
+				var gotPath string
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					got, gotPath = r.Header.Clone(), r.URL.Path
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["model"] != "native" {
+						t.Errorf("body=%v, err=%v", body, err)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"choices":[{"message":{"content":"ok"}}],"output_text":"ok"}`))
+				}))
+				defer up.Close()
+				basePath := ""
+				isOpenCode := spec.DisplayName == "OpenCode"
+				if isOpenCode {
+					basePath = strings.TrimPrefix(spec.BaseURL, "https://opencode.ai")
+				}
+				tg := resolve.ResolvedTarget{ModelID: "m", Account: "a", ProviderID: id, Protocol: protocol, BaseURL: up.URL + basePath, NativeModel: "native", Headers: map[string]string{"Authorization": "Bearer upstream-key"}}
+				if spec.Auth == provider.AuthAnthropicKey {
+					tg.Headers = map[string]string{"x-api-key": "upstream-key", "anthropic-version": provider.AnthropicVersion()}
+				}
+				call := func(key string) http.Header {
+					t.Helper()
+					reply, _, status, err := Complete(context.Background(), tg, key, "", history())
+					if err != nil || status != 200 || reply != "ok" {
+						t.Fatalf("reply=%q status=%d err=%v", reply, status, err)
+					}
+					wantPath := basePath + map[string]string{provider.ProtocolAnthropic: "/v1/messages", provider.ProtocolChatCompletions: "/v1/chat/completions", provider.ProtocolResponses: "/v1/responses"}[protocol]
+					if id == "deepseek.global.api.standard" && protocol == provider.ProtocolAnthropic {
+						wantPath = "/anthropic/v1/messages"
+					}
+					if gotPath != wantPath {
+						t.Errorf("path=%q, want %q", gotPath, wantPath)
+					}
+					if spec.Auth == provider.AuthBearer && !(isOpenCode && protocol == provider.ProtocolAnthropic) {
+						if got.Get("Authorization") != "Bearer upstream-key" || got.Get("x-api-key") != "" {
+							t.Error(got)
+						}
+					} else if got.Get("x-api-key") != "upstream-key" || got.Get("Authorization") != "" || got.Get("anthropic-version") != provider.AnthropicVersion() {
+						t.Error(got)
+					}
+					return got
+				}
+				first := call("session-1")
+				if id == "deepseek.global.api.standard" && protocol == provider.ProtocolAnthropic {
+					tg.BaseURL = up.URL + "/anthropic/"
+					call("session-1")
+				}
+				if !isOpenCode {
+					if first.Get("x-opencode-session") != "" || first.Get("User-Agent") == "ModelSurgeUpstream/1.0" {
+						t.Fatal("OpenCode defaults leaked")
+					}
+					return
+				}
+				sid := first.Get("x-opencode-session")
+				if sid == "" || first.Get("User-Agent") != "ModelSurgeUpstream/1.0" || call("session-1").Get("x-opencode-session") != sid {
+					t.Fatal("missing/unstable session")
+				}
+				if call("session-2").Get("x-opencode-session") == sid {
+					t.Fatal("sessions not isolated")
+				}
+				tg.Account = "b"
+				if call("session-1").Get("x-opencode-session") == sid {
+					t.Fatal("accounts not isolated")
+				}
+				tg.Headers["session_id"] = "native-session"
+				tg.Headers["User-Agent"] = "coding-agent/custom"
+				preserved := call("session-1")
+				if preserved.Get("session_id") != "native-session" || preserved.Get("x-opencode-session") != "native-session" || preserved.Get("User-Agent") != "coding-agent/custom" {
+					t.Fatal(preserved)
+				}
+			})
+		}
+	}
+}
+
 // history 是一轮典型对话：用户提问 + 助手上一轮回复 + 本轮用户追问。
 func history() []Message {
 	return []Message{

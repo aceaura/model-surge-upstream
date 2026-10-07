@@ -1,8 +1,146 @@
 package provider
 
 import (
+	"net/http"
+	"reflect"
 	"testing"
 )
+
+func TestOpenCodeSpecs(t *testing.T) {
+	for _, tc := range []struct {
+		id, plan, website, base string
+		billing                 Billing
+		quotaQueryable          bool
+	}{
+		{"opencode.global.api.zen", "Zen", "https://opencode.ai/zen", "https://opencode.ai/zen", BillingPayGo, false},
+		{"opencode.global.subscribe.go", "Go", "https://opencode.ai/go", "https://opencode.ai/zen/go", BillingSubscription, true},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			s, ok := Get(tc.id)
+			if !ok || s.DisplayName != "OpenCode" || s.Plan != tc.plan || s.Website != tc.website ||
+				s.BaseURL != tc.base || s.Billing != tc.billing || s.Region != RegionGlobal ||
+				s.Auth != AuthBearer || s.Credential != CredAPIKey || s.QuotaQueryable != tc.quotaQueryable {
+				t.Fatalf("spec = %+v", s)
+			}
+			if len(s.Protocols) != 3 || !s.Supports(ProtocolAnthropic) || !s.Supports(ProtocolChatCompletions) || !s.Supports(ProtocolResponses) {
+				t.Fatalf("protocols = %v", s.Protocols)
+			}
+			if s.Models == nil || *s.Models != (ModelsAPI{Path: "/v1/models", Method: "GET"}) {
+				t.Fatalf("models = %+v", s.Models)
+			}
+		})
+	}
+}
+
+func TestUpstreamURL(t *testing.T) {
+	for _, tc := range []struct{ id, base, suffix, want string }{
+		{"deepseek.global.api.standard", "https://up/", "/v1/messages", "https://up/anthropic/v1/messages"},
+		{"deepseek.global.api.standard", "https://up/anthropic/", "/v1/messages", "https://up/anthropic/v1/messages"},
+		{"deepseek.global.api.standard", "https://up", "/v1/messages/count_tokens", "https://up/anthropic/v1/messages/count_tokens"},
+		{"deepseek.global.api.standard", "https://up", "/v1/messages-other", "https://up/v1/messages-other"},
+		{"deepseek.global.api.standard", "https://up", "/v1/chat/completions", "https://up/v1/chat/completions"},
+		{"deepseek.global.api.standard", "https://up", "/models", "https://up/models"},
+		{"anthropic.global.api.standard", "https://up/", "/v1/messages", "https://up/v1/messages"},
+		{"openai.global.subscribe.codex", "https://up", "/responses", "https://up/responses"},
+		{"opencode.global.subscribe.go", "https://up/zen/go", "/v1/responses", "https://up/zen/go/v1/responses"},
+	} {
+		if got := UpstreamURL(tc.id, tc.base, tc.suffix); got != tc.want {
+			t.Errorf("UpstreamURL(%q, %q, %q) = %q, want %q", tc.id, tc.base, tc.suffix, got, tc.want)
+		}
+	}
+}
+
+func TestOpenCodeRequestHeaders(t *testing.T) {
+	for _, id := range []string{"opencode.global.api.zen", "opencode.global.subscribe.go"} {
+		t.Run(id, func(t *testing.T) {
+			makeHeaders := func(account, key string) http.Header {
+				h := http.Header{}
+				ApplyRequestHeaders(id, "", account, key, h)
+				return h
+			}
+			h := makeHeaders("a", "chat:s")
+			sid := h.Get("x-opencode-session")
+			if sid == "" || h.Get("User-Agent") != "ModelSurgeUpstream/1.0" || makeHeaders("a", "chat:s").Get("x-opencode-session") != sid {
+				t.Fatalf("unstable defaults: %v", h)
+			}
+			for _, other := range []http.Header{makeHeaders("b", "chat:s"), makeHeaders("a", "chat:s2"), makeHeaders("a", "probe:s"), makeHeaders("a", "compact:s")} {
+				if other.Get("x-opencode-session") == sid {
+					t.Error("session isolation failed")
+				}
+			}
+			listing := makeHeaders("a", "")
+			if listing.Get("x-opencode-session") != "" || listing.Get("User-Agent") == "" {
+				t.Fatalf("listing headers = %v", listing)
+			}
+			for _, name := range []string{"x-opencode-session", "session_id", "x-session-id", "conversation_id", "x-conversation-id"} {
+				h := http.Header{}
+				h.Set(name, "client-session")
+				h.Set("User-Agent", "coding-agent/custom")
+				ApplyRequestHeaders(id, "", "a", "fallback", h)
+				if h.Get(name) != "client-session" || h.Get("x-opencode-session") != "client-session" || h.Get("User-Agent") != "coding-agent/custom" {
+					t.Errorf("native header %s not preserved: %v", name, h)
+				}
+			}
+			h = http.Header{}
+			h.Set("x-opencode-session", "preferred")
+			h.Set("session_id", "also-preserved")
+			ApplyRequestHeaders(id, "", "a", "fallback", h)
+			if h.Get("x-opencode-session") != "preferred" || h.Get("session_id") != "also-preserved" {
+				t.Fatal(h)
+			}
+			h = http.Header{}
+			h.Set("User-Agent", " ")
+			h.Set("x-opencode-session", " ")
+			ApplyRequestHeaders(id, "", "a", "chat:s", h)
+			if h.Get("x-opencode-session") != sid || h.Get("User-Agent") != "ModelSurgeUpstream/1.0" {
+				t.Fatal(h)
+			}
+		})
+	}
+	h := http.Header{"Session_id": {"native"}, "Authorization": {"Bearer key"}}
+	before := h.Clone()
+	ApplyRequestHeaders("deepseek.global.api.standard", "", "a", "s", h)
+	if !reflect.DeepEqual(h, before) {
+		t.Fatalf("other provider headers changed: %v", h)
+	}
+}
+
+func TestApplyRequestHeadersAuthentication(t *testing.T) {
+	protocols := []string{ProtocolAnthropic, ProtocolChatCompletions, ProtocolResponses}
+	for _, id := range []string{"opencode.global.api.zen", "opencode.global.subscribe.go"} {
+		for _, protocol := range protocols {
+			t.Run(id+"/"+protocol, func(t *testing.T) {
+				h := http.Header{}
+				h.Set("Authorization", "Bearer upstream-key")
+				h.Set("x-api-key", "stale-key")
+				ApplyRequestHeaders(id, protocol, "a", "session", h)
+				if protocol == ProtocolAnthropic {
+					if h.Get("Authorization") != "" || h.Get("x-api-key") != "upstream-key" || h.Get("anthropic-version") != AnthropicVersion() {
+						t.Fatalf("Anthropic authentication = %v", h)
+					}
+				} else if h.Get("Authorization") != "Bearer upstream-key" || h.Get("x-api-key") != "" {
+					t.Fatalf("Bearer authentication = %v", h)
+				}
+			})
+		}
+	}
+	for _, id := range []string{"deepseek.global.api.standard", "anthropic.global.api.standard", "openai.global.api.standard"} {
+		for _, protocol := range protocols {
+			t.Run(id+"/"+protocol, func(t *testing.T) {
+				h := http.Header{}
+				h.Set("Authorization", "Bearer key")
+				h.Set("x-api-key", "native-key")
+				h.Set("anthropic-version", "native-version")
+				h.Set("session_id", "native-session")
+				before := h.Clone()
+				ApplyRequestHeaders(id, protocol, "a", "session", h)
+				if !reflect.DeepEqual(h, before) {
+					t.Fatalf("other provider headers changed: %v", h)
+				}
+			})
+		}
+	}
+}
 
 func TestBuiltinSpecsWellFormed(t *testing.T) {
 	all := All()
@@ -55,11 +193,11 @@ func TestBuiltinBilling(t *testing.T) {
 		"openai.global.api.standard":    BillingPayGo,
 		"gemini.global.api.standard":    BillingPayGo,
 		// kimi 预设端点是 api.kimi.com/coding,即 Kimi For Coding 订阅产品。
-		"kimi.global.subscribe.coding":           BillingSubscription,
-		"ark.global.api.standard":               BillingPayGo,
-		"deepseek.global.api.standard":          BillingPayGo,
-		"openai.global.subscribe.codex":          BillingSubscription,
-		"bailian.cn.subscribe.token-plan": BillingSubscription,
+		"kimi.global.subscribe.coding":     BillingSubscription,
+		"ark.global.api.standard":          BillingPayGo,
+		"deepseek.global.api.standard":     BillingPayGo,
+		"openai.global.subscribe.codex":    BillingSubscription,
+		"bailian.cn.subscribe.token-plan":  BillingSubscription,
 		"bailian.cn.subscribe.coding-plan": BillingSubscription,
 	}
 	for id, billing := range want {
@@ -76,14 +214,14 @@ func TestBuiltinBilling(t *testing.T) {
 
 func TestBuiltinRegion(t *testing.T) {
 	want := map[string]string{
-		"anthropic.global.api.standard":         RegionGlobal,
-		"openai.global.api.standard":            RegionGlobal,
-		"gemini.global.api.standard":            RegionGlobal,
-		"kimi.global.subscribe.coding":           RegionGlobal,
-		"ark.global.api.standard":               RegionGlobal,
-		"deepseek.global.api.standard":          RegionGlobal,
-		"openai.global.subscribe.codex":          RegionGlobal,
-		"bailian.cn.subscribe.token-plan": RegionCN,
+		"anthropic.global.api.standard":    RegionGlobal,
+		"openai.global.api.standard":       RegionGlobal,
+		"gemini.global.api.standard":       RegionGlobal,
+		"kimi.global.subscribe.coding":     RegionGlobal,
+		"ark.global.api.standard":          RegionGlobal,
+		"deepseek.global.api.standard":     RegionGlobal,
+		"openai.global.subscribe.codex":    RegionGlobal,
+		"bailian.cn.subscribe.token-plan":  RegionCN,
 		"bailian.cn.subscribe.coding-plan": RegionCN,
 	}
 	for id, region := range want {
@@ -100,15 +238,15 @@ func TestBuiltinRegion(t *testing.T) {
 
 func TestBuiltinPlan(t *testing.T) {
 	want := map[string]string{
-		"anthropic.global.api.standard":         PlanStandard,
-		"openai.global.api.standard":            PlanStandard,
-		"gemini.global.api.standard":            PlanStandard,
-		"kimi.global.subscribe.coding":           PlanStandard,
-		"ark.global.api.standard":               PlanStandard,
-		"deepseek.global.api.standard":          PlanStandard,
-		"openai.global.subscribe.codex":          PlanStandard,
-		"kiro.global.subscribe.standard":                  PlanStandard,
-		"bailian.cn.subscribe.token-plan": "Token Plan",
+		"anthropic.global.api.standard":    PlanStandard,
+		"openai.global.api.standard":       PlanStandard,
+		"gemini.global.api.standard":       PlanStandard,
+		"kimi.global.subscribe.coding":     PlanStandard,
+		"ark.global.api.standard":          PlanStandard,
+		"deepseek.global.api.standard":     PlanStandard,
+		"openai.global.subscribe.codex":    PlanStandard,
+		"kiro.global.subscribe.standard":   PlanStandard,
+		"bailian.cn.subscribe.token-plan":  "Token Plan",
 		"bailian.cn.subscribe.coding-plan": "Coding Plan",
 	}
 	for id, plan := range want {
@@ -132,13 +270,13 @@ func TestBuiltinWebsite(t *testing.T) {
 		"gemini.global.api.standard":    "https://aistudio.google.com",
 		// kimi 是订阅(Kimi For Coding),订阅站在 kimi.com;
 		// platform.moonshot.cn 是按量平台,不挂。
-		"kimi.global.subscribe.coding":  "https://www.kimi.com",
+		"kimi.global.subscribe.coding": "https://www.kimi.com",
 		"ark.global.api.standard":      "https://console.volcengine.com/ark",
 		"deepseek.global.api.standard": "https://platform.deepseek.com",
 		// openai.global.subscribe.codex 是订阅(ChatGPT 登录态),订阅站在 chatgpt.com;
 		// platform.openai.com 是按量平台,已挂给 openai.global.api.standard。
-		"openai.global.subscribe.codex":          "https://chatgpt.com",
-		"bailian.cn.subscribe.token-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
+		"openai.global.subscribe.codex":    "https://chatgpt.com",
+		"bailian.cn.subscribe.token-plan":  "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
 		"bailian.cn.subscribe.coding-plan": "https://bailian.console.aliyun.com/cn-beijing/subscription/coding-plan/personal",
 	}
 	for id, website := range want {

@@ -58,6 +58,65 @@ ApiClient fakeClient() => ApiClient(
 );
 
 void main() {
+  testWidgets('OpenCode groups Go and Zen with brand logo; DeepSeek keeps its own card',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((_) async => http.Response(jsonEncode({
+        'providers': [
+          for (final service in ['zen', 'go'])
+            {
+              'id': 'opencode.global.${service == 'go' ? 'subscribe' : 'api'}.$service',
+              'display_name': 'OpenCode',
+              'website': 'https://opencode.ai/$service',
+              'base_url': 'https://opencode.ai/zen${service == 'go' ? '/go' : ''}',
+              'protocols': ['anthropic', 'chat_completions', 'responses'],
+              'auth': 'bearer',
+              'credential': 'api_key',
+              'billing': service == 'go' ? 'subscription' : 'paygo',
+              'region': 'Global',
+              'plan': service == 'go' ? 'Go' : 'Zen',
+            },
+          {
+            'id': 'deepseek.global.api.standard',
+            'display_name': 'DeepSeek',
+            'website': 'https://platform.deepseek.com',
+            'base_url': 'https://api.deepseek.com',
+            'protocols': ['anthropic', 'chat_completions'],
+            'auth': 'bearer',
+            'credential': 'api_key',
+            'billing': 'paygo',
+            'region': 'Global',
+            'plan': 'Standard',
+            'quota_queryable': true,
+          },
+        ],
+      }), 200, headers: {'content-type': 'application/json'})),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(body: ProvidersPage(client: client, onOpenSettings: () {})),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('OpenCode'), findsOneWidget);
+    expect(find.text('DeepSeek'), findsOneWidget);
+    expect(find.text('订阅 · 全球 · Go'), findsOneWidget);
+    expect(find.text('按量计费 · 全球 · Zen'), findsOneWidget);
+    expect(find.text('https://opencode.ai/zen/go'), findsOneWidget);
+    expect(find.text('https://opencode.ai/zen'), findsNWidgets(2));
+    expect(find.text('https://api.deepseek.com'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('订阅 · 全球 · Go')).dy,
+        lessThan(tester.getTopLeft(find.text('按量计费 · 全球 · Zen')).dy));
+    expect(find.byType(SvgPicture), findsNWidgets(2));
+    expect(find.text('O'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Kiro displays subscription, protocols, credential label and provider logo',
       (tester) async {
     final client = ApiClient(

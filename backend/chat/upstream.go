@@ -34,9 +34,9 @@ const respSnippet = 300
 //
 // codex(openai.global.subscribe.codex)是例外：订阅端点强制 stream=true，响应恒为 SSE，
 // 这里把整段事件流读完后聚合回整轮（见 extractReplySSE），对外仍是非流式语义。
-// sessionKey 用于派生 codex 的 session_id/conversation_id 头（转发面同款，
-// 按账号+会话稳定），其余协议忽略。effort 是对话页选定的推理档（空=默认），
-// 见 applyEffort。
+// sessionKey 用于按账号+会话派生 codex 的 session_id/conversation_id 和
+// OpenCode 的 x-opencode-session，其余提供商忽略。effort 是对话页选定的
+// 推理档（空=默认），见 applyEffort。
 func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, effort string, history []Message) (string, usage.Usage, int, error) {
 	suffix, body, err := buildRequest(target, history)
 	if err != nil {
@@ -63,7 +63,7 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 
 	ctx, cancel := context.WithTimeout(ctx, completeTimeout)
 	defer cancel()
-	url := strings.TrimRight(target.BaseURL, "/") + suffix
+	url := provider.UpstreamURL(target.ProviderID, target.BaseURL, suffix)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
 	if err != nil {
 		return "", usage.Usage{}, 0, apperr.Wrap(apperr.UpstreamUnavailable, "build upstream request", err)
@@ -72,6 +72,7 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 	for k, v := range target.Headers {
 		req.Header.Set(k, v)
 	}
+	provider.ApplyRequestHeaders(target.ProviderID, target.Protocol, target.Account, "chat:"+sessionKey, req.Header)
 	if target.ProviderID == codex.ProviderID {
 		// 会话头由服务端按账号+会话派生（sub2api 同款隔离），不接收客户端值。
 		sid := codex.SessionID(target.Account, sessionKey)

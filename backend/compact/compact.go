@@ -203,7 +203,8 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	start := time.Now()
-	raw, status, err := r.callSummary(ctx, target, suffix, reqBody)
+	sessionKey, _ := body["prompt_cache_key"].(string)
+	raw, status, err := r.callSummary(ctx, target, suffix, sessionKey, reqBody)
 	latency := time.Since(start)
 	if err != nil {
 		r.logf("compact: model=%s summary call failed: %v, forwarding as-is", target.ModelID, err)
@@ -231,12 +232,12 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 // callSummary 向上游发摘要请求。范式同 modelcheck.Check：拼
 // BaseURL+suffix、写 target.Headers（含认证），但时限更长——
 // 压缩大上下文远慢于连通性探测。
-func (r *Runner) callSummary(ctx context.Context, target resolve.ResolvedTarget, suffix string, body map[string]any) ([]byte, int, error) {
+func (r *Runner) callSummary(ctx context.Context, target resolve.ResolvedTarget, suffix, sessionKey string, body map[string]any) ([]byte, int, error) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return nil, 0, err
 	}
-	url := strings.TrimRight(target.BaseURL, "/") + suffix
+	url := provider.UpstreamURL(target.ProviderID, target.BaseURL, suffix)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
 	if err != nil {
 		return nil, 0, err
@@ -245,6 +246,8 @@ func (r *Runner) callSummary(ctx context.Context, target resolve.ResolvedTarget,
 	for k, v := range target.Headers {
 		req.Header.Set(k, v)
 	}
+	provider.ApplyRequestHeaders(target.ProviderID, target.Protocol, target.Account,
+		"compact:"+target.ModelID+":"+target.Protocol+":"+sessionKey, req.Header)
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return nil, 0, err

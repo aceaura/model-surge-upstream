@@ -358,7 +358,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	}
 	isStream, _ := body["stream"].(bool)
 
-	url := strings.TrimRight(target.BaseURL, "/") + suffix
+	url := provider.UpstreamURL(target.ProviderID, target.BaseURL, suffix)
 	if q := stripKeyQuery(r.URL.RawQuery); q != "" {
 		url += "?" + q
 	}
@@ -391,6 +391,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		for k, v := range headers {
 			up.Header.Set(k, v)
 		}
+		key, _ := body["prompt_cache_key"].(string)
+		provider.ApplyRequestHeaders(target.ProviderID, target.Protocol, target.Account, "proxy:"+key, up.Header)
 		return up, nil
 	}
 
@@ -433,7 +435,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 			return
 		}
 		target = fresh
-		url = strings.TrimRight(target.BaseURL, "/") + suffix
+		url = provider.UpstreamURL(target.ProviderID, target.BaseURL, suffix)
 		if q := stripKeyQuery(r.URL.RawQuery); q != "" {
 			url += "?" + q
 		}

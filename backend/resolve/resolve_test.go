@@ -16,6 +16,24 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
+func TestResolveOpenCode(t *testing.T) {
+	for _, id := range []string{"opencode.global.api.zen", "opencode.global.subscribe.go"} {
+		spec, _ := provider.Get(id)
+		for _, protocol := range spec.Protocols {
+			t.Run(id+"/"+protocol, func(t *testing.T) {
+				r := NewResolver(fakeAccounts{"a": acct("a", id)}, fakeModels{"m": mdl("m", "a", protocol)})
+				got, err := r.Resolve(context.Background(), "m")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.ProviderID != id || got.Protocol != protocol || got.BaseURL != spec.BaseURL || got.Headers["Authorization"] != "Bearer "+secret || got.Headers["x-api-key"] != "" {
+					t.Fatalf("resolved=%+v", got)
+				}
+			})
+		}
+	}
+}
+
 const secret = "sk-abcdefghijklmnop"
 
 type fakeAccounts map[string]account.Account

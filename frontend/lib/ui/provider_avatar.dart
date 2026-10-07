@@ -20,6 +20,7 @@ class ProviderAvatar extends StatelessWidget {
     'kimi': ('assets/providers/kimi.svg', null),
     'kiro': ('assets/providers/kiro.png', null),
     'deepseek': ('assets/providers/deepseek.svg', Color(0xFF4D6BFE)),
+    'opencode': ('assets/providers/opencode.svg', null),
     'ark': ('assets/providers/ark.png', null),
     'bailian': ('assets/providers/bailian.svg', Color(0xFF624AFF)),
   };

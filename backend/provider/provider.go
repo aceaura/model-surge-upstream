@@ -2,7 +2,55 @@
 // 不持久化。注册期的冲突与缺项直接 panic，让配置错误在进程启动时暴露。
 package provider
 
-import "fmt"
+import (
+	"crypto/sha256"
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+func UpstreamURL(providerID, baseURL, suffix string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if providerID == "deepseek.global.api.standard" &&
+		(suffix == "/v1/messages" || strings.HasPrefix(suffix, "/v1/messages/")) &&
+		!strings.HasSuffix(baseURL, "/anthropic") {
+		suffix = "/anthropic" + suffix
+	}
+	return baseURL + suffix
+}
+
+func ApplyRequestHeaders(providerID, protocol, account, sessionKey string, headers http.Header) {
+	if providerID != "opencode.global.api.zen" && providerID != "opencode.global.subscribe.go" {
+		return
+	}
+	if protocol == ProtocolAnthropic {
+		auth := headers.Get("Authorization")
+		if len(auth) >= 7 && strings.EqualFold(auth[:7], "Bearer ") {
+			headers.Set("x-api-key", strings.TrimSpace(auth[7:]))
+		}
+		headers.Del("Authorization")
+		headers.Set("anthropic-version", AnthropicVersion())
+	} else {
+		headers.Del("x-api-key")
+	}
+	if strings.TrimSpace(headers.Get("User-Agent")) == "" {
+		headers.Set("User-Agent", "ModelSurgeUpstream/1.0")
+	}
+	if sessionKey == "" {
+		return
+	}
+	for _, name := range []string{"x-opencode-session", "session_id", "x-session-id", "conversation_id", "x-conversation-id"} {
+		if value := headers.Get(name); strings.TrimSpace(value) != "" {
+			if name != "x-opencode-session" {
+				headers.Set("x-opencode-session", value)
+			}
+			return
+		}
+	}
+	// Hash local identities so upstream telemetry does not receive account names or cache keys.
+	sum := sha256.Sum256([]byte(fmt.Sprintf("opencode:%d:%s:%s", len(account), account, sessionKey)))
+	headers.Set("x-opencode-session", fmt.Sprintf("msu-%x", sum[:16]))
+}
 
 // 协议标识。
 const (

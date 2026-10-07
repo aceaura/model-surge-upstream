@@ -85,6 +85,21 @@ final providers = [
     'region': 'CN',
     'plan': 'Coding Plan',
   }),
+  for (final service in ['zen', 'go'])
+    ProviderSpec.fromJson({
+      'id': 'opencode.global.${service == 'go' ? 'subscribe' : 'api'}.$service',
+      'display_name': 'OpenCode',
+      'website': 'https://opencode.ai/$service',
+      'base_url': 'https://opencode.ai/zen${service == 'go' ? '/go' : ''}',
+      'protocols': ['anthropic', 'chat_completions', 'responses'],
+      'auth': 'bearer',
+      'credential': 'api_key',
+      'billing': service == 'go' ? 'subscription' : 'paygo',
+      'region': 'Global',
+      'plan': service == 'go' ? 'Go' : 'Zen',
+      'quota_queryable': service == 'go',
+      'models': {'path': '/v1/models', 'method': 'GET'},
+    }),
   ProviderSpec.fromJson(const {
     'id': 'kiro',
     'display_name': 'Kiro',
@@ -1643,6 +1658,37 @@ void main() {
       reason: '自动落定不影响解析:三级选定即带出该提供商的默认地址',
     );
   });
+
+  for (final service in ['zen', 'go']) {
+    testWidgets('OpenCode $service resolves endpoint and creates API key account',
+        (tester) async {
+      final captured = <String>[];
+      await pumpForm(tester, client: recordingClient(captured));
+      await selectCascade(
+        tester,
+        vendor: 'OpenCode',
+        billing: service == 'go' ? '订阅' : '按量计费',
+        region: '全球',
+      );
+      expect(fieldText(tester, 'account-base-url'),
+          'https://opencode.ai/zen${service == 'go' ? '/go' : ''}');
+      expect(find.text(service == 'go' ? 'Go' : 'Zen'), findsWidgets);
+      await tester.enterText(
+          find.byKey(const ValueKey('account-name')), 'opencode-$service');
+      await tester.enterText(
+          find.byKey(const ValueKey('account-api-key')), 'sk-test');
+      await tester.ensureVisible(find.widgetWithText(FilledButton, '创建'));
+      await tester.tap(find.widgetWithText(FilledButton, '创建'));
+      await tester.pumpAndSettle();
+      final body = jsonDecode(captured.single) as Map<String, dynamic>;
+      expect(body['provider_id'],
+          'opencode.global.${service == 'go' ? 'subscribe' : 'api'}.$service');
+      expect(body['base_url'], '');
+      expect(body['api_key'], 'sk-test');
+      expect(body.containsKey('credential'), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('multi-plan group resolves provider only after plan chosen', (
     tester,
