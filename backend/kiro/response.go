@@ -784,7 +784,9 @@ func (s *responseState) accept(e wireEvent) error {
 	if v, ok := d["content"]; ok {
 		text, ok := v.(string)
 		if !ok {
-			return fmt.Errorf("kiro: assistant content is not text")
+			// parsers.py:361-370:显式 null/false 的 content 帧经
+			// data.get('content','') 得假值后被静默忽略,不报错。
+			return nil
 		}
 		return s.text("text", text)
 	}
