@@ -317,20 +317,28 @@ class _AllModelsPageState extends State<AllModelsPage> {
         final accounts = data == null ? const <Account>[] : data.$2;
         final providers = data == null ? const <ProviderSpec>[] : data.$3;
 
-        // 摘要带:按协议计数 + 搜索过滤(标识/上游模型名/所属账号)。
+        // 摘要带:按协议计数 + 多关键字交集搜索(标识/上游模型名/账号/协议)。
         final counts = <String, int>{};
         for (final m in models) {
           counts[m.protocol] = (counts[m.protocol] ?? 0) + 1;
         }
-        final q = _query.toLowerCase();
-        final visible = q.isEmpty
-            ? models
-            : models
-                .where((m) =>
-                    m.id.toLowerCase().contains(q) ||
-                    m.nativeModel.toLowerCase().contains(q) ||
-                    m.account.toLowerCase().contains(q))
-                .toList();
+        final keywords = _query
+            .toLowerCase()
+            .split(RegExp(r'\s+'))
+            .where((k) => k.isNotEmpty)
+            .toList();
+        bool hit(UpstreamModel m) {
+          final fields = [
+            m.id.toLowerCase(),
+            m.nativeModel.toLowerCase(),
+            m.account.toLowerCase(),
+            m.protocol.toLowerCase(),
+          ];
+          return keywords.every((k) => fields.any((f) => f.contains(k)));
+        }
+
+        final visible =
+            keywords.isEmpty ? models : models.where(hit).toList();
 
         final Widget content;
         if (!loaded) {
@@ -401,8 +409,9 @@ class _AllModelsPageState extends State<AllModelsPage> {
                   for (final e in counts.entries)
                     BandStat(label: e.key, count: e.value, colorKey: e.key),
                 ],
-                searchHint: '搜索模型标识、上游模型名或账号',
+                searchHint: '搜索模型标识、上游模型名或账号，空格分隔多关键字取交集',
                 controller: _searchController,
+                clickableStats: true,
                 onSearch: (v) => setState(() => _query = v),
               ),
             Expanded(child: content),

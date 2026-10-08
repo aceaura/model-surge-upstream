@@ -27,11 +27,16 @@ class SummaryBand extends StatefulWidget {
     required this.searchHint,
     required this.onSearch,
     this.controller,
+    this.clickableStats = false,
   });
 
   final String summary;
   final List<BandStat> stats;
   final String searchHint;
+
+  /// 统计 chips 是否可点击:点击把标签加入/移出搜索关键字,
+  /// 仅在页面搜索支持多关键字交集且标签本身可被搜索命中时开启。
+  final bool clickableStats;
 
   /// 搜索词变化回调(已 trim,可能为空串)。
   final ValueChanged<String> onSearch;
@@ -131,20 +136,78 @@ class _SummaryBandState extends State<SummaryBand> {
     );
   }
 
+  /// 当前搜索词里的关键字集合(小写,空白分隔)。
+  Set<String> get _keywords => _controller.text
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((t) => t.isNotEmpty)
+      .toSet();
+
+  /// 点 chip 把其标签加入/移出搜索关键字(交集搜索),
+  /// 同步改写搜索框文本并走正常 onSearch 回调。
+  void _toggleKeyword(String label) {
+    final tokens = _controller.text
+        .split(RegExp(r'\s+'))
+        .where((t) => t.isNotEmpty)
+        .toList();
+    final i = tokens.indexWhere((t) => t.toLowerCase() == label.toLowerCase());
+    if (i >= 0) {
+      tokens.removeAt(i);
+    } else {
+      tokens.add(label);
+    }
+    final text = tokens.join(' ');
+    _controller.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    widget.onSearch(text);
+  }
+
   Widget _chip(BandStat s, bool dark) {
     final (bg, fg) = ProviderAvatar.colorsFor(s.colorKey, dark: dark);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(7),
-      ),
-      child: Text(
-        '${s.label}: ${s.count}',
-        style: TextStyle(
-          fontSize: 11.5,
-          fontWeight: FontWeight.w500,
-          color: fg,
+    if (!widget.clickableStats) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Text(
+          '${s.label}: ${s.count}',
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w500,
+            color: fg,
+          ),
+        ),
+      );
+    }
+    final active = _keywords.contains(s.label.toLowerCase());
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => _toggleKeyword(s.label),
+        child: Tooltip(
+          message: active ? '点击移出搜索关键字' : '点击加入搜索关键字',
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(
+                color: active ? fg : Colors.transparent,
+              ),
+            ),
+            child: Text(
+              '${s.label}: ${s.count}',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w500,
+                color: fg,
+              ),
+            ),
+          ),
         ),
       ),
     );

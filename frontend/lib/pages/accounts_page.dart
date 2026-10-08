@@ -292,15 +292,22 @@ class _AccountsPageState extends State<AccountsPage> {
           final vendor = providerVendor(a.providerId);
           counts[vendor] = (counts[vendor] ?? 0) + 1;
         }
-        final q = _query.toLowerCase();
-        final visible = q.isEmpty
-            ? accounts
-            : accounts
-                .where((a) =>
-                    a.name.toLowerCase().contains(q) ||
-                    a.providerId.toLowerCase().contains(q) ||
-                    a.baseUrl.toLowerCase().contains(q))
-                .toList();
+        final keywords = _query
+            .toLowerCase()
+            .split(RegExp(r'\s+'))
+            .where((k) => k.isNotEmpty)
+            .toList();
+        bool hit(Account a) {
+          final fields = [
+            a.name.toLowerCase(),
+            a.providerId.toLowerCase(),
+            a.baseUrl.toLowerCase(),
+          ];
+          return keywords.every((k) => fields.any((f) => f.contains(k)));
+        }
+
+        final visible =
+            keywords.isEmpty ? accounts : accounts.where(hit).toList();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -322,7 +329,8 @@ class _AccountsPageState extends State<AccountsPage> {
                 for (final e in counts.entries)
                   BandStat(label: e.key, count: e.value, colorKey: e.key),
               ],
-              searchHint: '搜索账号名、提供商或请求地址',
+              searchHint: '搜索账号名、提供商或请求地址，空格分隔多关键字取交集',
+              clickableStats: true,
               onSearch: (v) => setState(() => _query = v),
             ),
             Expanded(
