@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -172,7 +173,10 @@ type loggedResolver struct{ inner *resolve.Resolver }
 func (l loggedResolver) Resolve(ctx context.Context, modelID string) (resolve.ResolvedTarget, error) {
 	t, err := l.inner.Resolve(ctx, modelID)
 	if err != nil {
-		ringlog.Push(ringlog.LevelWarn, "resolve", fmt.Sprintf("model=%s failed: %v", modelID, err))
+		// 解析失败没有 target,但模型 id 形如 账号/模型,账号名取自第一段,
+		// 保证失败行也能被日志页的账号筛选命中。
+		accountName, _, _ := strings.Cut(modelID, "/")
+		ringlog.Push(ringlog.LevelWarn, "resolve", fmt.Sprintf("model=%s account=%s failed: %v", modelID, accountName, err))
 		return t, err
 	}
 	ringlog.Push(ringlog.LevelInfo, "resolve",

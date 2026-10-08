@@ -81,7 +81,8 @@ func (q *Quota) appendKimiMonthly(ctx context.Context, spec provider.Spec, acc a
 	}
 	m, err := q.kimiMonthlyMeter(ctx, acc)
 	if err != nil {
-		ringlog.Push("warn", "quota", fmt.Sprintf("kimi monthly quota for %s: %v", acc.Name, err))
+		// account= 键值形态:日志页账号筛选能命中此行。
+		ringlog.Push("warn", "quota", fmt.Sprintf("kimi monthly quota account=%s failed: %v", acc.Name, err))
 		return
 	}
 	if m == nil {
