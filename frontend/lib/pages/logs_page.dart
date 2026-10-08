@@ -41,6 +41,19 @@ class _LogsPageState extends State<LogsPage> {
     'error': 'error',
   };
 
+  /// 来源选项的种子:后端 ringlog 各发射源。日志里出现的其他值并入
+  /// 选项(见 _choices),种子保证空缓冲时也能按来源筛。
+  static const _sourceSeed = [
+    'proxy',
+    'resolve',
+    'chat',
+    'compact',
+    'http',
+    'quota',
+    'usage',
+    'server',
+  ];
+
   /// 转发/解析/对话/压缩条目的 msg 里都带 model=/account= 键值,筛选按它匹配;
   /// 没有该键的条目(纯 HTTP 管理面、启动事件)在对应筛选生效时不显示。
   static final _modelRe = RegExp(r'(?:^|\s)model=(\S+)');
@@ -59,6 +72,7 @@ class _LogsPageState extends State<LogsPage> {
   String _level = 'all';
   String _modelFilter = 'all';
   String _accountFilter = 'all';
+  String _sourceFilter = 'all';
 
   /// 下拉选项的基底:当前配置的模型/账号。日志里出现过的其他值(如已删除
   /// 的模型)并入选项,保证历史条目也可筛。
@@ -233,6 +247,7 @@ class _LogsPageState extends State<LogsPage> {
 
   List<LogEntry> get _filtered => _entries.where((e) {
         if (_level != 'all' && e.level != _level) return false;
+        if (_sourceFilter != 'all' && e.source != _sourceFilter) return false;
         if (_modelFilter != 'all' && _modelOf(e) != _modelFilter) return false;
         if (_accountFilter != 'all' && _accountOf(e) != _accountFilter) {
           return false;
@@ -266,6 +281,16 @@ class _LogsPageState extends State<LogsPage> {
                 options: ['all', ..._choices(_knownAccounts, _accountOf)],
                 labelOf: (o) => o == 'all' ? '全部账号' : o,
                 onChanged: (v) => setState(() => _accountFilter = v ?? 'all'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 108,
+              child: StyledDropdown(
+                value: _sourceFilter,
+                options: ['all', ..._choices(_sourceSeed.toList(), (e) => e.source)],
+                labelOf: (o) => o == 'all' ? '全部来源' : o,
+                onChanged: (v) => setState(() => _sourceFilter = v ?? 'all'),
               ),
             ),
             const SizedBox(width: 8),

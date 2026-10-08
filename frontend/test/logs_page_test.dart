@@ -75,6 +75,10 @@ ApiClient _stubClient({List<String>? extraModels}) {
 
 Future<void> _pumpLogs(WidgetTester tester,
     {bool active = false, List<String>? extraModels}) async {
+  // 页头四个下拉+按钮排一行,默认 800 宽测窗放不下会报溢出。
+  tester.view.physicalSize = const Size(1400, 1000);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(
     theme: buildAppTheme(),
     home: Scaffold(
@@ -146,6 +150,21 @@ void main() {
     // proxy 行的 account= 由源日志带上,账号过滤不再把它漏掉。
     expect(find.textContaining('runtime.us-east-1.kiro.dev'), findsOneWidget);
     expect(find.textContaining('resolve model=kimi-1'), findsNothing);
+    expect(find.textContaining('GET /admin/logs'), findsNothing);
+    expect(find.textContaining('session=abc'), findsNothing);
+  });
+
+  testWidgets('按来源筛选:种子源可选,只留该来源条目', (tester) async {
+    await _pumpLogs(tester);
+    await tester.tap(find.text('全部来源'));
+    await tester.pumpAndSettle();
+    // 种子源在空选项下也可选;resolve 是夹具里有的来源。
+    expect(find.text('resolve'), findsWidgets);
+    await tester.tap(find.text('resolve').last);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('resolve model=kimi-1'), findsOneWidget);
+    expect(find.textContaining('runtime.us-east-1.kiro.dev'), findsNothing);
     expect(find.textContaining('GET /admin/logs'), findsNothing);
     expect(find.textContaining('session=abc'), findsNothing);
   });
