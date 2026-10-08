@@ -22,7 +22,7 @@ class StyledDropdown extends StatefulWidget {
   final bool dropUp;
   // false=禁用:不响应点击(级联选择中下级等上级选定后再解锁)。
   final bool enabled;
-  // true=触发器按最长选项文案自适应宽、文案居中(页头过滤器用),
+  // true=触发器按最长选项文案自适应宽(页头过滤器用),
   // 选中切换不跳宽;false 保持父级约束(表单内拉满)。
   final bool fitContent;
   const StyledDropdown(
@@ -272,7 +272,6 @@ class _StyledDropdownState extends State<StyledDropdown> {
                       ? const SizedBox.shrink()
                       : Text(
                           current == null ? '' : _label(current),
-                          textAlign: widget.fitContent ? TextAlign.center : null,
                           overflow: TextOverflow.ellipsis,
                           // 显式钉字体族:textStyle 缺 fontFamily 会在合并链上丢掉字体栈
                           style: triggerStyle,

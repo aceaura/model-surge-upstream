@@ -1274,7 +1274,6 @@ class _FilterSelectState extends State<_FilterSelect> {
                 Expanded(
                   child: Text(
                     widget.label,
-                    textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12.5, color: t.ink),
                   ),
