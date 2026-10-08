@@ -41,6 +41,11 @@ class _LogsPageState extends State<LogsPage> {
     'error': 'error',
   };
 
+  /// 转发/解析/对话条目的 msg 里带 model=/account= 键值,筛选按它匹配;
+  /// 没有该键的条目(纯 HTTP 管理面、启动事件)在对应筛选生效时不显示。
+  static final _modelRe = RegExp(r'(?:^|\s)model=(\S+)');
+  static final _accountRe = RegExp(r'(?:^|\s)account=(\S+)');
+
   // 列宽：时间 / 级别 / 来源 三列定宽，内容列吃满剩余宽度。
   static const _colTime = 64.0;
   static const _colLevel = 52.0;
@@ -52,6 +57,13 @@ class _LogsPageState extends State<LogsPage> {
   Timer? _timer;
   int _since = 0;
   String _level = 'all';
+  String _modelFilter = 'all';
+  String _accountFilter = 'all';
+
+  /// 下拉选项的基底:当前配置的模型/账号。日志里出现过的其他值(如已删除
+  /// 的模型)并入选项,保证历史条目也可筛。
+  List<String> _knownModels = [];
+  List<String> _knownAccounts = [];
   bool _follow = true;
 
   /// 跟随是否由「用户往上翻」自动暂停的：滚回底部时自动恢复；
@@ -64,7 +76,38 @@ class _LogsPageState extends State<LogsPage> {
   void initState() {
     super.initState();
     _scroll.addListener(_onUserScroll);
+    _loadFilterChoices();
     _reload();
+  }
+
+  Future<void> _loadFilterChoices() async {
+    try {
+      final models = await widget.client.listModels();
+      final accounts = await widget.client.listAccounts();
+      if (!mounted) return;
+      setState(() {
+        _knownModels = [for (final m in models) m.id];
+        _knownAccounts = [for (final a in accounts) a.name];
+      });
+    } catch (_) {
+      // 配置列表拉取失败不挡日志展示:选项退化为只从日志条目解析。
+    }
+  }
+
+  static String? _modelOf(LogEntry e) => _modelRe.firstMatch(e.msg)?.group(1);
+
+  static String? _accountOf(LogEntry e) =>
+      _accountRe.firstMatch(e.msg)?.group(1);
+
+  /// 选项 = 配置列表 ∪ 日志里实际出现过的值,保持先配置后发现的顺序。
+  List<String> _choices(List<String> known, String? Function(LogEntry) pick) {
+    final seen = <String>{...known};
+    final out = [...known];
+    for (final e in _entries) {
+      final v = pick(e);
+      if (v != null && seen.add(v)) out.add(v);
+    }
+    return out;
   }
 
   @override
@@ -185,9 +228,14 @@ class _LogsPageState extends State<LogsPage> {
     }
   }
 
-  List<LogEntry> get _filtered => _level == 'all'
-      ? _entries
-      : _entries.where((e) => e.level == _level).toList();
+  List<LogEntry> get _filtered => _entries.where((e) {
+        if (_level != 'all' && e.level != _level) return false;
+        if (_modelFilter != 'all' && _modelOf(e) != _modelFilter) return false;
+        if (_accountFilter != 'all' && _accountOf(e) != _accountFilter) {
+          return false;
+        }
+        return true;
+      }).toList();
 
   @override
   Widget build(BuildContext context) {
@@ -198,6 +246,26 @@ class _LogsPageState extends State<LogsPage> {
           title: '日志',
           count: _filtered.length,
           trailing: [
+            SizedBox(
+              width: 172,
+              child: StyledDropdown(
+                value: _modelFilter,
+                options: ['all', ..._choices(_knownModels, _modelOf)],
+                labelOf: (o) => o == 'all' ? '全部模型' : o,
+                onChanged: (v) => setState(() => _modelFilter = v ?? 'all'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 136,
+              child: StyledDropdown(
+                value: _accountFilter,
+                options: ['all', ..._choices(_knownAccounts, _accountOf)],
+                labelOf: (o) => o == 'all' ? '全部账号' : o,
+                onChanged: (v) => setState(() => _accountFilter = v ?? 'all'),
+              ),
+            ),
+            const SizedBox(width: 8),
             SizedBox(
               width: 116,
               child: StyledDropdown(
@@ -275,7 +343,7 @@ class _LogsPageState extends State<LogsPage> {
     if (rows.isEmpty) {
       return Center(
         child: Text(
-          _entries.isEmpty ? '暂无日志条目，服务产生事件后会自动出现' : '该级别下暂无日志',
+          _entries.isEmpty ? '暂无日志条目，服务产生事件后会自动出现' : '当前筛选条件下暂无日志',
           style: TextStyle(fontSize: 13, color: t.faint),
         ),
       );
