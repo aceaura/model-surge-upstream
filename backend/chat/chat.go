@@ -390,7 +390,7 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effortL
 	reply, target, err := s.complete(ctx, target, modelID, sessionID, effortLevel, history)
 	if err != nil {
 		ringlog.Push(ringlog.LevelWarn, "chat",
-			fmt.Sprintf("session=%s model=%s upstream failed: %v", sessionID, modelID, err))
+			fmt.Sprintf("session=%s model=%s account=%s upstream failed: %v", sessionID, modelID, target.Account, err))
 		return nil, err
 	}
 	if _, err := s.repo.append(ctx, sessionID, RoleAssistant, reply, nil); err != nil {

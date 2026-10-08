@@ -24,7 +24,7 @@ ApiClient _stubClient({List<String>? extraModels}) {
             'level': 'info',
             'source': 'proxy',
             'msg':
-                '→ POST https://runtime.us-east-1.kiro.dev/v1/messages model=kiro-1/claude-sonnet-5 native=claude-sonnet-5 body={}'
+                '→ POST https://runtime.us-east-1.kiro.dev/v1/messages model=kiro-1/claude-sonnet-5 account=kiro-1 native=claude-sonnet-5 body={}'
           },
           {
             'seq': 2,
@@ -134,6 +134,20 @@ void main() {
     // old-1 只出现在 chat 条目:级别再限 info 仍可见(条目即 info)。
     expect(find.textContaining('session=abc'), findsOneWidget);
     expect(find.textContaining('resolve model=kimi-1'), findsNothing);
+  });
+
+  testWidgets('按账号筛选:proxy 请求/响应行也带 account= 键,一并命中', (tester) async {
+    await _pumpLogs(tester);
+    await tester.tap(find.text('全部账号'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('kiro-1'));
+    await tester.pumpAndSettle();
+
+    // proxy 行的 account= 由源日志带上,账号过滤不再把它漏掉。
+    expect(find.textContaining('runtime.us-east-1.kiro.dev'), findsOneWidget);
+    expect(find.textContaining('resolve model=kimi-1'), findsNothing);
+    expect(find.textContaining('GET /admin/logs'), findsNothing);
+    expect(find.textContaining('session=abc'), findsNothing);
   });
 
   testWidgets('重新激活时重拉配置列表,别处新建的模型出现在选项里', (tester) async {

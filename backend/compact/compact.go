@@ -173,22 +173,22 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 	}
 
 	if cfg.Mode == ModeError {
-		r.logf("compact: model=%s estimated %d tokens > %.0f%% of context_window=%d, rejecting for client-side compact",
-			target.ModelID, estimated, cfg.Threshold*100, target.ContextWindow)
+		r.logf("compact: model=%s account=%s estimated %d tokens > %.0f%% of context_window=%d, rejecting for client-side compact",
+			target.ModelID, target.Account, estimated, cfg.Threshold*100, target.ContextWindow)
 		return nil, estimated, true
 	}
 
 	messages := impl.Messages(body)
 	prefix, tail, ok := impl.Cut(messages, cfg.KeepTurns)
 	if !ok {
-		r.logf("compact: model=%s estimated %d tokens exceeds window but no safe cut point, forwarding as-is",
-			target.ModelID, estimated)
+		r.logf("compact: model=%s account=%s estimated %d tokens exceeds window but no safe cut point, forwarding as-is",
+			target.ModelID, target.Account, estimated)
 		return body, estimated, false
 	}
 
 	suffix, reqBody, err := impl.BuildSummaryRequest(target.NativeModel, body, prefix, cfg.MaxSummaryTokens)
 	if err != nil {
-		r.logf("compact: model=%s build summary request failed: %v, forwarding as-is", target.ModelID, err)
+		r.logf("compact: model=%s account=%s build summary request failed: %v, forwarding as-is", target.ModelID, target.Account, err)
 		return body, estimated, false
 	}
 	// codex 订阅端点的硬约束(store/stream/剥采样参数/instructions)与
@@ -207,25 +207,25 @@ func (r *Runner) Run(ctx context.Context, target resolve.ResolvedTarget, body ma
 	raw, status, err := r.callSummary(ctx, target, suffix, sessionKey, reqBody)
 	latency := time.Since(start)
 	if err != nil {
-		r.logf("compact: model=%s summary call failed: %v, forwarding as-is", target.ModelID, err)
+		r.logf("compact: model=%s account=%s summary call failed: %v, forwarding as-is", target.ModelID, target.Account, err)
 		return body, estimated, false
 	}
 	if status < 200 || status >= 300 {
-		r.logf("compact: model=%s summary call HTTP %d: %s, forwarding as-is",
-			target.ModelID, status, snippet(raw))
+		r.logf("compact: model=%s account=%s summary call HTTP %d: %s, forwarding as-is",
+			target.ModelID, target.Account, status, snippet(raw))
 		return body, estimated, false
 	}
 	summary, u, err := impl.ExtractSummary(raw)
 	if err != nil {
-		r.logf("compact: model=%s extract summary failed: %v, raw_tail=%s, forwarding as-is",
-			target.ModelID, err, tailSnippet(raw, 8000))
+		r.logf("compact: model=%s account=%s extract summary failed: %v, raw_tail=%s, forwarding as-is",
+			target.ModelID, target.Account, err, tailSnippet(raw, 8000))
 		return body, estimated, false
 	}
 	if record != nil {
 		record(u, status, latency, latency)
 	}
-	r.logf("compact: model=%s compacted %d→%d messages (estimated %d tokens, window %d)",
-		target.ModelID, len(messages), len(tail)+2, estimated, target.ContextWindow)
+	r.logf("compact: model=%s account=%s compacted %d→%d messages (estimated %d tokens, window %d)",
+		target.ModelID, target.Account, len(messages), len(tail)+2, estimated, target.ContextWindow)
 	return impl.Splice(body, summary, tail), estimated, false
 }
 

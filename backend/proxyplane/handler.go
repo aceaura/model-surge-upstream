@@ -370,8 +370,9 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		url += "?" + q
 	}
 	// 调试日志:最终发给上游的请求体(长文本字段换占位,参数原样)。
-	ringlog.Push(ringlog.LevelInfo, "proxy", fmt.Sprintf("→ %s %s model=%s native=%s body=%s",
-		r.Method, url, target.ModelID, target.NativeModel, marshalDebug(requestDebugView(body))))
+	// model= 与 account= 键值成对出现,日志页按键值筛选(账号过滤依赖 account=)。
+	ringlog.Push(ringlog.LevelInfo, "proxy", fmt.Sprintf("→ %s %s model=%s account=%s native=%s body=%s",
+		r.Method, url, target.ModelID, target.Account, target.NativeModel, marshalDebug(requestDebugView(body))))
 	// 请求体字节固定,重试时按新头集重建请求。
 	build := func(headers map[string]string) (*http.Request, error) {
 		up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(encoded))
@@ -411,7 +412,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	}
 	resp, err := h.client.Do(up)
 	if err != nil {
-		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s: %v", target.ModelID, err))
+		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s account=%s: %v", target.ModelID, target.Account, err))
 		// kiro 传输层的请求校验错误(unsupported path/超长度/max_tokens 缺失等)
 		// 归为 400,与 FastAPI 422 一致;其余仍按上游不可用 502。
 		if apperr.Is(err, apperr.InvalidRequest) {
@@ -456,7 +457,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 			resp, err = h.client.Do(up)
 		}
 		if err != nil {
-			ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s: %v", target.ModelID, err))
+			ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s account=%s: %v", target.ModelID, target.Account, err))
 			if errors.Is(err, kiro.ErrUpstreamTimeout) {
 				writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream retry timed out", err))
 				h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
@@ -491,8 +492,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	if resp.StatusCode >= 400 {
 		level = ringlog.LevelWarn
 	}
-	ringlog.Push(level, "proxy", fmt.Sprintf("← %d %s model=%s (%d bytes) body=%s",
-		resp.StatusCode, contentType, target.ModelID, n, responseDebugText(capBody.buf.Bytes(), n)))
+	ringlog.Push(level, "proxy", fmt.Sprintf("← %d %s model=%s account=%s (%d bytes) body=%s",
+		resp.StatusCode, contentType, target.ModelID, target.Account, n, responseDebugText(capBody.buf.Bytes(), n)))
 }
 
 // bearerTokenValue 从头集里取出 Bearer 载荷;取不到返回空串。

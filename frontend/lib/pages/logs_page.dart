@@ -41,7 +41,7 @@ class _LogsPageState extends State<LogsPage> {
     'error': 'error',
   };
 
-  /// 转发/解析/对话条目的 msg 里带 model=/account= 键值,筛选按它匹配;
+  /// 转发/解析/对话/压缩条目的 msg 里都带 model=/account= 键值,筛选按它匹配;
   /// 没有该键的条目(纯 HTTP 管理面、启动事件)在对应筛选生效时不显示。
   static final _modelRe = RegExp(r'(?:^|\s)model=(\S+)');
   static final _accountRe = RegExp(r'(?:^|\s)account=(\S+)');
