@@ -368,6 +368,9 @@ class _AccountFormState extends State<AccountForm> {
   );
 
   bool _revealKey = false;
+  // 眼睛从管理面拉回的密钥原文:再点隐藏时若框内仍是这个自动填入值
+  // (用户没改动),清空控制器回到固定星号 hint,隐藏态前后长度一致。
+  String? _revealedKey;
   bool _revealBailianAkId = false;
   bool _revealBailianAkSecret = false;
   bool _busy = false;
@@ -844,9 +847,7 @@ class _AccountFormState extends State<AccountForm> {
                   ? Icons.visibility_off_outlined
                   : Icons.visibility_outlined,
             ),
-            onPressed: _revealKey
-                ? () => setState(() => _revealKey = false)
-                : _revealApiKey,
+            onPressed: _revealKey ? _hideApiKey : _revealApiKey,
           ),
         ),
         validator: (v) {
@@ -855,6 +856,19 @@ class _AccountFormState extends State<AccountForm> {
         },
       ),
     );
+  }
+
+  /// 隐藏密钥:框内值仍是眼睛自动拉回的原文(用户未动)则清空,回到
+  /// 固定星号 hint——隐藏后仍是「留空保留原密钥」,显示长度与点击前一致。
+  /// 用户改动过的文本保留,只是切回掩码。
+  void _hideApiKey() {
+    setState(() {
+      if (_revealedKey != null && _apiKey.text == _revealedKey) {
+        _apiKey.clear();
+        _revealedKey = null;
+      }
+      _revealKey = false;
+    });
   }
 
   /// 点眼睛揭示密钥:框里已有内容(用户输入或此前已揭示)只切掩码;
@@ -871,7 +885,10 @@ class _AccountFormState extends State<AccountForm> {
       if (!mounted) return;
       setState(() {
         final key = cred['api_key'] as String? ?? '';
-        if (key.isNotEmpty) _apiKey.text = key;
+        if (key.isNotEmpty) {
+          _apiKey.text = key;
+          _revealedKey = key;
+        }
         _revealKey = true;
       });
     } catch (e) {

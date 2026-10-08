@@ -1695,7 +1695,52 @@ void main() {
 
     await tester.tap(find.byTooltip('隐藏'));
     await tester.pump();
-    expect(keyObscured(), isTrue, reason: '再点眼睛回到掩码,已填入的值保留');
+    expect(keyObscured(), isTrue, reason: '再点眼睛回到掩码');
+    expect(
+      fieldText(tester, 'account-api-key'),
+      '',
+      reason: '自动填入的原文未改动,隐藏时清空回到固定星号',
+    );
+    expect(
+      find.textContaining('************'),
+      findsOneWidget,
+      reason: '隐藏后显示与点击前一致的固定星号',
+    );
+  });
+
+  testWidgets('edit eye hide keeps user-edited key text', (tester) async {
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        if (req.url.path == '/admin/accounts/ds-1/credential') {
+          return http.Response(
+            jsonEncode({
+              'credential': {'kind': 'api_key', 'api_key': 'sk-full-secret'},
+            }),
+            200,
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+    );
+    await pumpForm(tester, editing: account, client: client);
+
+    await tester.ensureVisible(find.byTooltip('显示'));
+    await tester.tap(find.byTooltip('显示'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('account-api-key')),
+      'sk-user-edited',
+    );
+
+    await tester.tap(find.byTooltip('隐藏'));
+    await tester.pump();
+    expect(
+      fieldText(tester, 'account-api-key'),
+      'sk-user-edited',
+      reason: '用户改动过的文本不被清空,只是切回掩码',
+    );
   });
 
   testWidgets('copy falls back to provider default when no override', (
