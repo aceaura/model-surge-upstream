@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, enabled, created_at, updated_at, sort_order`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, rectifier, enabled, created_at, updated_at, sort_order`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -49,6 +49,9 @@ type Input struct {
 	// EffortFormat 写入格式：nil=跟随现状（Create 落空串=协议内置，Update
 	// 保留旧值），指向空串=回内置映射，非空=显式格式（保存期校验枚举）。
 	EffortFormat *string
+	// Rectifier 整流器配置：空=关闭（{}）。只对 kiro 提供商生效，
+	// 校验只查形态与取值范围，不查提供商归属。
+	Rectifier    json.RawMessage
 	Enabled      bool
 	// NewID 改名目标（仅 Update 使用）：空=沿用 ID；非空且不同于 ID 时把
 	// 记录主键改写为 NewID，同事务随迁 chat_sessions.model_id。
@@ -71,10 +74,10 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortFormat, m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
+			m.EffortFormat, []byte(m.Rectifier), m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -145,6 +148,11 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	if in.EffortFormat == nil {
 		in.EffortFormat = &existing.EffortFormat
 	}
+	// Rectifier 缺省保留旧值:未升级的客户端全量回写时不致误关整流器;
+	// 显式 {} 才是关闭。
+	if len(in.Rectifier) == 0 {
+		in.Rectifier = existing.Rectifier
+	}
 	newID := strings.TrimSpace(in.NewID)
 	rename := newID != "" && newID != existing.ID
 	if rename {
@@ -163,10 +171,10 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 			tag, err := r.pool.Exec(ctx, `UPDATE models SET
 				account=$2, native_model=$3, protocol=$4, context_window=$5,
 				defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
-				enabled=$11, updated_at=$12 WHERE id=$1`,
+				rectifier=$11, enabled=$12, updated_at=$13 WHERE id=$1`,
 				m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 				[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-				m.EffortFormat, m.Enabled, m.UpdatedAt)
+				m.EffortFormat, []byte(m.Rectifier), m.Enabled, m.UpdatedAt)
 			if err != nil {
 				return apperr.Wrap(apperr.StorageError, "update model", err)
 			}
@@ -184,10 +192,10 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 		tag, err := tx.Exec(ctx, `UPDATE models SET
 			id=$2, account=$3, native_model=$4, protocol=$5, context_window=$6,
 			defaults=$7, overrides=$8, compact=$9, efforts=$10, effort_format=$11,
-			enabled=$12, updated_at=$13 WHERE id=$1`,
+			rectifier=$12, enabled=$13, updated_at=$14 WHERE id=$1`,
 			existing.ID, m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortFormat, m.Enabled, m.UpdatedAt)
+			m.EffortFormat, []byte(m.Rectifier), m.Enabled, m.UpdatedAt)
 		if err != nil {
 			return mapWriteErr(err, m.ID)
 		}
@@ -309,6 +317,10 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
 			"effort_format must be one of: chat_completions, responses, anthropic, gemini")
 	}
+	rectifier, err := normalizeRectifier(in.Rectifier)
+	if err != nil {
+		return Model{}, err
+	}
 
 	return Model{
 		ID:            id,
@@ -321,8 +333,33 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		Compact:       compactCfg,
 		Efforts:       efforts,
 		EffortFormat:  format,
+		Rectifier:     rectifier,
 		Enabled:       in.Enabled,
 	}, nil
+}
+
+// normalizeRectifier 校验整流器配置：必须是对象；retries 1..10，
+// interval_seconds 0..60。enabled 缺省 false；关态也允许带参数
+// （开关只控制生效，参数随表单保留）。
+func normalizeRectifier(raw json.RawMessage) (json.RawMessage, error) {
+	obj, err := normalizeObject(raw, "rectifier")
+	if err != nil {
+		return nil, err
+	}
+	var probe struct {
+		Retries         *int     `json:"retries"`
+		IntervalSeconds *float64 `json:"interval_seconds"`
+	}
+	if err := json.Unmarshal(obj, &probe); err != nil {
+		return nil, apperr.New(apperr.InvalidJSON, "rectifier must be a json object")
+	}
+	if probe.Retries != nil && (*probe.Retries < 1 || *probe.Retries > 10) {
+		return nil, apperr.New(apperr.InvalidRequest, "rectifier.retries must be in 1..10")
+	}
+	if probe.IntervalSeconds != nil && (*probe.IntervalSeconds < 0 || *probe.IntervalSeconds > 60) {
+		return nil, apperr.New(apperr.InvalidRequest, "rectifier.interval_seconds must be in 0..60")
+	}
+	return obj, nil
 }
 
 // normalizeEfforts 把空值补成 JSON null（自动=跟随上游声明）；数组形态的
@@ -407,15 +444,17 @@ func scan(s scanner) (Model, error) {
 		overrides []byte
 		compact   []byte
 		efforts   []byte
+		rectifier []byte
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
+		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &rectifier, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)
 	m.Overrides = json.RawMessage(overrides)
 	m.Compact = json.RawMessage(compact)
 	m.Efforts = json.RawMessage(efforts)
+	m.Rectifier = json.RawMessage(rectifier)
 	if len(m.Defaults) == 0 {
 		m.Defaults = json.RawMessage(`{}`)
 	}
@@ -427,6 +466,9 @@ func scan(s scanner) (Model, error) {
 	}
 	if len(m.Efforts) == 0 {
 		m.Efforts = json.RawMessage(`null`)
+	}
+	if len(m.Rectifier) == 0 {
+		m.Rectifier = json.RawMessage(`{}`)
 	}
 	return m, nil
 }

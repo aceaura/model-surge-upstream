@@ -29,6 +29,15 @@ final providers = [
     'auth': 'bearer',
     'credential': 'api_key',
   }),
+  ProviderSpec.fromJson(const {
+    'id': 'kiro.global.subscribe.standard',
+    'display_name': 'Kiro',
+    'website': 'https://kiro.dev',
+    'base_url': 'https://q.amazonaws.com',
+    'protocols': ['anthropic', 'chat_completions'],
+    'auth': 'bearer',
+    'credential': 'oauth',
+  }),
 ];
 
 final accounts = [
@@ -48,6 +57,14 @@ final accounts = [
     'headers': <String, dynamic>{},
     'enabled': true,
   }),
+  Account.fromJson(const {
+    'name': 'kiro-1',
+    'provider_id': 'kiro.global.subscribe.standard',
+    'credential': {'kind': 'oauth'},
+    'base_url': '',
+    'headers': <String, dynamic>{},
+    'enabled': true,
+  }),
 ];
 
 ApiClient stubClient() => ApiClient(
@@ -62,6 +79,7 @@ Future<void> pumpForm(
   UpstreamModel? editing,
   UpstreamModel? copyFrom,
   ApiClient? client,
+  String initialAccount = 'kimi-1',
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1.0;
@@ -73,7 +91,7 @@ Future<void> pumpForm(
         client: client ?? stubClient(),
         accounts: accounts,
         providers: providers,
-        initialAccount: 'kimi-1',
+        initialAccount: initialAccount,
         onDone: (_) {},
         editing: editing,
         copyFrom: copyFrom,
@@ -706,6 +724,153 @@ void main() {
       {'name': '1', 'value': 'low'},
       {'name': '2', 'value': 'ultra'},
     ]);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  ApiClient captureClient(void Function(Map<String, dynamic>) onBody) =>
+      ApiClient(
+        baseUrl: 'http://127.0.0.1:8080',
+        adminKey: 'adm',
+        httpClient: MockClient((req) async {
+          if (req.method != 'GET') {
+            onBody(jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>);
+          }
+          return http.Response('{}', 200);
+        }),
+      );
+
+  testWidgets('整流器:仅 kiro 账号渲染,新建默认开(2次/2秒)随提交上行', (
+    tester,
+  ) async {
+    Map<String, dynamic>? sentBody;
+    await pumpForm(
+      tester,
+      client: captureClient((b) => sentBody = b),
+      initialAccount: 'kiro-1',
+    );
+
+    expect(find.text('整流器'), findsOneWidget);
+    expect(find.text('空拒答自动重试'), findsOneWidget);
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('model-rectifier-enabled')))
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const ValueKey('model-rectifier-retries')),
+          )
+          .controller!
+          .text,
+      '2',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const ValueKey('model-rectifier-interval')),
+          )
+          .controller!
+          .text,
+      '2',
+    );
+
+    await tester.enterText(find.byKey(const ValueKey('model-id')), 'kiro-1/c5');
+    await tester.enterText(
+      find.byKey(const ValueKey('model-native')),
+      'claude-sonnet-4.5',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(sentBody, isNotNull);
+    expect(sentBody!['rectifier'], {
+      'enabled': true,
+      'retries': 2,
+      'interval_seconds': 2.0,
+    });
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('整流器:编辑预填已存配置,关开关与改参数随提交上行', (tester) async {
+    Map<String, dynamic>? sentBody;
+    final editing = UpstreamModel.fromJson(const {
+      'id': 'kiro-1/c5',
+      'account': 'kiro-1',
+      'native_model': 'claude-sonnet-4.5',
+      'protocol': 'chat_completions',
+      'context_window': 200000,
+      'defaults': <String, dynamic>{},
+      'overrides': <String, dynamic>{},
+      'rectifier': {'enabled': true, 'retries': 5, 'interval_seconds': 0.5},
+      'enabled': true,
+    });
+    await pumpForm(tester, editing: editing, client: captureClient((b) => sentBody = b));
+
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const ValueKey('model-rectifier-retries')),
+          )
+          .controller!
+          .text,
+      '5',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const ValueKey('model-rectifier-interval')),
+          )
+          .controller!
+          .text,
+      '0.5',
+    );
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('model-rectifier-enabled')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('model-rectifier-enabled')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('model-rectifier-retries')),
+      '3',
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(sentBody, isNotNull);
+    // 关态也带参数:开关只控制生效,参数保留。
+    expect(sentBody!['rectifier'], {
+      'enabled': false,
+      'retries': 3,
+      'interval_seconds': 0.5,
+    });
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('整流器:非 kiro 账号不渲染,新建提交空对象、编辑回传源值', (
+    tester,
+  ) async {
+    Map<String, dynamic>? sentBody;
+    await pumpForm(tester, client: captureClient((b) => sentBody = b));
+
+    expect(find.text('整流器'), findsNothing);
+    await tester.enterText(find.byKey(const ValueKey('model-id')), 'kimi-1/k2');
+    await tester.enterText(
+      find.byKey(const ValueKey('model-native')),
+      'kimi-k2-turbo',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+    expect(sentBody!['rectifier'], <String, dynamic>{});
 
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();

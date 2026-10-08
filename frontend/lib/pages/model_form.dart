@@ -84,6 +84,22 @@ class _ModelFormState extends State<ModelForm> {
     return '85';
   }
 
+  // 整流器(仅 kiro):上游 200 但通篇无正文、以拒答收尾时,转发面自动
+  // 重发同一请求。kiro 模型无存过配置(空对象)时默认开(2 次/2 秒),可关;
+  // 非 kiro 模型区块不渲染,提交时回传源值不清空。
+  late bool _rectifierEnabled = (_source?.rectifier['enabled'] as bool?) ?? true;
+  late final TextEditingController _rectifierRetries = TextEditingController(
+    text: _rectifierNumText(_source?.rectifier['retries'], 2),
+  );
+  late final TextEditingController _rectifierInterval = TextEditingController(
+    text: _rectifierNumText(_source?.rectifier['interval_seconds'], 2),
+  );
+
+  static String _rectifierNumText(Object? v, num fallback) {
+    final n = v is num ? v : fallback;
+    return n == n.roundToDouble() ? '${n.toInt()}' : '$n';
+  }
+
   late String _account = _source?.account ?? widget.initialAccount;
   String? _protocol;
   // 启停由列表行开关控制,表单不再展示;编辑/拷贝时沿用原值提交,新建默认启用
@@ -136,6 +152,8 @@ class _ModelFormState extends State<ModelForm> {
     _overrides.dispose();
     _compactThreshold.dispose();
     _compactKeepTurns.dispose();
+    _rectifierRetries.dispose();
+    _rectifierInterval.dispose();
     for (final r in _effortRows) {
       r.dispose();
     }
@@ -161,6 +179,9 @@ class _ModelFormState extends State<ModelForm> {
           .firstOrNull
           ?.providerId ??
       '?';
+
+  /// 整流器区块只对 kiro 提供商的模型渲染(kiro.global.subscribe.standard)。
+  bool get _isKiro => _avatarProvider.startsWith('kiro');
 
   void _onAccountChanged(String? name) {
     if (name == null) return;
@@ -188,6 +209,17 @@ class _ModelFormState extends State<ModelForm> {
     return out;
   }
 
+  /// 组装 rectifier JSON 提交:仅 kiro 按表单值;非 kiro 回传源值(新建
+  /// 即空对象=关闭),不因区块隐藏而清掉已有配置。
+  Map<String, dynamic> _buildRectifier() {
+    if (!_isKiro) return _source?.rectifier ?? const {};
+    return {
+      'enabled': _rectifierEnabled,
+      'retries': int.tryParse(_rectifierRetries.text.trim()) ?? 2,
+      'interval_seconds': double.tryParse(_rectifierInterval.text.trim()) ?? 2,
+    };
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final (defaults, defaultsErr) = parseJsonObject(_defaults.text);
@@ -208,6 +240,7 @@ class _ModelFormState extends State<ModelForm> {
           defaults: defaults!,
           overrides: overrides!,
           compact: _buildCompact(),
+          rectifier: _buildRectifier(),
           efforts: _efforts,
           effortFormat: _effortFormat,
           enabled: _enabled,
@@ -222,6 +255,7 @@ class _ModelFormState extends State<ModelForm> {
           defaults: defaults!,
           overrides: overrides!,
           compact: _buildCompact(),
+          rectifier: _buildRectifier(),
           efforts: _efforts,
           effortFormat: _effortFormat,
           enabled: _enabled,
@@ -271,6 +305,11 @@ class _ModelFormState extends State<ModelForm> {
             _effortSection(),
             const SizedBox(height: 26),
             _paramsSection(),
+            // 整流器只对 kiro 模型渲染,作为附加参数之后的独立区块。
+            if (_isKiro) ...[
+              const SizedBox(height: 26),
+              _rectifierSection(),
+            ],
           ],
         ),
       ),
@@ -679,6 +718,97 @@ class _ModelFormState extends State<ModelForm> {
             helper: '强制值，优先级最高',
             controller: _overrides,
             onValidityChanged: (ok) => setState(() => _overridesValid = ok),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 整流器(仅 kiro:空拒答自动重试)──
+
+  String get _rectifierSubtitle => _rectifierEnabled
+      ? '开启 · 重试 ${_rectifierRetries.text.trim()} 次 · 间隔 ${_rectifierInterval.text.trim()} 秒'
+      : '关闭';
+
+  Widget _rectifierSection() {
+    return CollapsibleSection(
+      icon: Icons.shield_outlined,
+      title: '整流器',
+      subtitle: _rectifierSubtitle,
+      initiallyExpanded: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 与推理档开关同款:收缩包裹+左移抵内置内边距对齐输入框列。
+          SizedBox(
+            height: 40,
+            child: Row(
+              children: [
+                Transform.translate(
+                  offset: const Offset(-4, 0),
+                  child: Switch(
+                    key: const ValueKey('model-rectifier-enabled'),
+                    value: _rectifierEnabled,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    onChanged: (v) => setState(() => _rectifierEnabled = v),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('空拒答自动重试', style: TextStyle(fontSize: 12.5)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '上游返回 200 但通篇无正文、以拒答收尾时自动重发同一请求;正文已流出的中途拒答仍原样透传。',
+            style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+          ),
+          const SizedBox(height: 14),
+          FormRow2(
+            LabeledField(
+              key: const ValueKey('model-rectifier-retries-field'),
+              label: '重试次数',
+              child: TextFormField(
+                key: const ValueKey('model-rectifier-retries'),
+                controller: _rectifierRetries,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  suffixText: '次',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+                validator: (v) {
+                  final n = int.tryParse(v?.trim() ?? '');
+                  if (n == null) return '请填写整数';
+                  if (n < 1 || n > 10) return '须在 1–10 之间';
+                  return null;
+                },
+              ),
+            ),
+            LabeledField(
+              key: const ValueKey('model-rectifier-interval-field'),
+              label: '重试间隔',
+              child: TextFormField(
+                key: const ValueKey('model-rectifier-interval'),
+                controller: _rectifierInterval,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  suffixText: '秒',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+                validator: (v) {
+                  final n = double.tryParse(v?.trim() ?? '');
+                  if (n == null) return '请填写数字';
+                  if (n < 0 || n > 60) return '须在 0–60 之间';
+                  return null;
+                },
+              ),
+            ),
           ),
         ],
       ),

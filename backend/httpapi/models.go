@@ -25,7 +25,9 @@ type modelRequest struct {
 	// EffortFormat effort 写入格式:缺省(null)不改现状,空串=协议内置映射,
 	// 非空=显式格式(effort.FormatXxx 枚举,保存期校验)。
 	EffortFormat *string `json:"effort_format"`
-	Enabled      *bool   `json:"enabled"`
+	// Rectifier 整流器配置(kiro 拒答自动重试):缺省不改现状,{}=关闭。
+	Rectifier    json.RawMessage `json:"rectifier"`
+	Enabled      *bool           `json:"enabled"`
 }
 
 func (r modelRequest) input(id string) model.Input {
@@ -40,6 +42,7 @@ func (r modelRequest) input(id string) model.Input {
 		Compact:       r.Compact,
 		Efforts:       r.Efforts,
 		EffortFormat:  r.EffortFormat,
+		Rectifier:     r.Rectifier,
 		Enabled:       true,
 	}
 	if r.Enabled != nil {
