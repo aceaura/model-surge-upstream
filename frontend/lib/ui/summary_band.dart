@@ -263,7 +263,14 @@ class _SummaryBandState extends State<SummaryBand> {
                       style: const TextStyle(fontSize: 13),
                       decoration: InputDecoration(
                         isDense: true,
+                        // 主题给输入框默认带填充和描边,这里全部剥掉,
+                        // 让标签与输入共享外层容器这一个"编辑框"
+                        filled: false,
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        errorBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
                         contentPadding: EdgeInsets.zero,
                         hintText: _keywords.isEmpty ? widget.searchHint : null,
                         hintStyle: TextStyle(fontSize: 12.5, color: t.faint),
@@ -298,13 +305,13 @@ class _SummaryBandState extends State<SummaryBand> {
         child: Tooltip(
           message: '点击移出关键字',
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            padding: const EdgeInsets.fromLTRB(8, 3, 9, 2),
             decoration: BoxDecoration(
               color: bg,
               borderRadius: BorderRadius.circular(7),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+            child: Stack(
+              clipBehavior: Clip.none,
               children: [
                 Text(
                   kw,
@@ -314,8 +321,11 @@ class _SummaryBandState extends State<SummaryBand> {
                     color: fg,
                   ),
                 ),
-                const SizedBox(width: 3),
-                Icon(Icons.close, size: 12, color: fg),
+                Positioned(
+                  top: -4,
+                  right: -7,
+                  child: Icon(Icons.close, size: 9, color: fg),
+                ),
               ],
             ),
           ),
