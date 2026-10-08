@@ -136,6 +136,13 @@ class ApiClient {
     );
   }
 
+  /// 账号凭据明文揭示:密钥框「眼睛」专用通道。常规读取只有掩码视图,
+  /// 完整值仅经此接口返回。
+  Future<Map<String, dynamic>> fetchAccountCredential(String name) async {
+    final body = await _send('GET', '/admin/accounts/$name/credential');
+    return body['credential'] as Map<String, dynamic>? ?? {};
+  }
+
   Future<Account> createAccount({
     required String name,
     required String providerId,

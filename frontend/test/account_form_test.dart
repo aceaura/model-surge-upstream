@@ -1643,13 +1643,59 @@ void main() {
 
     await tester.ensureVisible(find.byTooltip('显示'));
     await tester.tap(find.byTooltip('显示'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.textContaining('sk-d***efgh'), findsOneWidget);
     expect(find.textContaining('************'), findsNothing);
 
     await tester.tap(find.byTooltip('隐藏'));
     await tester.pump();
     expect(find.textContaining('************'), findsOneWidget);
+  });
+
+  testWidgets('edit eye fetches full key into field for copy', (tester) async {
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        if (req.url.path == '/admin/accounts/ds-1/credential') {
+          return http.Response(
+            jsonEncode({
+              'credential': {'kind': 'api_key', 'api_key': 'sk-full-secret'},
+            }),
+            200,
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+    );
+    await pumpForm(tester, editing: account, client: client);
+
+    await tester.ensureVisible(find.byTooltip('显示'));
+    await tester.tap(find.byTooltip('显示'));
+    await tester.pumpAndSettle();
+    bool keyObscured() => tester
+        .widget<EditableText>(
+          find.descendant(
+            of: find.byKey(const ValueKey('account-api-key')),
+            matching: find.byType(EditableText),
+          ),
+        )
+        .obscureText;
+    expect(
+      fieldText(tester, 'account-api-key'),
+      'sk-full-secret',
+      reason: '眼睛从管理面拉完整密钥填入框内,可全选拷贝',
+    );
+    expect(keyObscured(), isFalse, reason: '揭示后明文可见');
+    expect(
+      find.textContaining('************'),
+      findsNothing,
+      reason: '框内已有明文时星号占位不再出现',
+    );
+
+    await tester.tap(find.byTooltip('隐藏'));
+    await tester.pump();
+    expect(keyObscured(), isTrue, reason: '再点眼睛回到掩码,已填入的值保留');
   });
 
   testWidgets('copy falls back to provider default when no override', (

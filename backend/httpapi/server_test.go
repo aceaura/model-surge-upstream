@@ -623,6 +623,34 @@ func TestGetAccountReportsModelCount(t *testing.T) {
 	}
 }
 
+// 凭据揭示接口:管理面眼睛按钮拉完整明文;列表/详情仍只给掩码视图。
+// 揭示通道只吃管理密钥,下发密钥一律 401。
+func TestRevealCredentialReturnsPlaintext(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "GET", "/admin/accounts/kimi-1/credential", adminKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Credential struct {
+			Kind   string `json:"kind"`
+			APIKey string `json:"api_key"`
+		} `json:"credential"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Credential.APIKey != secret {
+		t.Errorf("api_key = %q, want plaintext %q", body.Credential.APIKey, secret)
+	}
+	if rec := f.do(t, "GET", "/admin/accounts/ghost/credential", adminKey, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("ghost status = %d, want 404", rec.Code)
+	}
+	if rec := f.do(t, "GET", "/admin/accounts/kimi-1/credential", deliveryKey, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("delivery key status = %d, want 401", rec.Code)
+	}
+}
+
 func TestCreateAccount(t *testing.T) {
 	f := newFixture(t)
 	rec := f.do(t, "POST", "/admin/accounts", adminKey,

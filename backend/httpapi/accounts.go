@@ -132,6 +132,18 @@ func (h handler) getAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"account": h.viewOf(acc), "model_count": models})
 }
 
+// revealCredential 返回账号凭据的完整明文,供管理面密钥框的「眼睛」
+// 揭示并拷贝。常规读取路径仍只给 Redact 视图,明文仅在用户主动揭示时
+// 经此接口离开进程(与列表/详情同一道管理面 Bearer 鉴权)。
+func (h handler) revealCredential(w http.ResponseWriter, r *http.Request) {
+	acc, err := h.Accounts.Get(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credential": acc.Credential})
+}
+
 func (h handler) createAccount(w http.ResponseWriter, r *http.Request) {
 	var req accountRequest
 	if !decodeBody(w, r, &req) {

@@ -828,8 +828,8 @@ class _AccountFormState extends State<AccountForm> {
         controller: _apiKey,
         obscureText: !_revealKey,
         decoration: InputDecoration(
-          // 默认纯星号不泄露任何字符,点眼睛才亮部分
-          // 掩码帮助辨认;完整密钥后端从不下发。
+          // 默认纯星号不泄露任何字符;点眼睛从管理面拉完整密钥填入框内,
+          // 明文可见可拷贝。拉取失败保持隐藏并报错。
           hintText: _isEdit
               ? _revealKey
                     ? _editing!.maskedApiKey
@@ -847,7 +847,9 @@ class _AccountFormState extends State<AccountForm> {
                   ? Icons.visibility_off_outlined
                   : Icons.visibility_outlined,
             ),
-            onPressed: () => setState(() => _revealKey = !_revealKey),
+            onPressed: _revealKey
+                ? () => setState(() => _revealKey = false)
+                : _revealApiKey,
           ),
         ),
         validator: (v) {
@@ -856,6 +858,28 @@ class _AccountFormState extends State<AccountForm> {
         },
       ),
     );
+  }
+
+  /// 点眼睛揭示密钥:框里已有内容(用户输入或此前已揭示)只切掩码;
+  /// 编辑/拷贝态空框则从管理面拉真实密钥填入,成为可见可选可拷贝的明文。
+  /// 填入后保存会把同值写回,不改变凭据。
+  Future<void> _revealApiKey() async {
+    final sourceName = widget.editing?.name ?? widget.copyFrom?.name;
+    if (sourceName == null || _apiKey.text.trim().isNotEmpty) {
+      setState(() => _revealKey = true);
+      return;
+    }
+    try {
+      final cred = await widget.client.fetchAccountCredential(sourceName);
+      if (!mounted) return;
+      setState(() {
+        final key = cred['api_key'] as String? ?? '';
+        if (key.isNotEmpty) _apiKey.text = key;
+        _revealKey = true;
+      });
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
   }
 
   /// kimi 网页会话 token:月度会员额度查询链的凭据。与密钥同款交互——

@@ -146,6 +146,8 @@ func NewServer(d Deps) http.Handler {
 	admin.HandleFunc("GET /admin/accounts/{name}", h.getAccount)
 	admin.HandleFunc("PUT /admin/accounts/{name}", h.updateAccount)
 	admin.HandleFunc("DELETE /admin/accounts/{name}", h.deleteAccount)
+	// 凭据明文揭示:管理面密钥框的眼睛按钮专用,常规读取仍是掩码视图。
+	admin.HandleFunc("GET /admin/accounts/{name}/credential", h.revealCredential)
 	// 额度与上游模型清单同时挂在管理面：桌面客户端只持管理密钥，
 	// 不该为查这两项再配下发密钥。
 	admin.HandleFunc("GET /admin/accounts/{name}/quota", h.quota)
