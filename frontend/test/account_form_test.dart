@@ -2180,9 +2180,19 @@ void main() {
 
     final body = jsonDecode(captured.single) as Map<String, dynamic>;
     expect(body['quota_settings'], {
-      'auto_interval_minutes': 0,
+      'auto_interval_minutes': 5,
       'stop_interval_minutes': 5,
-    }, reason: '全新表单停止间隔预填 5(与后端默认一致),创建时显式提交');
+    }, reason: '全新表单两个间隔都预填 5(与后端默认一致),创建时显式提交');
+  });
+
+  testWidgets('edit without quota settings leaves both intervals blank', (
+    tester,
+  ) async {
+    await pumpForm(tester, editing: account);
+
+    // 分栏折叠但字段在树里:无配置账号两个间隔都留空,走后端默认
+    expect(fieldText(tester, 'quota-interval'), isEmpty);
+    expect(fieldText(tester, 'quota-stop-interval'), isEmpty);
   });
 
   testWidgets('edit clearing the intervals sends an explicit empty object', (

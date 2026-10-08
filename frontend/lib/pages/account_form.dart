@@ -361,12 +361,10 @@ class _AccountFormState extends State<AccountForm> {
   // ── 额度查询(走供应商内置实现,这里配总开关与两个调度间隔)──
   late bool _quotaEnabled = _initialSettings?.quotaEnabled ?? true;
   late final TextEditingController _quotaInterval = TextEditingController(
-    text: (_initialSettings?.autoIntervalMinutes ?? 0) > 0
-        ? '${_initialSettings!.autoIntervalMinutes}'
-        : '',
+    text: _initialInterval(_initialSettings?.autoIntervalMinutes ?? 0),
   );
   late final TextEditingController _quotaStopInterval = TextEditingController(
-    text: _initialStopInterval(),
+    text: _initialInterval(_initialSettings?.stopIntervalMinutes ?? 0),
   );
 
   bool _revealKey = false;
@@ -399,11 +397,10 @@ class _AccountFormState extends State<AccountForm> {
     super.dispose();
   }
 
-  /// 停止查询间隔初值:已有配置(编辑/拷贝)按存储值回显,0=留空走后端
-  /// 默认;全新表单一上来就填 5(与后端默认一致,让用户看见默认值)。
-  String _initialStopInterval() {
-    final v = _initialSettings?.stopIntervalMinutes ?? 0;
-    if (v > 0) return '$v';
+  /// 调度间隔初值:已有配置(编辑/拷贝)按存储值回显,0=留空走后端
+  /// 默认;全新表单两个间隔一上来都填 5(与后端默认一致,让用户看见默认值)。
+  String _initialInterval(int stored) {
+    if (stored > 0) return '$stored';
     return (_editing == null && widget.copyFrom == null) ? '5' : '';
   }
 
