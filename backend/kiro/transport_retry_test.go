@@ -1757,3 +1757,83 @@ func TestToolChoiceNamedWrongTool(t *testing.T) {
 		t.Fatalf("tool_calls=%v calls=%d", toolCalls, calls.Load())
 	}
 }
+
+// 上游把工具参数的每个碎片帧都重复携带 name 与 toolUseId(2026-10-08 抓包
+// 实录),只有首键为 name 的帧才是开启帧。把碎片帧也当开启会让每个碎片各自
+// 成工具,再被同 id 去重压成单个碎片或 "{}",客户端报缺少必填参数。
+func TestToolInputFragmentFramesRepeatName(t *testing.T) {
+	const id = "toolu_bdrk_01HyyLJfKxNh7k4a3BqiTsw8"
+	const want = `{"command": "ls -la", "description": "List directory contents with details"}`
+	headers := append(stringHeader(":message-type", "event"), stringHeader(":event-type", "toolUseEvent")...)
+	toolFrame := func(payload string) []byte { return frameWithHeaders(headers, []byte(payload)) }
+	fragments := []string{`{"command"`, `: "ls`, ` -la"`, `, "d`, `escri`, `ption": `, `"List `, `directory`, ` contents `, `wit`, `h details"}`}
+	wire := frame("assistantResponseEvent", object{"content": "I'll run that now."})
+	wire = append(wire, toolFrame(`{"name":"Bash","toolUseId":"`+id+`"}`)...)
+	for _, fragment := range fragments {
+		encoded, err := json.Marshal(fragment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire = append(wire, toolFrame(`{"input":`+string(encoded)+`,"name":"Bash","toolUseId":"`+id+`"}`)...)
+	}
+	wire = append(wire, toolFrame(`{"name":"Bash","stop":true,"toolUseId":"`+id+`"}`)...)
+	wire = append(wire, frame("metadataEvent", object{"stopReason": "TOOL_USE"})...)
+	wire = append(wire, endFrame()...)
+
+	for _, protocol := range []string{"openai", "anthropic"} {
+		t.Run(protocol, func(t *testing.T) {
+			server := stub(t, wire, nil)
+			_, data, err := do(t, server.URL, protocol, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var text, args string
+			ids, names, calls := 0, 0, 0
+			for _, event := range events(t, data) {
+				if protocol == "anthropic" {
+					switch str(event["type"]) {
+					case "content_block_start":
+						if block := obj(event["content_block"]); str(block["type"]) == "tool_use" {
+							calls++
+							if str(block["id"]) == id {
+								ids++
+							}
+							if str(block["name"]) == "Bash" {
+								names++
+							}
+						}
+					case "content_block_delta":
+						delta := obj(event["delta"])
+						if delta["type"] == "input_json_delta" {
+							args += str(delta["partial_json"])
+						} else {
+							text += str(delta["text"])
+						}
+					}
+					continue
+				}
+				choices := list(event["choices"])
+				if len(choices) == 0 {
+					continue
+				}
+				delta := obj(obj(choices[0])["delta"])
+				text += str(delta["content"])
+				for _, raw := range list(delta["tool_calls"]) {
+					call := obj(raw)
+					calls++
+					function := obj(call["function"])
+					if str(call["id"]) == id {
+						ids++
+					}
+					if str(function["name"]) == "Bash" {
+						names++
+					}
+					args += str(function["arguments"])
+				}
+			}
+			if calls != 1 || ids != 1 || names != 1 || args != want || text != "I'll run that now." {
+				t.Fatalf("calls=%d ids=%d names=%d args=%q text=%q data=%s", calls, ids, names, args, text, data)
+			}
+		})
+	}
+}

@@ -621,25 +621,55 @@ func (s *responseState) finishTool() error {
 	return nil
 }
 func (s *responseState) toolEvent(d object) error {
-	_, hasName := d["name"]
-	if hasName {
-		// parsers.py:330/376-401: name 键出现即开启新工具,空名同样建
-		// 工具(参考实现不校验,交由上游判定)。
-		if s.tool != nil {
-			if err := s.finishTool(); err != nil {
-				return err
-			}
+	// parsers.py:330/376-401: name 键开启新工具,空名同样建工具(参考实现
+	// 不校验,交由上游判定)。
+	if s.tool != nil {
+		if err := s.finishTool(); err != nil {
+			return err
 		}
-		id := d["toolUseId"]
-		if _, hasID := d["toolUseId"]; !hasID {
-			// parsers.py:395: 仅键缺省时生成 call_+8 hex;空串原样保留。
-			id = "call_" + strings.ReplaceAll(newID(), "-", "")[:8]
-		}
-		s.tool = &pendingTool{id: id, name: str(d["name"])}
-	} else if s.tool == nil {
-		// parsers.py:408-427: 无开启工具的碎片帧静默忽略。
+	}
+	id := d["toolUseId"]
+	if _, hasID := d["toolUseId"]; !hasID {
+		// parsers.py:395: 仅键缺省时生成 call_+8 hex;空串原样保留。
+		id = "call_" + strings.ReplaceAll(newID(), "-", "")[:8]
+	}
+	s.tool = &pendingTool{id: id, name: str(d["name"])}
+	if err := s.appendToolInput(d); err != nil {
+		return err
+	}
+	if truthy(d["stop"]) {
+		return s.finishTool()
+	}
+	return nil
+}
+
+// continuesOpenTool 判定一个带 name 的帧是否只是当前工具的续传。上游把工具
+// 参数的每个碎片帧都重复携带 name 与同一个 toolUseId(2026-10-08 抓包实录:
+// 开启帧 {"name","toolUseId"} → 碎片帧 {"input","name","toolUseId"} × N →
+// 收尾帧 {"name","stop","toolUseId"}),按「name 出现即新工具」会让每个碎片
+// 各自成工具,再被同 id 去重压成单个碎片或 "{}",客户端报缺少必填参数。
+func (s *responseState) continuesOpenTool(d object) bool {
+	if s.tool == nil {
+		return false
+	}
+	id, ok := comparableToolID(d["toolUseId"])
+	if !ok {
+		return false
+	}
+	open, ok := comparableToolID(s.tool.id)
+	return ok && open == id
+}
+
+// toolInputEvent 对应 parsers.py:408-420 的 tool_input 续传帧。
+func (s *responseState) toolInputEvent(d object) error {
+	// parsers.py:408-427: 无开启工具的碎片帧静默忽略。
+	if s.tool == nil {
 		return nil
 	}
+	return s.appendToolInput(d)
+}
+
+func (s *responseState) appendToolInput(d object) error {
 	if v, exists := d["input"]; exists {
 		piece := ""
 		switch x := v.(type) {
@@ -664,9 +694,6 @@ func (s *responseState) toolEvent(d object) error {
 			return fmt.Errorf("kiro: tool arguments exceed %d bytes", maxToolBytes)
 		}
 		s.tool.args.WriteString(piece)
-	}
-	if hasName && truthy(d["stop"]) {
-		return s.finishTool()
 	}
 	return nil
 }
@@ -771,11 +798,11 @@ func (s *responseState) accept(e wireEvent) error {
 	if truthy(d["followupPrompt"]) {
 		return nil
 	}
-	if _, has := d["name"]; has {
+	if _, has := d["name"]; has && !s.continuesOpenTool(d) {
 		return s.toolEvent(d)
 	}
 	if _, ok := d["input"]; ok {
-		return s.toolEvent(d)
+		return s.toolInputEvent(d)
 	}
 	if truthy(d["stop"]) {
 		if s.tool == nil {
