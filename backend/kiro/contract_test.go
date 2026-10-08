@@ -372,7 +372,7 @@ func TestToolResultImagesAndHistoricalNormalization(t *testing.T) {
 	}
 	state := obj(payload["conversationState"])
 	history := list(state["history"])
-	if len(history) != 2 || obj(obj(history[0])["userInputMessage"])["content"] != "system"+thinkingSystemAddition+truncationSystemAddition+"\n\n(empty placeholder)" {
+	if len(history) != 2 || obj(obj(history[0])["userInputMessage"])["content"] != "system"+thinkingSystemAddition+truncationSystemAddition+"\n\n\u200b" {
 		t.Fatal(history)
 	}
 	current := obj(obj(state["currentMessage"])["userInputMessage"])
@@ -396,7 +396,7 @@ func TestToolResultImagesAndHistoricalNormalization(t *testing.T) {
 	}
 	state = obj(payload["conversationState"])
 	// converters_core.py:1815-1819: 末条是 assistant 时占位 user 不注入 thinking tags。
-	if len(list(state["history"])) != 2 || obj(obj(state["currentMessage"])["userInputMessage"])["content"] != "(empty placeholder)" {
+	if len(list(state["history"])) != 2 || obj(obj(state["currentMessage"])["userInputMessage"])["content"] != "\u200b" {
 		t.Fatal(state)
 	}
 }

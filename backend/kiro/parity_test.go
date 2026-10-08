@@ -1682,7 +1682,7 @@ func TestRound25RequestUnknownRoles(t *testing.T) {
 			if str(user["content"]) != "body|attached" || user["images"] != nil || user["userInputMessageContext"] != nil {
 				t.Fatalf("unknown role normalized too early: %v", user)
 			}
-			if str(obj(obj(history[1])["assistantResponseMessage"])["content"]) != "(empty placeholder)" || str(obj(obj(history[3])["assistantResponseMessage"])["content"]) != "(empty placeholder)" {
+			if str(obj(obj(history[1])["assistantResponseMessage"])["content"]) != "\u200b" || str(obj(obj(history[3])["assistantResponseMessage"])["content"]) != "\u200b" {
 				t.Fatalf("merge grouping lost: %v", history)
 			}
 		})

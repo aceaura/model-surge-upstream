@@ -420,6 +420,8 @@ type responseState struct {
 	cacheReadAbs, cacheCreateAbs  bool
 	terminal, meaningful          bool
 	sentRole                      bool
+	echoPending                   string
+	echoSettled                   bool
 	stopReason                    string
 	stopSequence                  string
 	thinkingSignature             string
@@ -491,6 +493,12 @@ func (s *responseState) openBlock(kind string, block object) {
 // text routes assistant content through the fake-reasoning parser when tags
 // were injected; native thinking events bypass it via emitBlock.
 func (s *responseState) text(kind, text string) error {
+	if kind == "text" {
+		text = s.holdPlaceholderEcho(text)
+		if text == "" {
+			return nil
+		}
+	}
 	if kind == "text" && s.parser != nil {
 		thinking, regular := s.parser.feed(text)
 		if err := s.emitBlock("thinking", thinking, true); err != nil {
@@ -499,6 +507,40 @@ func (s *responseState) text(kind, text string) error {
 		return s.emitBlock("text", regular, true)
 	}
 	return s.emitBlock(kind, text, false)
+}
+
+// holdPlaceholderEcho withholds leading content while it could still turn out
+// to be the echoed placeholder. Deltas split on byte boundaries, so a multi
+// byte placeholder can arrive in pieces and deciding per delta would leak the
+// first one.
+func (s *responseState) holdPlaceholderEcho(text string) string {
+	if s.echoSettled {
+		return text
+	}
+	s.echoPending += text
+	if s.echoPending != emptyPlaceholder && strings.HasPrefix(emptyPlaceholder, s.echoPending) {
+		return ""
+	}
+	s.echoSettled = true
+	pending := s.echoPending
+	s.echoPending = ""
+	if pending == emptyPlaceholder {
+		return ""
+	}
+	return pending
+}
+
+// flushPlaceholderEcho releases a withheld fragment when the stream ends
+// before the placeholder completed, so real content that merely shares its
+// leading bytes is not swallowed.
+func (s *responseState) flushPlaceholderEcho() error {
+	if s.echoSettled || s.echoPending == "" {
+		return nil
+	}
+	s.echoSettled = true
+	pending := s.echoPending
+	s.echoPending = ""
+	return s.text("text", pending)
 }
 
 func fakeSignature() string { return "sig_" + strings.ReplaceAll(newID(), "-", "") }
@@ -847,6 +889,9 @@ func (s *responseState) accept(e wireEvent) error {
 	return nil
 }
 func (s *responseState) finalize() error {
+	if err := s.flushPlaceholderEcho(); err != nil {
+		return err
+	}
 	if s.parser != nil {
 		thinking, regular := s.parser.finalize()
 		if err := s.emitBlock("thinking", thinking, true); err != nil {

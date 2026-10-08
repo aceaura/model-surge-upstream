@@ -171,6 +171,17 @@ var (
 	invertedModel = regexp.MustCompile(`^claude-(\d+)\.(\d+)-(haiku|sonnet|opus)-(.+)$`)
 )
 
+// emptyPlaceholder fills a message whose content would otherwise be empty,
+// which the upstream rejects (converters_core.py calls it "minimal valid
+// content to avoid disrupting conversation context"). The reference uses a
+// visible English phrase, but models imitate the history and echo it back as
+// the opening of a reply, which clients then render as stray prose. A zero
+// width space keeps the content non-empty and invisible if echoed; a plain
+// space would not, since the upstream strips whitespace and would be left with
+// the empty content it rejects. response.go drops a leading occurrence so the
+// character does not accumulate in client text either.
+const emptyPlaceholder = "\u200b"
+
 // nativeModel normalizes client model names to Kiro IDs, following
 // model_resolver.py:normalize_model_name (context suffix, dash/dot versions,
 // date/latest suffixes, legacy and inverted orders). Unknown names pass
@@ -914,7 +925,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	}
 	messages = merged
 	if messages[0].role != "user" {
-		messages = append([]message{{role: "user", text: "(empty placeholder)"}}, messages...)
+		messages = append([]message{{role: "user", text: emptyPlaceholder}}, messages...)
 	}
 	// normalize_message_roles + ensure_alternating_roles: 未知角色归一为 user
 	// 后,相邻 user 之间插合成 assistant 占位(Kiro 要求角色交错)。
@@ -926,7 +937,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	alternating := make([]message, 0, len(messages)+2)
 	for i, m := range messages {
 		if i > 0 && m.role == "user" && alternating[len(alternating)-1].role == "user" {
-			alternating = append(alternating, message{role: "assistant", text: "(empty placeholder)"})
+			alternating = append(alternating, message{role: "assistant", text: emptyPlaceholder})
 		}
 		alternating = append(alternating, m)
 	}
@@ -988,7 +999,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 		// 静默丢弃,current 换成占位 user。带 toolUses 的末条 assistant
 		// 已被上面的 repair 用合成 user 接住,走不到这里。
 		messages[len(messages)-1].uses = nil
-		messages = append(messages, message{role: "user", text: "(empty placeholder)"})
+		messages = append(messages, message{role: "user", text: emptyPlaceholder})
 		trailingAssistant = true
 	}
 	cfg := extractThinking(root, protocol)
@@ -1041,7 +1052,7 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	// assistant 时占位 user 不注入。
 	if current := &messages[len(messages)-1]; current.role == "user" && !trailingAssistant && !cfg.disabled && !suppressTags {
 		if current.text == "" {
-			current.text = "(empty placeholder)"
+			current.text = emptyPlaceholder
 		}
 		current.text = thinkingTagsPrefix(cfg) + current.text
 		opts.fakeReasoning = true
@@ -2056,7 +2067,7 @@ func parseImage(b object) (object, error) {
 func nativeMessage(m message, model string, tools []any) object {
 	text := m.text
 	if text == "" {
-		text = "(empty placeholder)"
+		text = emptyPlaceholder
 	}
 	if m.role == "assistant" {
 		a := object{"content": text}

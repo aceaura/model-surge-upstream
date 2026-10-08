@@ -431,7 +431,7 @@ func TestRequestHistorySystemImagesAndTools(t *testing.T) {
 						t.Fatalf("history=%v", history)
 					}
 					first := obj(obj(history[0])["userInputMessage"])
-					if first["content"] != "system instruction"+truncationSystemAddition+"\n\n(empty placeholder)" {
+					if first["content"] != "system instruction"+truncationSystemAddition+"\n\n\u200b" {
 						t.Errorf("system/history=%v", first)
 					}
 					if obj(obj(history[2])["userInputMessage"])["content"] != "developer instruction" ||
@@ -1589,5 +1589,115 @@ func TestFingerprintForSeedIsolation(t *testing.T) {
 	}
 	if HeadersFor("t", "", "kiro-1")["User-Agent"] != ChatUserAgentFor("kiro-1") {
 		t.Fatalf("HeadersFor UA mismatch")
+	}
+}
+
+func TestPlaceholderEchoStripped(t *testing.T) {
+	// Captured upstream traffic: the model imitates whatever msu put in the
+	// history and emits it as the opening of its reply, so clients render the
+	// filler as stray prose ahead of the tool call.
+	wire := joinedFrames(
+		frame("assistantResponseEvent", object{"content": "\u200b"}),
+		frame("toolUseEvent", object{"name": "lookup", "toolUseId": "call_1", "input": object{"x": 1}, "stop": true}),
+		tokenFrame(),
+	)
+	server := stub(t, wire, nil)
+	for _, protocol := range []string{"anthropic", "openai"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(protocol+"/"+map[bool]string{true: "stream", false: "nonstream"}[stream], func(t *testing.T) {
+				_, data, err := do(t, server.URL, protocol, stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if bytes.Contains(data, []byte("\u200b")) {
+					t.Fatalf("placeholder leaked to client: %q", data)
+				}
+				if !bytes.Contains(data, []byte(`"name":"lookup"`)) {
+					t.Fatalf("tool call lost: %s", data)
+				}
+				if protocol == "openai" && !bytes.Contains(data, []byte(`{\"x\": 1}`)) {
+					t.Fatalf("tool arguments lost: %s", data)
+				}
+				if protocol == "anthropic" && !bytes.Contains(data, []byte(`"type":"tool_use"`)) {
+					t.Fatalf("tool block lost: %s", data)
+				}
+			})
+		}
+	}
+}
+
+func TestPlaceholderEchoNearMisses(t *testing.T) {
+	cases := []struct {
+		name    string
+		content []string
+		want    string
+	}{
+		{"placeholder then real text", []string{"\u200b", "Done."}, "Done."},
+		{"mid-text occurrence kept", []string{"Answer: \u200b"}, "Answer: \u200b"},
+		{"other zero width char kept", []string{"\u200c"}, "\u200c"},
+		{"later occurrence kept", []string{"Hello", " (empty placeholder)"}, "Hello (empty placeholder)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frames := make([][]byte, 0, len(tc.content)+1)
+			for _, c := range tc.content {
+				frames = append(frames, frame("assistantResponseEvent", object{"content": c}))
+			}
+			server := stub(t, joinedFrames(append(frames, tokenFrame())...), nil)
+			for _, stream := range []bool{false, true} {
+				_, data, err := do(t, server.URL, "openai", stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got string
+				if stream {
+					for _, e := range events(t, data) {
+						if cs := list(e["choices"]); len(cs) > 0 {
+							got += str(obj(obj(cs[0])["delta"])["content"])
+						}
+					}
+				} else {
+					m := parseResult(t, data)
+					got = str(obj(obj(list(m["choices"])[0])["message"])["content"])
+				}
+				if got != tc.want {
+					t.Fatalf("stream=%v got %q want %q", stream, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// A multi byte placeholder can arrive split across deltas; the JSON frame
+// harness cannot carry a partial rune, so the hold-back is driven directly.
+func TestPlaceholderEchoByteSplit(t *testing.T) {
+	s := &responseState{}
+	if got := s.holdPlaceholderEcho("\xe2\x80"); got != "" {
+		t.Fatalf("partial rune leaked: %q", got)
+	}
+	if got := s.holdPlaceholderEcho("\x8b"); got != "" {
+		t.Fatalf("echoed placeholder leaked: %q", got)
+	}
+	if got := s.holdPlaceholderEcho("Done."); got != "Done." {
+		t.Fatalf("settled state still holding: %q", got)
+	}
+
+	// A stream ending mid placeholder must give the fragment back rather than
+	// swallow real content that shares its leading bytes.
+	s2 := &responseState{}
+	if got := s2.holdPlaceholderEcho("\xe2\x80"); got != "" {
+		t.Fatalf("partial rune leaked: %q", got)
+	}
+	if err := s2.flushPlaceholderEcho(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.textBuffer.String(); got != "\xe2\x80" {
+		t.Fatalf("flush got %q", got)
+	}
+	if err := s2.flushPlaceholderEcho(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.textBuffer.String(); got != "\xe2\x80" {
+		t.Fatalf("second flush re-emitted: %q", got)
 	}
 }
