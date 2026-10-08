@@ -29,11 +29,6 @@ type Model struct {
 	// 映射(按出站协议选字段);非空=显式格式压过协议外形,承接
 	// 「协议外壳+自家字段」的厂商差异。
 	EffortFormat string `json:"effort_format"`
-	// Rectifier 整流器配置:{"enabled", "retries", "interval_seconds"}。
-	// 目前只对 kiro 提供商生效:上游 200 但通篇无正文、以拒答
-	// (refusal/content_filter)收尾时,转发面自动重发同一请求。
-	// 空对象=关闭。
-	Rectifier json.RawMessage `json:"rectifier"`
 	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
 	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
 	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。

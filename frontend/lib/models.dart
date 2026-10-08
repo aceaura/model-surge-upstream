@@ -302,7 +302,6 @@ class UpstreamModel {
     required this.overrides,
     required this.compact,
     required this.enabled,
-    this.rectifier = const {},
     this.efforts,
     this.effortsEffective = const [],
     this.effortFormat = '',
@@ -320,10 +319,6 @@ class UpstreamModel {
   /// max_summary_tokens}。passive=只记录不生效。
   final Map<String, dynamic> compact;
   final bool enabled;
-
-  /// 整流器配置:{enabled, retries, interval_seconds}。空对象=关闭。
-  /// 只对 kiro 提供商生效:上游 200 但空拒答时转发面自动重发同一请求。
-  final Map<String, dynamic> rectifier;
 
   /// 推理档支持列表的管理员覆盖:数组=显式声明的 [{name,value}] 条目
   /// (空数组即不支持)。null=自动(跟随上游声明)仅存量数据兼容,
@@ -347,7 +342,6 @@ class UpstreamModel {
     overrides: json['overrides'] as Map<String, dynamic>? ?? const {},
     compact: json['compact'] as Map<String, dynamic>? ?? const {},
     enabled: json['enabled'] as bool? ?? false,
-    rectifier: json['rectifier'] as Map<String, dynamic>? ?? const {},
     efforts: (json['efforts'] as List<dynamic>?)
         ?.map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
         .toList(),

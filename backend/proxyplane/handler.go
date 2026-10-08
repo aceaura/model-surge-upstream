@@ -405,25 +405,38 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 	}
 
 	start := time.Now()
+	up, err := build(target.Headers)
+	if err != nil {
+		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "build upstream request", err))
+		return
+	}
+	resp, err := h.client.Do(up)
+	if err != nil {
+		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s account=%s: %v", target.ModelID, target.Account, err))
+		// kiro 传输层的请求校验错误(unsupported path/超长度/max_tokens 缺失等)
+		// 归为 400,与 FastAPI 422 一致;其余仍按上游不可用 502。
+		if apperr.Is(err, apperr.InvalidRequest) {
+			writeFamilyError(w, fam, err)
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadRequest, 0, time.Since(start))
+			return
+		}
+		// network_errors.py: 超时类网络错误(含首 token 耗尽)回 504。
+		if errors.Is(err, kiro.ErrUpstreamTimeout) {
+			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream request timed out", err))
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
+			return
+		}
+		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
+		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
+		return
+	}
 
-	// send 发一次上游请求;OAuth 账号 401(kiro 含 403)时作废旧 token、
-	// 重解析、原样重放一次——订阅登录态的 access_token 短命,401 多半是
-	// 服务端提前作废。重解析会改写外层 target/url,后续重试用新目标。
-	send := func() (*http.Response, error) {
-		up, err := build(target.Headers)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := h.client.Do(up)
-		if err != nil {
-			return nil, err
-		}
-		refreshable := resp.StatusCode == http.StatusUnauthorized &&
-			(target.ProviderID == codex.ProviderID || target.ProviderID == kiro.ProviderID)
-		refreshable = refreshable || (resp.StatusCode == http.StatusForbidden && target.ProviderID == kiro.ProviderID)
-		if !refreshable || h.invalidator == nil {
-			return resp, nil
-		}
+	// OAuth 账号 401:作废旧 token 重解析重放一次;仍 401 则原样透传给客户端。
+	// Kiro 额外把 403 当作令牌失效(KiroaaS auth.py 的 reactive refresh 走 403)。
+	refreshable := resp.StatusCode == http.StatusUnauthorized &&
+		(target.ProviderID == codex.ProviderID || target.ProviderID == kiro.ProviderID)
+	refreshable = refreshable || (resp.StatusCode == http.StatusForbidden && target.ProviderID == kiro.ProviderID)
+	if refreshable && h.invalidator != nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← %d model=%s account=%s: invalidate access token and retry once",
@@ -431,77 +444,28 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		h.invalidator.Invalidate(target.Account, bearerTokenValue(target.Headers))
 		fresh, rerr := h.resolver.Resolve(r.Context(), target.ModelID)
 		if rerr != nil {
-			return nil, rerr
+			writeFamilyError(w, fam, rerr)
+			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusUnauthorized, 0, time.Since(start))
+			return
 		}
 		target = fresh
 		url = provider.UpstreamURL(target.ProviderID, target.BaseURL, suffix)
 		if q := stripKeyQuery(r.URL.RawQuery); q != "" {
 			url += "?" + q
 		}
-		up, err = build(target.Headers)
-		if err != nil {
-			return nil, err
+		if up, err = build(target.Headers); err == nil {
+			resp, err = h.client.Do(up)
 		}
-		return h.client.Do(up)
-	}
-
-	// kiro 整流器:开启时对 200 响应预读判定空拒答,命中自动重发;
-	// 只在正文流出前透明重试,中途拒答(已见思考/正文/工具调用)原样透传。
-	rect := rectifierConfig{}
-	if target.ProviderID == kiro.ProviderID {
-		rect = parseRectifier(target.Rectifier)
-	}
-	attempts := 1
-	if rect.Enabled {
-		attempts += rect.Retries
-	}
-	var resp *http.Response
-	for attempt := 1; ; attempt++ {
-		resp, err = send()
 		if err != nil {
 			ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s account=%s: %v", target.ModelID, target.Account, err))
-			// kiro 传输层的请求校验错误(unsupported path/超长度/max_tokens 缺失等)
-			// 归为 400,与 FastAPI 422 一致;其余仍按上游不可用 502。
-			if apperr.Is(err, apperr.InvalidRequest) {
-				writeFamilyError(w, fam, err)
-				h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadRequest, 0, time.Since(start))
-				return
-			}
-			// network_errors.py: 超时类网络错误(含首 token 耗尽)回 504。
 			if errors.Is(err, kiro.ErrUpstreamTimeout) {
-				writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream request timed out", err))
+				writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream retry timed out", err))
 				h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
 				return
 			}
-			// 重解析失败等领域错误按自身码回(码表与 httpapi 一致)。
-			var domain *apperr.Error
-			if errors.As(err, &domain) {
-				writeFamilyError(w, fam, err)
-				h.record(r.Context(), target, isStream, usage.Usage{}, statusOf(domain.Code), 0, time.Since(start))
-				return
-			}
-			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
+			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream retry failed", err))
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 			return
-		}
-		if !rect.Enabled || attempt >= attempts || resp.StatusCode != http.StatusOK {
-			break
-		}
-		verdict, replay := sniffRefusal(resp.Body, resp.Header.Get("Content-Type"))
-		if verdict != verdictRefusal {
-			resp.Body = replay
-			break
-		}
-		_ = replay.Close()
-		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← refusal model=%s account=%s: rectifier retry %d/%d",
-			target.ModelID, target.Account, attempt, rect.Retries))
-		if wait := time.Duration(rect.IntervalSeconds * float64(time.Second)); wait > 0 {
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-r.Context().Done():
-				timer.Stop()
-			}
 		}
 	}
 	defer resp.Body.Close()

@@ -244,7 +244,6 @@ class ApiClient {
     required Map<String, dynamic> defaults,
     required Map<String, dynamic> overrides,
     Map<String, dynamic>? compact,
-    Map<String, dynamic>? rectifier,
     List<EffortEntry>? efforts,
     String? effortFormat,
     bool enabled = true,
@@ -261,8 +260,6 @@ class ApiClient {
         'defaults': defaults,
         'overrides': overrides,
         'compact': ?compact,
-        // 整流器恒带键:表单总是知道目标形态;空对象=关闭(只对 kiro 生效)。
-        'rectifier': ?rectifier,
         // efforts 恒带键:数组=显式声明(空数组=不支持);null=自动仅存量兼容,表单不写。
         'efforts': efforts?.map((e) => e.toJson()).toList(),
         // 表单恒带键:空串=协议内置映射;非空=显式格式(服务端校验枚举)。
@@ -283,7 +280,6 @@ class ApiClient {
     Map<String, dynamic>? defaults,
     Map<String, dynamic>? overrides,
     Map<String, dynamic>? compact,
-    Map<String, dynamic>? rectifier,
     List<EffortEntry>? efforts,
     String? effortFormat,
     required bool enabled,
@@ -301,8 +297,6 @@ class ApiClient {
         'defaults': ?defaults,
         'overrides': ?overrides,
         'compact': ?compact,
-        // 缺省不改现状(行内启停开关不带);表单恒带键,空对象=关闭。
-        'rectifier': ?rectifier,
         // 表单总是知道目标形态(自动/显式),恒带键提交;null=恢复自动。
         'efforts': efforts?.map((e) => e.toJson()).toList(),
         'effort_format': ?effortFormat,

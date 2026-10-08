@@ -45,9 +45,6 @@ type ResolvedTarget struct {
 	// EffortFormat 是模型的 effort 写入格式(effort.FormatXxx 枚举):
 	// 空=协议内置映射,非空=显式格式压过协议外形(厂商差异的承接点)。
 	EffortFormat string `json:"effort_format,omitempty"`
-	// Rectifier 整流器配置原样下发(kiro 拒答自动重试),语义判定在调用方
-	// (proxyplane):空对象=关闭。
-	Rectifier json.RawMessage `json:"rectifier,omitempty"`
 }
 
 // 认证头名。
@@ -175,7 +172,6 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Compact:       m.Compact,
 		Efforts:       r.effectiveEfforts(ctx, acc.Name, m),
 		EffortFormat:  m.EffortFormat,
-		Rectifier:     m.Rectifier,
 	}, nil
 }
 

@@ -116,11 +116,6 @@ UPDATE models SET effort_format = 'gemini' WHERE effort_format = 'thinking_level
 -- 并列回落 id 序(即拖拽功能存在之前的显示顺序)。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
 
--- rectifier 整流器配置(2026-10-08):{"enabled", "retries", "interval_seconds"},
--- 空对象=关闭。目前只对 kiro 提供商生效:上游 200 但无正文、以拒答
--- (refusal/content_filter)收尾时,转发面自动重发同一请求。
-ALTER TABLE models ADD COLUMN IF NOT EXISTS rectifier JSONB NOT NULL DEFAULT '{}';
-
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 
 -- 代理转发面配置：单行表（id 恒为 1）。api_key 为空表示转发面关闭。
