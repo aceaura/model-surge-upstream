@@ -1114,7 +1114,7 @@ func recoveryDirective(payload object, options requestOptions, v *toolViolation)
 		return nil, err
 	}
 	if len(encoded) > maxPayloadBytes {
-		return nil, fmt.Errorf("kiro: native payload exceeds %d bytes (history is not silently trimmed)", maxPayloadBytes)
+		return nil, fmt.Errorf("kiro: native payload exceeds %d bytes even after trimming history", maxPayloadBytes)
 	}
 	return encoded, nil
 }

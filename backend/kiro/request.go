@@ -1074,7 +1074,116 @@ func convertRequest(raw []byte, protocol, profile string) (object, requestOption
 	if len(fields) > 0 {
 		payload["additionalModelRequestFields"] = fields
 	}
+	trimPayloadToLimit(payload)
 	return payload, opts, nil
+}
+
+// payloadSize 与 payload_guards.py check_payload_size 同口径:紧凑 JSON 的
+// UTF-8 字节数。Go 的 marshal 本就无空格,等价 separators=(",", ":")。
+func payloadSize(payload object) int {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return 0
+	}
+	return len(encoded)
+}
+
+// trimPayloadToLimit 复刻 payload_guards.py trim_payload_to_limit:超限时从最老
+// 的历史成对(user/assistant)删除、至少保留 2 条,再对齐到 userInputMessage 开头,
+// 最后修复裁剪产生的孤儿 toolResults。参考实现由 AUTO_TRIM_PAYLOAD 门控且默认
+// 关闭(config.py:553),本网关恒开:长 agentic 会话超 600KB 是常态,硬拒会让整段
+// 会话不可用,丢最老轮次的损失小于整请求失败;上游超限只回一句误导的
+// "Improperly formed request."(payload_guards 模块注释)。裁完仍超限(历史不足
+// 3 条)不静默放行,由 transport 的硬拒兜底报错。
+func trimPayloadToLimit(payload object) {
+	if payloadSize(payload) <= maxPayloadBytes {
+		return
+	}
+	state := obj(payload["conversationState"])
+	history := list(state["history"])
+	if len(history) == 0 {
+		return
+	}
+	// _strip_empty_tool_uses: 空 toolUses 是 Kiro 怪癖,先删再量。
+	for _, entry := range history {
+		if assistant := obj(obj(entry)["assistantResponseMessage"]); assistant != nil {
+			if uses, ok := assistant["toolUses"]; ok && len(list(uses)) == 0 {
+				delete(assistant, "toolUses")
+			}
+		}
+	}
+	state["history"] = history
+	for len(history) > 2 && payloadSize(payload) > maxPayloadBytes {
+		history = history[2:]
+		state["history"] = history
+	}
+	// _align_to_user_message: 成对删除可能从 assistant 半截切开,须回到 user 开头。
+	for len(history) > 0 && obj(history[0])["userInputMessage"] == nil {
+		history = history[1:]
+	}
+	state["history"] = history
+	repairOrphanedToolResults(history)
+}
+
+// repairOrphanedToolResults 复刻 _repair_orphaned_tool_results:裁剪删掉持有
+// toolUses 的 assistant 后,后续 user 的 toolResults 成了孤儿;只保留与上一条
+// assistant 配对的,孤儿文本以 "[trimmed tool result] " 标记并入所在 user 的
+// content,避免上下文凭空消失。
+func repairOrphanedToolResults(history []any) {
+	for i, entry := range history {
+		user := obj(obj(entry)["userInputMessage"])
+		if user == nil {
+			continue
+		}
+		context := obj(user["userInputMessageContext"])
+		results := list(context["toolResults"])
+		if context == nil || results == nil {
+			continue
+		}
+		valid := map[string]bool{}
+		if i > 0 {
+			for _, use := range list(obj(obj(history[i-1])["assistantResponseMessage"])["toolUses"]) {
+				if id := str(obj(use)["toolUseId"]); id != "" {
+					valid[id] = true
+				}
+			}
+		}
+		kept := make([]any, 0, len(results))
+		var orphaned []string
+		for _, raw := range results {
+			result := obj(raw)
+			if valid[str(result["toolUseId"])] {
+				kept = append(kept, raw)
+				continue
+			}
+			switch content := result["content"].(type) {
+			case []any:
+				for _, part := range content {
+					if text := str(obj(part)["text"]); text != "" {
+						orphaned = append(orphaned, text)
+					}
+				}
+			case string:
+				if content != "" {
+					orphaned = append(orphaned, content)
+				}
+			}
+		}
+		if len(kept) == len(results) {
+			continue
+		}
+		if len(kept) > 0 {
+			context["toolResults"] = kept
+		} else {
+			delete(context, "toolResults")
+			if len(context) == 0 {
+				delete(user, "userInputMessageContext")
+			}
+		}
+		if len(orphaned) > 0 {
+			user["content"] = str(user["content"]) + "\n[trimmed tool result] " + strings.Join(orphaned, "; ")
+		}
+	}
 }
 
 func joinText(a, b string) string {

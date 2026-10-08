@@ -360,6 +360,85 @@ func TestPayloadAndRequestSizeLimits(t *testing.T) {
 	}
 }
 
+func TestOversizedHistoryTrimmedToLimit(t *testing.T) {
+	big := strings.Repeat("x", 100000)
+	messages := []any{object{"role": "user", "content": "start"}}
+	for i := 1; i <= 8; i++ {
+		id := "call_" + string(rune('0'+i))
+		messages = append(messages, object{"role": "assistant", "tool_calls": []any{object{
+			"id": id, "type": "function",
+			"function": object{"name": "lookup", "arguments": `{"x": 1}`},
+		}}})
+		messages = append(messages, object{"role": "tool", "tool_call_id": id, "content": big})
+	}
+	messages = append(messages, object{"role": "user", "content": "final question"})
+	payload, _, err := convertRequest([]byte(jsonText(object{
+		"model": "claude-sonnet-4.6", "messages": messages, "tools": toolDefinition("openai"),
+	})), "openai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payloadSize(payload); got > maxPayloadBytes {
+		t.Fatalf("payload still %d bytes after trim", got)
+	}
+	history := list(obj(payload["conversationState"])["history"])
+	if len(history) < 2 {
+		t.Fatalf("history trimmed below the two entry floor: %d", len(history))
+	}
+	first := obj(obj(history[0])["userInputMessage"])
+	if first == nil {
+		t.Fatalf("history does not start with a user message: %v", obj(history[0]))
+	}
+	// The assistant owning the first surviving user's results was trimmed away,
+	// so they are orphaned: dropped from context, text kept behind the marker.
+	if context := obj(first["userInputMessageContext"]); context != nil && list(context["toolResults"]) != nil {
+		t.Fatalf("orphaned tool results survived trim: %v", context)
+	}
+	if !strings.Contains(str(first["content"]), "\n[trimmed tool result] ") {
+		t.Fatalf("orphaned text not preserved: %.80q", str(first["content"]))
+	}
+	current := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+	if !strings.HasSuffix(str(current["content"]), "final question") {
+		t.Fatalf("current message damaged: %.80q", str(current["content"]))
+	}
+}
+
+func TestSmallPayloadNotTrimmedOrRepaired(t *testing.T) {
+	payload, _, err := convertRequest([]byte(jsonText(object{
+		"model": "claude-sonnet-4.6",
+		"messages": []any{
+			object{"role": "user", "content": "a"},
+			object{"role": "assistant", "tool_calls": []any{object{
+				"id": "call_1", "type": "function",
+				"function": object{"name": "lookup", "arguments": "{}"},
+			}}},
+			// Unknown id on purpose: under the limit the reference leaves such
+			// results for the upstream to judge, so they must survive untouched.
+			object{"role": "tool", "tool_call_id": "call_9", "content": "unrelated"},
+			object{"role": "user", "content": "b"},
+		},
+		"tools": toolDefinition("openai"),
+	})), "openai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := []object{obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])}
+	for _, entry := range list(obj(payload["conversationState"])["history"]) {
+		users = append(users, obj(obj(entry)["userInputMessage"]))
+	}
+	found := false
+	for _, user := range users {
+		for _, result := range list(obj(user["userInputMessageContext"])["toolResults"]) {
+			if str(obj(result)["toolUseId"]) == "call_9" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("under-limit payload was trimmed or repaired")
+	}
+}
+
 func TestToolResultImagesAndHistoricalNormalization(t *testing.T) {
 	image := object{"type": "image", "source": object{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
 	root := object{"model": "claude-sonnet-4.6", "system": []any{object{"type": "text", "text": "system"}}, "tools": toolDefinition("anthropic"), "messages": []any{

@@ -262,7 +262,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if len(encoded) > maxPayloadBytes {
-		return nil, apperr.New(apperr.InvalidRequest, fmt.Sprintf("kiro: native payload exceeds %d bytes (history is not silently trimmed)", maxPayloadBytes))
+		return nil, apperr.New(apperr.InvalidRequest, fmt.Sprintf("kiro: native payload exceeds %d bytes even after trimming history", maxPayloadBytes))
 	}
 	ctx, cancel := context.WithCancel(req.Context())
 	upstream := req.Clone(ctx)
