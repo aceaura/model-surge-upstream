@@ -115,6 +115,9 @@ class _LogsPageState extends State<LogsPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.active != widget.active) {
       _syncTimer();
+      // 重新激活时重拉配置列表:页在 IndexedStack 常驻,别处增删模型/账号
+      // 不会触发本页重建,不刷新下拉选项停在旧快照。
+      if (widget.active) _loadFilterChoices();
     }
   }
 
