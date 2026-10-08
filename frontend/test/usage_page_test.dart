@@ -21,6 +21,7 @@ ApiClient _stubClient({
   List<Map<String, Object>> buckets = const [],
   List<Map<String, Object>> logs = const [],
   List<Map<String, Object>> groups = const [],
+  List<Map<String, Object>> accounts = const [],
 }) {
   final mock = MockClient((req) async {
     onRequest?.call(req.url);
@@ -28,6 +29,8 @@ ApiClient _stubClient({
     Object body = const {};
     if (path.endsWith('/admin/models')) {
       body = {'models': const []};
+    } else if (path.endsWith('/admin/accounts')) {
+      body = {'accounts': accounts};
     } else if (path.endsWith('/usage/trend')) {
       body = {'granularity': 'hour', 'buckets': buckets};
     } else if (path.endsWith('/usage/logs')) {
@@ -247,6 +250,53 @@ void main() {
         .map((u) => u.path)
         .toSet();
     expect(filtered, containsAll(['/admin/usage/summary', '/admin/usage/trend', '/admin/usage/logs']));
+
+    await _unmount(tester);
+  });
+
+  testWidgets('账号过滤:选中账号后摘要/趋势/日志请求都带 account 参数',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final seen = <Uri>[];
+    await _pumpUsage(tester,
+        client: _stubClient(
+          onRequest: seen.add,
+          accounts: const [
+            {'name': 'deepseek-1'},
+            {'name': 'kimi-1'},
+          ],
+        ));
+
+    // 页头出现「全部账号」触发器,展开后列出账号选项。
+    final trigger = find.text('全部账号');
+    expect(trigger, findsOneWidget);
+    await tester.tap(trigger);
+    await tester.pump();
+    expect(find.text('deepseek-1'), findsOneWidget);
+    expect(find.text('kimi-1'), findsOneWidget);
+
+    seen.clear();
+    await tester.tap(find.text('deepseek-1'));
+    await tester.pumpAndSettle();
+
+    // 选中后触发器换成账号名,且触发整页重载:摘要/趋势/日志都带 account。
+    expect(find.text('deepseek-1'), findsOneWidget);
+    expect(find.text('全部账号'), findsNothing);
+    Set<String> filtered() => seen
+        .where((u) =>
+            u.queryParameters['account'] == 'deepseek-1' &&
+            u.path.startsWith('/admin/usage/'))
+        .map((u) => u.path)
+        .toSet();
+    expect(filtered(),
+        containsAll(['/admin/usage/summary', '/admin/usage/trend', '/admin/usage/logs']));
+
+    // 切到模型统计页签,页签请求同样带 account。
+    await tester.tap(find.text('模型统计'));
+    await tester.pumpAndSettle();
+    expect(filtered(), contains('/admin/usage/models'));
 
     await _unmount(tester);
   });

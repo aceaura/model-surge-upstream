@@ -550,12 +550,14 @@ class ApiClient {
     DateTime? start,
     DateTime? end,
     String? model,
+    String? account,
     String? source,
   }) async {
     final body = await _send(
       'GET',
       '/admin/usage/accounts',
-      query: _usageQuery(start: start, end: end, model: model, source: source),
+      query: _usageQuery(
+          start: start, end: end, model: model, account: account, source: source),
     );
     return (body['accounts'] as List<dynamic>? ?? const [])
         .map((e) => UsageGroup.fromJson(e as Map<String, dynamic>))

@@ -44,9 +44,11 @@ class _UsagePageState extends State<UsagePage> {
   String _granularity = 'auto'; // auto | hour | day
   int _tab = 0; // 0 请求日志 1 账号统计 2 模型统计
 
-  /// 页头过滤器：来源（转发/对话）与模型，空串表示「全部」。
+  /// 页头过滤器：来源（转发/对话）、账号与模型，空串表示「全部」。
   String _source = '';
+  String _account = '';
   String _model = '';
+  List<String> _accountOptions = const [];
   List<String> _modelOptions = const [];
 
   /// 自动刷新间隔秒数；改档即重建定时器。
@@ -69,6 +71,7 @@ class _UsagePageState extends State<UsagePage> {
   void initState() {
     super.initState();
     widget.modelSeed?.addListener(_onModelSeed);
+    _loadAccountOptions();
     _loadModelOptions();
     _load();
     _restartTimer();
@@ -94,6 +97,17 @@ class _UsagePageState extends State<UsagePage> {
       }
     });
     _load();
+  }
+
+  /// 账号下拉的选项：已配置账号清单。失败不阻断页面。
+  Future<void> _loadAccountOptions() async {
+    try {
+      final accounts = await widget.client.listAccounts();
+      if (!mounted) return;
+      setState(() => _accountOptions = [for (final a in accounts) a.name]);
+    } catch (_) {
+      // 过滤器选项拉不到时保持只有「全部账号」，不打断主数据加载。
+    }
   }
 
   /// 模型下拉的选项：配置里的命名模型清单。失败不阻断页面。
@@ -145,11 +159,16 @@ class _UsagePageState extends State<UsagePage> {
       if (!appendLogs) {
         final results = await Future.wait<Object>([
           widget.client.usageSummary(
-              start: start, end: end, model: _modelOr(null), source: _sourceOr(null)),
+              start: start,
+              end: end,
+              model: _modelOr(null),
+              account: _accountOr(null),
+              source: _sourceOr(null)),
           widget.client.usageTrend(
               start: start,
               end: end,
               model: _modelOr(null),
+              account: _accountOr(null),
               source: _sourceOr(null),
               granularity: _granularity == 'auto' ? null : _granularity),
           _tabData(start, end, _tab),
@@ -176,6 +195,7 @@ class _UsagePageState extends State<UsagePage> {
   }
 
   String? _modelOr(String? fallback) => _model.isEmpty ? fallback : _model;
+  String? _accountOr(String? fallback) => _account.isEmpty ? fallback : _account;
   String? _sourceOr(String? fallback) => _source.isEmpty ? fallback : _source;
 
   /// 当前页签的数据拉取：0 日志 / 1 账号 / 2 模型。过滤器按各端点支持的维度下发。
@@ -183,14 +203,23 @@ class _UsagePageState extends State<UsagePage> {
     switch (tab) {
       case 1:
         return widget.client.usageAccounts(
-            start: start, end: end, model: _modelOr(null), source: _sourceOr(null));
+            start: start,
+            end: end,
+            model: _modelOr(null),
+            account: _accountOr(null),
+            source: _sourceOr(null));
       case 2:
-        return widget.client.usageModels(start: start, end: end, source: _sourceOr(null));
+        return widget.client.usageModels(
+            start: start,
+            end: end,
+            account: _accountOr(null),
+            source: _sourceOr(null));
       default:
         return widget.client.usageLogs(
             start: start,
             end: end,
             model: _modelOr(null),
+            account: _accountOr(null),
             source: _sourceOr(null),
             limit: _pageSize,
             offset: offset);
@@ -237,7 +266,7 @@ class _UsagePageState extends State<UsagePage> {
       children: [
         PageHeader(
           title: '用量',
-          // 页头右侧过滤器,仿 CC Switch 使用统计:来源/模型/自动刷新/区间。
+          // 页头右侧过滤器,仿 CC Switch 使用统计:来源/账号/模型/自动刷新/区间。
           trailing: [
             _filterSelect(
               label: _source.isEmpty ? '全部来源' : (_source == 'chat' ? '对话' : '转发'),
@@ -250,6 +279,21 @@ class _UsagePageState extends State<UsagePage> {
               onSelected: (v) {
                 if (v == _source) return;
                 setState(() => _source = v);
+                _load();
+              },
+            ),
+            const SizedBox(width: 8),
+            _filterSelect(
+              label: _account.isEmpty ? '全部账号' : _account,
+              width: 132,
+              items: [
+                const ('', '全部账号'),
+                for (final a in _accountOptions) (a, a),
+              ],
+              value: _account,
+              onSelected: (v) {
+                if (v == _account) return;
+                setState(() => _account = v);
                 _load();
               },
             ),
