@@ -30,6 +30,9 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    # 固定 hostname:kiro 设备指纹由 hostname+username 派生,不固定则每次
+    # 容器重建指纹漂移,上游视为同号频繁换设备(风控异常特征)。
+    hostname: msu-kiro-gateway
     environment:
       MSU_PG_DSN: postgres://msu:${MSU_PG_PASSWORD:-msu}@postgres:5432/msu?sslmode=disable
       MSU_REDIS_ADDR: redis:6379

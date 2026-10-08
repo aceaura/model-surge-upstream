@@ -222,7 +222,7 @@ func (r *Resolver) authHeaders(ctx context.Context, spec provider.Spec, acc acco
 		if err != nil {
 			return nil, err
 		}
-		out = kiro.Headers(token, acc.Credential.ProfileARN)
+		out = kiro.HeadersFor(token, acc.Credential.ProfileARN, acc.Name)
 	} else {
 		out = codex.Headers(token, acc.Credential.AccountID)
 	}

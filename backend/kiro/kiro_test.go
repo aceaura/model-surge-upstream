@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/user"
 	"reflect"
 	"strings"
 	"sync"
@@ -1556,5 +1560,34 @@ func TestRound26ResponseAliasDedupMatrix(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// 空 seed 与旧 IDE 公式逐字节一致;不同账号名派生不同指纹,同账号名稳定。
+func TestFingerprintForSeedIsolation(t *testing.T) {
+	hostname, _ := os.Hostname()
+	username := ""
+	if u, err := user.Current(); err == nil {
+		username = u.Username
+	}
+	legacy := sha256.Sum256([]byte(hostname + "-" + username + "-kiro-gateway"))
+	if got := FingerprintFor(""); got != hex.EncodeToString(legacy[:]) {
+		t.Fatalf("empty seed changed legacy formula: %s", got)
+	}
+	a, b, a2 := FingerprintFor("kiro-1"), FingerprintFor("kiro-2"), FingerprintFor("kiro-1")
+	if a == b {
+		t.Fatalf("different accounts share fingerprint: %s", a)
+	}
+	if a != a2 {
+		t.Fatalf("same account fingerprint unstable: %s vs %s", a, a2)
+	}
+	if a == FingerprintFor("") {
+		t.Fatalf("seeded fingerprint collides with base device")
+	}
+	if !strings.HasSuffix(ChatUserAgentFor("kiro-1"), a) || !strings.HasSuffix(IDEUserAgentFor("kiro-1"), a) {
+		t.Fatalf("UA builders not using seeded fingerprint")
+	}
+	if HeadersFor("t", "", "kiro-1")["User-Agent"] != ChatUserAgentFor("kiro-1") {
+		t.Fatalf("HeadersFor UA mismatch")
 	}
 }

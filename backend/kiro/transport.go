@@ -37,29 +37,38 @@ const (
 	firstTokenMaxAttempts = 3
 )
 
-// machineFingerprint 复刻 utils.py get_machine_fingerprint:
-// sha256("{hostname}-{username}-kiro-gateway"),与 Kiro IDE 流量画像一致。
-var machineFingerprint = sync.OnceValue(func() string {
+// machineIdentity 是设备指纹的稳定基底 "{hostname}-{username}":compose 给
+// backend 钉了固定 hostname,容器重建后基底不变,指纹不漂移。
+var machineIdentity = sync.OnceValue(func() string {
 	hostname, _ := os.Hostname()
 	username := ""
 	if u, err := user.Current(); err == nil {
 		username = u.Username
 	}
-	sum := sha256.Sum256([]byte(hostname + "-" + username + "-kiro-gateway"))
-	return hex.EncodeToString(sum[:])
+	return hostname + "-" + username
 })
 
-// Fingerprint 暴露机器指纹,供配额/续期等旁路请求拼 UA。
-func Fingerprint() string { return machineFingerprint() }
-
-// ChatUserAgent 对齐 utils.py get_kiro_headers 的完整 SDK 串。
-func ChatUserAgent() string {
-	return "aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.7.45-" + machineFingerprint()
+// FingerprintFor 复刻 utils.py get_machine_fingerprint:
+// sha256("{hostname}-{username}-kiro-gateway")。seed(账号名)非空时混入
+// 派生按账号隔离的指纹:同一网关上的多个 kiro 账号在上游呈现为不同设备,
+// 避免多号共用一台"设备"被风控关联。空 seed 与 IDE 公式逐字节一致。
+func FingerprintFor(seed string) string {
+	id := machineIdentity()
+	if seed != "" {
+		id += "-" + seed
+	}
+	sum := sha256.Sum256([]byte(id + "-kiro-gateway"))
+	return hex.EncodeToString(sum[:])
 }
 
-// IDEUserAgent 是 refreshToken 端点用的短 UA(auth.py:705)。
-func IDEUserAgent() string {
-	return "KiroIDE-0.7.45-" + machineFingerprint()
+// ChatUserAgentFor 对齐 utils.py get_kiro_headers 的完整 SDK 串。
+func ChatUserAgentFor(seed string) string {
+	return "aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E KiroIDE-0.7.45-" + FingerprintFor(seed)
+}
+
+// IDEUserAgentFor 是 refreshToken 端点用的短 UA(auth.py:705)。
+func IDEUserAgentFor(seed string) string {
+	return "KiroIDE-0.7.45-" + FingerprintFor(seed)
 }
 
 // retryBackoff follows config.py BASE_RETRY_DELAY with exponential doubling.
@@ -94,12 +103,17 @@ func markUpstreamTimeout(err error) error {
 // Headers supplies native authentication and identity. The two routing headers
 // are consumed locally and never sent to AWS.
 func Headers(token, profileARN string) map[string]string {
+	return HeadersFor(token, profileARN, "")
+}
+
+// HeadersFor 同 Headers,seed(账号名)非空时 UA 带按账号派生的设备指纹。
+func HeadersFor(token, profileARN, seed string) map[string]string {
 	return map[string]string{
 		"Authorization":               "Bearer " + token,
 		"Content-Type":                "application/x-amz-json-1.0",
 		"X-Amz-Target":                "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
-		"User-Agent":                  ChatUserAgent(),
-		"X-Amz-User-Agent":            "aws-sdk-js/1.0.27 KiroIDE-0.7.45-" + machineFingerprint(),
+		"User-Agent":                  ChatUserAgentFor(seed),
+		"X-Amz-User-Agent":            "aws-sdk-js/1.0.27 KiroIDE-0.7.45-" + FingerprintFor(seed),
 		"X-Amzn-Codewhisperer-Optout": "true",
 		"X-Amzn-Kiro-Agent-Mode":      "vibe",
 		"Amz-Sdk-Invocation-Id":       newID(),

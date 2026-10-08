@@ -39,7 +39,7 @@ func (m *Manager) refreshKiro(ctx context.Context, acc account.Account, f *fligh
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", kiro.IDEUserAgent())
+	req.Header.Set("User-Agent", kiro.IDEUserAgentFor(acc.Name))
 	resp, err := m.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("kiro: refresh request failed: %w", err)
