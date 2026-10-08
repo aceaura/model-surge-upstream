@@ -265,12 +265,12 @@ class _LogsPageState extends State<LogsPage> {
           count: _filtered.length,
           trailing: [
             SizedBox(
-              width: 172,
+              width: 108,
               child: StyledDropdown(
-                value: _modelFilter,
-                options: ['all', ..._choices(_knownModels, _modelOf)],
-                labelOf: (o) => o == 'all' ? '全部模型' : o,
-                onChanged: (v) => setState(() => _modelFilter = v ?? 'all'),
+                value: _sourceFilter,
+                options: ['all', ..._choices(_sourceSeed.toList(), (e) => e.source)],
+                labelOf: (o) => o == 'all' ? '全部来源' : o,
+                onChanged: (v) => setState(() => _sourceFilter = v ?? 'all'),
               ),
             ),
             const SizedBox(width: 8),
@@ -285,12 +285,12 @@ class _LogsPageState extends State<LogsPage> {
             ),
             const SizedBox(width: 8),
             SizedBox(
-              width: 108,
+              width: 172,
               child: StyledDropdown(
-                value: _sourceFilter,
-                options: ['all', ..._choices(_sourceSeed.toList(), (e) => e.source)],
-                labelOf: (o) => o == 'all' ? '全部来源' : o,
-                onChanged: (v) => setState(() => _sourceFilter = v ?? 'all'),
+                value: _modelFilter,
+                options: ['all', ..._choices(_knownModels, _modelOf)],
+                labelOf: (o) => o == 'all' ? '全部模型' : o,
+                onChanged: (v) => setState(() => _modelFilter = v ?? 'all'),
               ),
             ),
             const SizedBox(width: 8),
