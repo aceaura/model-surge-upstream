@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -285,7 +286,6 @@ class _UsagePageState extends State<UsagePage> {
             const SizedBox(width: 8),
             _filterSelect(
               label: _account.isEmpty ? '全部账号' : _account,
-              width: 132,
               items: [
                 const ('', '全部账号'),
                 for (final a in _accountOptions) (a, a),
@@ -300,7 +300,6 @@ class _UsagePageState extends State<UsagePage> {
             const SizedBox(width: 8),
             _filterSelect(
               label: _model.isEmpty ? '全部模型' : _model,
-              width: 132,
               items: [
                 const ('', '全部模型'),
                 for (final m in _modelOptions) (m, m),
@@ -378,7 +377,6 @@ class _UsagePageState extends State<UsagePage> {
     required String value,
     required ValueChanged<String> onSelected,
     IconData? icon,
-    double width = 104,
   }) {
     return _FilterSelect(
       label: label,
@@ -386,7 +384,6 @@ class _UsagePageState extends State<UsagePage> {
       value: value,
       onSelected: onSelected,
       icon: icon,
-      width: width,
     );
   }
 
@@ -1072,6 +1069,7 @@ class _TrendPainter extends CustomPainter {
 /// 页头过滤器下拉：描边小按钮触发器，菜单用 Overlay 落在触发器正下方、
 /// 左右缘与触发器对齐(与 StyledDropdown 同形态,仿 CC Switch Select),
 /// 选中项带 primarySoft 圆角色块 + 主色 check,点外部或选中后收起。
+/// 触发器宽按最长选项文案自适应(文案居中),选中切换不跳宽。
 class _FilterSelect extends StatefulWidget {
   const _FilterSelect({
     required this.label,
@@ -1079,7 +1077,6 @@ class _FilterSelect extends StatefulWidget {
     required this.value,
     required this.onSelected,
     this.icon,
-    this.width = 104,
   });
 
   final String label;
@@ -1087,7 +1084,6 @@ class _FilterSelect extends StatefulWidget {
   final String value;
   final ValueChanged<String> onSelected;
   final IconData? icon;
-  final double width;
 
   @override
   State<_FilterSelect> createState() => _FilterSelectState();
@@ -1099,6 +1095,31 @@ class _FilterSelectState extends State<_FilterSelect> {
   OverlayEntry? _entry;
 
   bool get _open => _entry != null;
+
+  /// 触发器宽 = 最长选项文案(按选中加粗 w600 量) + 图标位 + 箭头与间距 + 横向 padding + 描边。
+  /// textScaler 与渲染同源,系统文字缩放下才不会量小出省略号。
+  double get _triggerWidth {
+    var maxText = 0.0;
+    for (final (_, text) in widget.items) {
+      final tp = TextPainter(
+        text: TextSpan(
+            text: text,
+            style: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                fontFamily: AppConst.fontFamily,
+                fontFamilyFallback: AppConst.fontFallback)),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      maxText = math.max(maxText, tp.width);
+      tp.dispose();
+    }
+    final iconW = widget.icon != null ? 20.0 : 0.0; // 图标 14 + 间距 6
+    // 文案 + 图标位 + 文案↔箭头间距 4 + 箭头 16 + 横向 padding 20 + 描边 2
+    return maxText + iconW + 42;
+  }
 
   void _toggle() => _open ? _close() : _show();
 
@@ -1235,7 +1256,7 @@ class _FilterSelectState extends State<_FilterSelect> {
           behavior: HitTestBehavior.opaque,
           onTap: _toggle,
           child: Container(
-            width: widget.width,
+            width: _triggerWidth,
             height: 34,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
@@ -1253,6 +1274,7 @@ class _FilterSelectState extends State<_FilterSelect> {
                 Expanded(
                   child: Text(
                     widget.label,
+                    textAlign: TextAlign.center,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12.5, color: t.ink),
                   ),

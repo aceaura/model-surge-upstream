@@ -264,44 +264,36 @@ class _LogsPageState extends State<LogsPage> {
           title: '日志',
           count: _filtered.length,
           trailing: [
-            SizedBox(
-              width: 108,
-              child: StyledDropdown(
-                value: _sourceFilter,
-                options: ['all', ..._choices(_sourceSeed.toList(), (e) => e.source)],
-                labelOf: (o) => o == 'all' ? '全部来源' : o,
-                onChanged: (v) => setState(() => _sourceFilter = v ?? 'all'),
-              ),
+            StyledDropdown(
+              value: _sourceFilter,
+              options: ['all', ..._choices(_sourceSeed.toList(), (e) => e.source)],
+              labelOf: (o) => o == 'all' ? '全部来源' : o,
+              onChanged: (v) => setState(() => _sourceFilter = v ?? 'all'),
+              fitContent: true,
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 136,
-              child: StyledDropdown(
-                value: _accountFilter,
-                options: ['all', ..._choices(_knownAccounts, _accountOf)],
-                labelOf: (o) => o == 'all' ? '全部账号' : o,
-                onChanged: (v) => setState(() => _accountFilter = v ?? 'all'),
-              ),
+            StyledDropdown(
+              value: _accountFilter,
+              options: ['all', ..._choices(_knownAccounts, _accountOf)],
+              labelOf: (o) => o == 'all' ? '全部账号' : o,
+              onChanged: (v) => setState(() => _accountFilter = v ?? 'all'),
+              fitContent: true,
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 172,
-              child: StyledDropdown(
-                value: _modelFilter,
-                options: ['all', ..._choices(_knownModels, _modelOf)],
-                labelOf: (o) => o == 'all' ? '全部模型' : o,
-                onChanged: (v) => setState(() => _modelFilter = v ?? 'all'),
-              ),
+            StyledDropdown(
+              value: _modelFilter,
+              options: ['all', ..._choices(_knownModels, _modelOf)],
+              labelOf: (o) => o == 'all' ? '全部模型' : o,
+              onChanged: (v) => setState(() => _modelFilter = v ?? 'all'),
+              fitContent: true,
             ),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 116,
-              child: StyledDropdown(
-                value: _level,
-                options: _levelOptions,
-                labelOf: (o) => _levelLabels[o] ?? o,
-                onChanged: (v) => setState(() => _level = v ?? 'all'),
-              ),
+            StyledDropdown(
+              value: _level,
+              options: _levelOptions,
+              labelOf: (o) => _levelLabels[o] ?? o,
+              onChanged: (v) => setState(() => _level = v ?? 'all'),
+              fitContent: true,
             ),
             const SizedBox(width: 8),
             Tooltip(

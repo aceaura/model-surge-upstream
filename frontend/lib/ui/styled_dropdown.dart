@@ -22,6 +22,9 @@ class StyledDropdown extends StatefulWidget {
   final bool dropUp;
   // false=禁用:不响应点击(级联选择中下级等上级选定后再解锁)。
   final bool enabled;
+  // true=触发器按最长选项文案自适应宽、文案居中(页头过滤器用),
+  // 选中切换不跳宽;false 保持父级约束(表单内拉满)。
+  final bool fitContent;
   const StyledDropdown(
       {super.key,
       required this.value,
@@ -31,7 +34,8 @@ class StyledDropdown extends StatefulWidget {
       this.labelOf,
       this.showValue = true,
       this.dropUp = false,
-      this.enabled = true});
+      this.enabled = true,
+      this.fitContent = false});
 
   @override
   State<StyledDropdown> createState() => _StyledDropdownState();
@@ -48,6 +52,53 @@ class _StyledDropdownState extends State<StyledDropdown> {
 
   void _toggle() => _open ? _close() : _show();
 
+  /// 最长选项文案宽(按菜单选中项加粗 w600 量),供菜单宽用。
+  /// textScaler 必须与渲染同源:系统文字缩放(Windows 文本大小)下
+  /// 不传会量小一截,菜单装不下文案出省略号。
+  double _maxOptionTextWidth() {
+    var maxText = 0.0;
+    for (final o in widget.options) {
+      final tp = TextPainter(
+        text: TextSpan(
+            text: _label(o),
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontFamily: AppConst.fontFamily,
+                fontFamilyFallback: AppConst.fontFallback)),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      maxText = math.max(maxText, tp.width);
+      tp.dispose();
+    }
+    return maxText;
+  }
+
+  /// 自适应触发器宽:最长选项文案按触发器实际渲染样式量(正文 w400 +
+  /// DefaultTextStyle 继承的字距,textScaler 同源;此前按 w600 无字距量,
+  /// 与渲染不一致把「全部来源」这类全 CJK 文案量小出省略号)。
+  /// 常量 = 横向 padding 26 + inputGap 2x4(M3 下 OutlineInputBorder 的
+  /// gapPadding 计入装饰器内容槽两侧扣减,见 input_decorator contentConstraints)
+  /// + 箭头 18 + 2 取整兜底,封顶与菜单一致。
+  double _fitWidth(TextStyle triggerStyle) {
+    final merged = DefaultTextStyle.of(context).style.merge(triggerStyle);
+    final scaler = MediaQuery.textScalerOf(context);
+    var maxText = 0.0;
+    for (final o in widget.options) {
+      final tp = TextPainter(
+        text: TextSpan(text: _label(o), style: merged),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout();
+      maxText = math.max(maxText, tp.width);
+      tp.dispose();
+    }
+    return math.min(maxText + 54, 420.0);
+  }
+
   void _show() {
     final box = _triggerKey.currentContext!.findRenderObject() as RenderBox;
     final t = context.tokens;
@@ -62,22 +113,7 @@ class _StyledDropdownState extends State<StyledDropdown> {
     // 菜单宽取触发器宽与选项自然宽的较大者(封顶 420):选项比触发器长
     // (如模型 id codex-1/gpt-6.1-sol 配 200px 触发器)时完整显示,
     // 行内省略只作更极端值的兜底。按 w600 量:选中项加粗,取最宽。
-    var maxText = 0.0;
-    for (final o in widget.options) {
-      final tp = TextPainter(
-        text: TextSpan(
-            text: _label(o),
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                fontFamily: AppConst.fontFamily,
-                fontFamilyFallback: AppConst.fontFallback)),
-        maxLines: 1,
-        textDirection: TextDirection.ltr,
-      )..layout();
-      maxText = math.max(maxText, tp.width);
-      tp.dispose();
-    }
+    final maxText = _maxOptionTextWidth();
     // 行横向 padding 20 + check 位 24 + 菜单 padding 12 + 描边 2。
     final menuWidth = math.max(
         box.size.width, math.min(maxText + 58, 420.0));
@@ -206,7 +242,12 @@ class _StyledDropdownState extends State<StyledDropdown> {
     // (isFocused)或已选子项(showValue=true)时浮到框缘
     final showContent = widget.showValue || _open;
     final current = widget.value;
-    return CompositedTransformTarget(
+    final triggerStyle = TextStyle(
+        fontSize: 13,
+        color: widget.enabled ? t.ink : t.faint,
+        fontFamily: AppConst.fontFamily,
+        fontFamilyFallback: AppConst.fontFallback);
+    final trigger = CompositedTransformTarget(
       link: _link,
       child: MouseRegion(
         cursor: widget.enabled
@@ -231,13 +272,10 @@ class _StyledDropdownState extends State<StyledDropdown> {
                       ? const SizedBox.shrink()
                       : Text(
                           current == null ? '' : _label(current),
+                          textAlign: widget.fitContent ? TextAlign.center : null,
                           overflow: TextOverflow.ellipsis,
                           // 显式钉字体族:textStyle 缺 fontFamily 会在合并链上丢掉字体栈
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: widget.enabled ? t.ink : t.faint,
-                              fontFamily: AppConst.fontFamily,
-                              fontFamilyFallback: AppConst.fontFallback),
+                          style: triggerStyle,
                         ),
                 ),
                 Icon(Icons.expand_more_rounded,
@@ -248,6 +286,12 @@ class _StyledDropdownState extends State<StyledDropdown> {
         ),
       ),
     );
+    // 自适应模式:自带宽度不再吃父级约束(InputDecorator 断言不能无界宽,
+    // 不能靠内容自撑,必须给定宽)
+    if (widget.fitContent) {
+      return SizedBox(width: _fitWidth(triggerStyle), child: trigger);
+    }
+    return trigger;
   }
 }
 

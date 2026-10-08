@@ -32,6 +32,47 @@ void main() {
         reason: '下拉触发器与单行输入框同高,并排才不错位');
   });
 
+  testWidgets('fitContent trigger fits the longest option label without ellipsis',
+      (tester) async {
+    // 回归:fitContent 曾按 w600 无字距量文案、且少算 inputGap(2x4),
+    // 日志页「全部来源/全部级别」这类与最长 ASCII 选项等宽的全 CJK
+    // 文案在触发器里被截成「全部…」。
+    const options = ['all', 'xy'];
+    String label(String o) => o == 'all' ? '全部来源' : o;
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: StyledDropdown(
+            value: 'all',
+            options: options,
+            labelOf: label,
+            onChanged: (_) {},
+            fitContent: true,
+          ),
+        ),
+      ),
+    ));
+
+    final ctx = tester.element(find.text('全部来源'));
+    final tw = tester.widget<Text>(find.text('全部来源'));
+    final merged = DefaultTextStyle.of(ctx).style.merge(tw.style);
+    // 每个选项文案的自然宽都必须不大于触发器文本槽,否则渲染即省略。
+    final slot = tester.getSize(find.text('全部来源')).width;
+    for (final o in options) {
+      final natural = TextPainter(
+        text: TextSpan(text: label(o), style: merged),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+        textScaler: MediaQuery.textScalerOf(ctx),
+      )..layout();
+      expect(natural.width, lessThanOrEqualTo(slot),
+          reason: '选项「${label(o)}」自然宽须放得下,放不下即省略号');
+      natural.dispose();
+    }
+  });
+
   testWidgets('menu widens to fit long options instead of ellipsizing them',
       (tester) async {
     // 对话页模型选择器:200px 触发器配 codex-1/gpt-6.1-sol 这类长选项,
