@@ -4,6 +4,7 @@ import '../api_client.dart';
 import '../settings_store.dart';
 import '../ui/collapsible_section.dart';
 import '../ui/page_header.dart';
+import 'autostart_section.dart';
 import 'proxy_page.dart';
 import 'settings_page.dart';
 
@@ -53,6 +54,8 @@ class SettingsHubPage extends StatelessWidget {
                     embedded: true,
                   ),
                 ),
+                const SizedBox(height: 14),
+                const AutostartSection(),
               ],
             ),
           ),
