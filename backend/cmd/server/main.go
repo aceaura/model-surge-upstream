@@ -199,7 +199,7 @@ func saveUsage(db *store.Store, l store.UsageLog) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := db.RecordUsage(ctx, &l); err != nil {
-			ringlog.Push(ringlog.LevelWarn, "usage", fmt.Sprintf("record failed: %v", err))
+			ringlog.Push(ringlog.LevelWarn, "others", fmt.Sprintf("usage record failed: %v", err))
 		}
 	}()
 }
