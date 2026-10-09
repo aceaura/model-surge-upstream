@@ -271,19 +271,15 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 			}
 		}
 	}
-	// 上下文压缩策略在请求体定稿后执行：估算超阈值时 auto 改写 body、
-	// error 直接回 400 让客户端自行压缩、passive 无操作。
+	// 上下文超限判定在请求体定稿后执行：error 模式超阈值直接回 400 让
+	// 客户端自行压缩、passive 无操作。
 	if h.compactor != nil {
-		out, estimated, reject := h.compactor.Run(r.Context(), target, merged,
-			func(u usage.Usage, status int, latency, duration time.Duration) {
-				h.record(r.Context(), target, false, u, status, latency, duration)
-			})
+		estimated, reject := h.compactor.Run(target, merged)
 		if reject {
 			writeContextExceeded(w, fam, estimated, target.ContextWindow)
 			h.record(r.Context(), target, false, usage.Usage{}, http.StatusBadRequest, 0, 0)
 			return
 		}
-		merged = out
 	}
 	// codex 订阅端点的硬约束(store/stream/剥采样参数/instructions)与
 	// 路径映射(/v1/responses→/responses)最后应用:压过 defaults/overrides。

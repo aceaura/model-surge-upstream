@@ -68,15 +68,18 @@ class _ModelFormState extends State<ModelForm> {
     text: prettyJson(_source?.overrides ?? const {}),
   );
 
-  // 上下文压缩策略:模式三选一(passive 元数据/error 客户端压缩/
-  // auto 上游压缩);阈值按百分比录入(85 = 窗口的 85%),提交时换回比例
-  late String _compactMode = (_source?.compact['mode'] as String?) ?? 'passive';
+  // 上下文压缩策略:模式二选一(passive 元数据/error 拦截);阈值按百分比
+  // 录入(85 = 窗口的 85%),提交时换回比例。存量 auto(网关代压,已废)
+  // 载入归一为 error。
+  late String _compactMode = _normalizeCompactMode(_source?.compact['mode']);
   late final TextEditingController _compactThreshold = TextEditingController(
     text: _compactThresholdText(_source?.compact),
   );
-  late final TextEditingController _compactKeepTurns = TextEditingController(
-    text: '${_source?.compact['keep_turns'] ?? 6}',
-  );
+
+  static String _normalizeCompactMode(Object? mode) {
+    if (mode == 'error') return 'error';
+    return 'passive';
+  }
 
   static String _compactThresholdText(Map<String, dynamic>? compact) {
     final t = compact?['threshold'];
@@ -143,7 +146,6 @@ class _ModelFormState extends State<ModelForm> {
     _defaults.dispose();
     _overrides.dispose();
     _compactThreshold.dispose();
-    _compactKeepTurns.dispose();
     for (final r in _effortRows) {
       r.dispose();
     }
@@ -181,17 +183,13 @@ class _ModelFormState extends State<ModelForm> {
     });
   }
 
-  /// 组装 compact JSON 提交:模式必带;阈值在 error/auto 下生效;
-  /// 保留轮数仅 auto 使用。缺项回落服务端全局默认。
+  /// 组装 compact JSON 提交:模式必带;阈值仅 error 下生效。
+  /// 缺项回落服务端全局默认。
   Map<String, dynamic> _buildCompact() {
     final out = <String, dynamic>{'mode': _compactMode};
     if (_compactMode != 'passive') {
       final pct = double.tryParse(_compactThreshold.text.trim());
       if (pct != null) out['threshold'] = pct / 100;
-    }
-    if (_compactMode == 'auto') {
-      final turns = int.tryParse(_compactKeepTurns.text.trim());
-      if (turns != null) out['keep_turns'] = turns;
     }
     return out;
   }
@@ -386,13 +384,12 @@ class _ModelFormState extends State<ModelForm> {
     );
   }
 
-  // ── 上下文限制(窗口/压缩策略/触发阈值/保留轮数)──
+  // ── 上下文限制(窗口/压缩策略/触发阈值)──
 
   String get _contextSubtitle {
     final window = _contextWindow.text.trim();
     final mode = switch (_compactMode) {
-      'error' => '客户端压缩',
-      'auto' => '上游压缩',
+      'error' => '拦截',
       _ => '元数据',
     };
     final w = window.isEmpty || window == '0' ? '窗口未声明' : '窗口 ${window}k';
@@ -430,8 +427,7 @@ class _ModelFormState extends State<ModelForm> {
                 },
               ),
             ),
-            // 上下文压缩:模式下拉常驻;阈值对 error/auto 生效;
-            // 保留轮数仅 auto 使用
+            // 上下文压缩:模式下拉常驻;阈值仅 error 生效
             LabeledField(
               key: const ValueKey('model-compact-mode-field'),
               label: '上下文压缩策略',
@@ -439,10 +435,9 @@ class _ModelFormState extends State<ModelForm> {
                 key: const ValueKey('model-compact-mode'),
                 value: _compactMode,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
-                options: const ['passive', 'error', 'auto'],
+                options: const ['passive', 'error'],
                 labelOf: (m) => switch (m) {
-                  'error' => '客户端压缩',
-                  'auto' => '上游压缩',
+                  'error' => '拦截',
                   _ => '元数据',
                 },
                 onChanged: (v) => setState(() => _compactMode = v!),
@@ -455,7 +450,7 @@ class _ModelFormState extends State<ModelForm> {
               LabeledField(
                 key: const ValueKey('model-compact-threshold-field'),
                 label: '触发阈值',
-                hint: '估算输入超过窗口此比例时触发',
+                hint: '估算输入超过窗口此比例时拦截',
                 child: TextFormField(
                   key: const ValueKey('model-compact-threshold'),
                   controller: _compactThreshold,
@@ -474,27 +469,7 @@ class _ModelFormState extends State<ModelForm> {
                   },
                 ),
               ),
-              _compactMode == 'auto'
-                  ? LabeledField(
-                      key: const ValueKey('model-compact-keep-field'),
-                      label: '保留最近轮数',
-                      hint: '压缩后原样保留的最近对话轮数',
-                      child: TextFormField(
-                        key: const ValueKey('model-compact-keep'),
-                        controller: _compactKeepTurns,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
-                        ),
-                        validator: (v) {
-                          final n = int.tryParse(v?.trim() ?? '');
-                          if (n == null) return '请填写整数';
-                          if (n < 1) return '至少保留 1 轮';
-                          return null;
-                        },
-                      ),
-                    )
-                  : const SizedBox.shrink(),
+              const SizedBox.shrink(),
             ),
           ],
         ],

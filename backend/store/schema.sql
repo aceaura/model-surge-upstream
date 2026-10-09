@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS models (
 );
 
 -- 已存在的库补列：CREATE TABLE IF NOT EXISTS 不会改旧表结构。
--- compact 承载上下文压缩配置（mode/threshold/keep_turns/max_summary_tokens）。
+-- compact 承载上下文压缩配置（mode/threshold）。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS compact JSONB NOT NULL DEFAULT '{}';
 
 -- efforts 为推理档支持列表：JSON null=自动（按协议+模型名规则推导），

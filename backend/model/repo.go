@@ -418,7 +418,7 @@ func normalizeEfforts(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 // normalizeCompact 校验 compact JSON：必须是对象；mode 只允许
-// passive/error/auto；数值项给出合理范围。mode 的取值集合定义在此
+// passive/error；数值项给出合理范围。mode 的取值集合定义在此
 // 而非 compact 包——compact 依赖 resolve、resolve 依赖本包，
 // 反向引用会成环，故取值集合随存储校验落在这里。
 func normalizeCompact(raw json.RawMessage) (json.RawMessage, error) {
@@ -427,28 +427,20 @@ func normalizeCompact(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	var probe struct {
-		Mode             string   `json:"mode"`
-		Threshold        *float64 `json:"threshold"`
-		KeepTurns        *int     `json:"keep_turns"`
-		MaxSummaryTokens *int     `json:"max_summary_tokens"`
+		Mode      string   `json:"mode"`
+		Threshold *float64 `json:"threshold"`
 	}
 	if err := json.Unmarshal(obj, &probe); err != nil {
 		return nil, apperr.New(apperr.InvalidJSON, "compact must be a json object")
 	}
 	switch probe.Mode {
-	case "", "passive", "error", "auto":
+	case "", "passive", "error":
 	default:
 		return nil, apperr.New(apperr.InvalidRequest,
-			"compact.mode must be one of: passive, error, auto")
+			"compact.mode must be one of: passive, error")
 	}
 	if probe.Threshold != nil && (*probe.Threshold <= 0 || *probe.Threshold > 1) {
 		return nil, apperr.New(apperr.InvalidRequest, "compact.threshold must be in (0, 1]")
-	}
-	if probe.KeepTurns != nil && *probe.KeepTurns < 1 {
-		return nil, apperr.New(apperr.InvalidRequest, "compact.keep_turns must be positive")
-	}
-	if probe.MaxSummaryTokens != nil && *probe.MaxSummaryTokens < 1 {
-		return nil, apperr.New(apperr.InvalidRequest, "compact.max_summary_tokens must be positive")
 	}
 	return obj, nil
 }

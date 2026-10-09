@@ -80,10 +80,10 @@ func compactDefaults(getenv Getenv) (compact.Defaults, error) {
 	d := compact.DefaultConfig()
 	if v := strings.TrimSpace(getenv("MSU_COMPACT_MODE")); v != "" {
 		switch m := compact.Mode(v); m {
-		case compact.ModePassive, compact.ModeError, compact.ModeAuto:
+		case compact.ModePassive, compact.ModeError:
 			d.Mode = m
 		default:
-			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_MODE: %q (want passive|error|auto)", v)
+			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_MODE: %q (want passive|error)", v)
 		}
 	}
 	if v := strings.TrimSpace(getenv("MSU_COMPACT_THRESHOLD")); v != "" {
@@ -92,24 +92,6 @@ func compactDefaults(getenv Getenv) (compact.Defaults, error) {
 			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_THRESHOLD: %q (want 0<x<=1)", v)
 		}
 		d.Threshold = f
-	}
-	if v := strings.TrimSpace(getenv("MSU_COMPACT_KEEP_TURNS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_KEEP_TURNS: %q (want positive int)", v)
-		}
-		d.KeepTurns = n
-	}
-	if v := strings.TrimSpace(getenv("MSU_COMPACT_MAX_SUMMARY_TOKENS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_MAX_SUMMARY_TOKENS: %q (want positive int)", v)
-		}
-		d.MaxSummaryTokens = n
-	}
-	var err error
-	if d.Timeout, err = duration(getenv, "MSU_COMPACT_TIMEOUT", d.Timeout); err != nil {
-		return compact.Defaults{}, err
 	}
 	return d, nil
 }

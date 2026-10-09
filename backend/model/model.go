@@ -18,8 +18,8 @@ type Model struct {
 	ContextWindow int             `json:"context_window"`
 	Defaults      json.RawMessage `json:"defaults"`
 	Overrides     json.RawMessage `json:"overrides"`
-	// Compact 上下文压缩配置：{"mode":"passive|error|auto", "threshold",
-	// "keep_turns", "max_summary_tokens"}，缺项回落到全局 env 默认。
+	// Compact 上下文压缩配置：{"mode":"passive|error", "threshold"}，
+	// 缺项回落到全局 env 默认。
 	Compact json.RawMessage `json:"compact"`
 	// Efforts 推理档支持列表的原始配置：null=自动（跟随上游 /models 声明的
 	// supported_reasoning_levels），数组=管理员显式声明的 [{name,value}]

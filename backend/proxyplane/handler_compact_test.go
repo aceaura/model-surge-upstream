@@ -14,13 +14,10 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
 
-// compactUpstream 区分摘要调用（末条消息含压缩指令）与主请求：
-// 摘要回 Anthropic 非流式摘要响应，主请求回 SSE 流。两者都记录请求体。
+// compactUpstream 只服务主请求：回 SSE 流并记录请求体。
 type compactUpstream struct {
 	mu           sync.Mutex
-	summaryBody  []byte
 	forwardBody  []byte
-	summaryCalls int
 	forwardCalls int
 }
 
@@ -29,13 +26,6 @@ func (u *compactUpstream) handler() http.Handler {
 		raw, _ := io.ReadAll(r.Body)
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		if strings.Contains(string(raw), "压缩为一份详尽摘要") {
-			u.summaryCalls++
-			u.summaryBody = raw
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"[SUMMARY] 早期历史摘要"}],"usage":{"input_tokens":500,"output_tokens":10}}`))
-			return
-		}
 		u.forwardCalls++
 		u.forwardBody = raw
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -92,61 +82,6 @@ func (s *recordSink) all() []UsageRecord {
 	return append([]UsageRecord{}, s.recs...)
 }
 
-func TestAutoCompactRewritesHistoryAndKeepsStream(t *testing.T) {
-	up := &compactUpstream{}
-	srv := httptest.NewServer(up.handler())
-	defer srv.Close()
-
-	sink := &recordSink{}
-	h := NewHandler(testKey, compactResolver(srv.URL, "auto"), sink.add).
-		WithCompactor(compact.NewRunner(compact.DefaultConfig()))
-
-	rec := doRequest(t, h, http.MethodPost, "/v1/messages",
-		map[string]string{"x-api-key": testKey}, longHistory(10))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
-	}
-	// SSE 逐事件透传无损。
-	body := rec.Body.String()
-	for _, want := range []string{"message_start", "content_block_delta", "message_delta"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("SSE 响应缺 %s: %s", want, body)
-		}
-	}
-	// 上游先收摘要、再收主请求，各一次。
-	if up.summaryCalls != 1 || up.forwardCalls != 1 {
-		t.Fatalf("summary=%d forward=%d, want 1/1", up.summaryCalls, up.forwardCalls)
-	}
-	var fwd map[string]any
-	if err := json.Unmarshal(up.forwardBody, &fwd); err != nil {
-		t.Fatalf("forward body not json: %v", err)
-	}
-	msgs := fwd["messages"].([]any)
-	// [摘要user, 假assistant] + 最近 6 轮 12 条 = 14
-	if len(msgs) != 14 {
-		t.Fatalf("压缩后 messages = %d, want 14", len(msgs))
-	}
-	first := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
-	if !strings.Contains(first["text"].(string), "[SUMMARY]") {
-		t.Fatalf("首条应为摘要: %v", first["text"])
-	}
-	// model 重写仍然生效。
-	if fwd["model"] != "claude-native" {
-		t.Fatalf("model = %v", fwd["model"])
-	}
-	// 用量两条：摘要（非流式 200）+ 主请求（流式 200）。
-	recs := sink.all()
-	if len(recs) != 2 {
-		t.Fatalf("usage records = %d, want 2", len(recs))
-	}
-	if recs[0].IsStreaming || recs[0].Usage.InputTokens != 500 {
-		t.Fatalf("摘要记录: %+v", recs[0])
-	}
-	if !recs[1].IsStreaming {
-		t.Fatalf("主请求记录应为流式: %+v", recs[1])
-	}
-}
-
 func TestErrorModeRejectsWithNativeShape(t *testing.T) {
 	up := &compactUpstream{}
 	srv := httptest.NewServer(up.handler())
@@ -175,7 +110,7 @@ func TestErrorModeRejectsWithNativeShape(t *testing.T) {
 	if env.Error.Type != "invalid_request_error" || !strings.Contains(env.Error.Message, "prompt is too long") {
 		t.Fatalf("error = %+v", env.Error)
 	}
-	if up.summaryCalls+up.forwardCalls != 0 {
+	if up.forwardCalls != 0 {
 		t.Fatal("error 模式不应触达上游")
 	}
 	// 失败也记一条用量（状态 400、用量为 0）。
@@ -197,9 +132,6 @@ func TestPassiveModePassesThrough(t *testing.T) {
 		map[string]string{"x-api-key": testKey}, longHistory(10))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
-	}
-	if up.summaryCalls != 0 {
-		t.Fatal("passive 不应触发摘要调用")
 	}
 	var fwd map[string]any
 	_ = json.Unmarshal(up.forwardBody, &fwd)

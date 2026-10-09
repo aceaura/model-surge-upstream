@@ -318,8 +318,8 @@ class UpstreamModel {
   final Map<String, dynamic> defaults;
   final Map<String, dynamic> overrides;
 
-  /// 上下文压缩配置:{mode: passive|error|auto, threshold, keep_turns,
-  /// max_summary_tokens}。passive=只记录不生效。
+  /// 上下文压缩配置:{mode: passive|error, threshold}。
+  /// passive=只记录不生效。
   final Map<String, dynamic> compact;
   final bool enabled;
 
