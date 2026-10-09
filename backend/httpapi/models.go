@@ -23,9 +23,15 @@ type modelRequest struct {
 	// Efforts 推理档支持列表:null=自动(跟随上游声明),数组=显式声明;缺省不改现状。
 	Efforts json.RawMessage `json:"efforts"`
 	// EffortFormat effort 写入格式:缺省(null)不改现状,空串=协议内置映射,
-	// 非空=显式格式(effort.FormatXxx 枚举,保存期校验)。
+	// 非空=显式格式(effort 双端词表,保存期归一+校验)。
 	EffortFormat *string `json:"effort_format"`
-	Enabled      *bool   `json:"enabled"`
+	// EffortIn 入口 effort 格式:缺省不改现状,空串=auto=现状,非空=显式声明。
+	EffortIn *string `json:"effort_in"`
+	// EffortOff 0 档关思考落定:缺省不改现状,空串=disabled。
+	EffortOff *string `json:"effort_off"`
+	// EffortBudgets 预算覆盖:缺省不改现状,{}=清空,对象=档位值→正整数。
+	EffortBudgets json.RawMessage `json:"effort_budgets"`
+	Enabled       *bool           `json:"enabled"`
 }
 
 func (r modelRequest) input(id string) model.Input {
@@ -40,6 +46,9 @@ func (r modelRequest) input(id string) model.Input {
 		Compact:       r.Compact,
 		Efforts:       r.Efforts,
 		EffortFormat:  r.EffortFormat,
+		EffortIn:      r.EffortIn,
+		EffortOff:     r.EffortOff,
+		EffortBudgets: r.EffortBudgets,
 		Enabled:       true,
 	}
 	if r.Enabled != nil {

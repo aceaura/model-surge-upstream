@@ -232,29 +232,22 @@ const (
 	FormatGemini          = "gemini"
 )
 
-// ValidFormat 判定 effort_format 是否为合法取值(空串=协议内置)。
-func ValidFormat(format string) bool {
-	switch format {
-	case FormatAuto, FormatChatCompletions, FormatResponses,
-		FormatAnthropic, FormatGemini:
-		return true
-	}
-	return false
-}
-
-// ApplyFormat 按选定格式把映射出的档位值写进请求体:内置(空)跟随出站
-// 协议,显式格式压过协议外形。none 语义随格式定义(见常量注释)。
+// ApplyFormat 按选定格式把映射出的档位值写进请求体:先归一(旧四值别名)
+// 再分派——旧四值与 auto 走原 Apply(逐字旧行为),新格式走 Write 默认
+// 落定(disabled/内置预算/不钳)。none 语义随格式定义(见常量注释)。
 func ApplyFormat(format, protocol string, body map[string]any, value string) {
-	switch format {
-	case FormatChatCompletions:
+	switch NormalizeFormat(format) {
+	case FormatOpenAIChat:
 		Apply(provider.ProtocolChatCompletions, body, value)
-	case FormatResponses:
+	case FormatOpenAIResponses:
 		Apply(provider.ProtocolResponses, body, value)
-	case FormatAnthropic:
+	case FormatAnthropicEffort:
 		Apply(provider.ProtocolAnthropic, body, value)
-	case FormatGemini:
+	case FormatGeminiLevel:
 		Apply(provider.ProtocolGemini, body, value)
-	default:
+	case FormatAuto:
 		Apply(protocol, body, value)
+	default:
+		Write(format, protocol, nil, body, value, OffDisabled, nil, 0)
 	}
 }

@@ -253,6 +253,9 @@ class ApiClient {
     Map<String, dynamic>? compact,
     List<EffortEntry>? efforts,
     String? effortFormat,
+    String? effortIn,
+    String? effortOff,
+    Map<String, int>? effortBudgets,
     bool enabled = true,
   }) async {
     final body = await _send(
@@ -271,6 +274,10 @@ class ApiClient {
         'efforts': efforts?.map((e) => e.toJson()).toList(),
         // 表单恒带键:空串=协议内置映射;非空=显式格式(服务端校验枚举)。
         'effort_format': ?effortFormat,
+        // 双端转换:入口格式(空=auto)、关思考落定、预算覆盖(空=内置表)。
+        'effort_in': ?effortIn,
+        'effort_off': ?effortOff,
+        'effort_budgets': ?effortBudgets,
         'enabled': enabled,
       },
     );
@@ -289,6 +296,9 @@ class ApiClient {
     Map<String, dynamic>? compact,
     List<EffortEntry>? efforts,
     String? effortFormat,
+    String? effortIn,
+    String? effortOff,
+    Map<String, int>? effortBudgets,
     required bool enabled,
   }) async {
     final body = await _send(
@@ -307,6 +317,9 @@ class ApiClient {
         // 表单总是知道目标形态(自动/显式),恒带键提交;null=恢复自动。
         'efforts': efforts?.map((e) => e.toJson()).toList(),
         'effort_format': ?effortFormat,
+        'effort_in': ?effortIn,
+        'effort_off': ?effortOff,
+        'effort_budgets': ?effortBudgets,
         'enabled': enabled,
       },
     );

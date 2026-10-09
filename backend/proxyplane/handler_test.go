@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -617,6 +618,337 @@ func TestReasoningLevelFormatTakesOver(t *testing.T) {
 	if got["model"] != "k3-256k" {
 		t.Fatalf("model = %v, want k3-256k", got["model"])
 	}
+}
+
+// entryTargets 双端转换回归夹具:anthropic 出站、档位 0=none/1=low/2=medium,
+// 每个用例按需改 EffortIn/EffortOff/EffortBudgets/EffortFormat。
+func entryTargets(baseURL string) map[string]resolve.ResolvedTarget {
+	return map[string]resolve.ResolvedTarget{"my-claude": {
+		ModelID: "my-claude", Account: "kimi-1", ProviderID: "kimi.global.subscribe.coding",
+		Protocol: "anthropic", BaseURL: baseURL, NativeModel: "kimi-k2",
+		Headers: map[string]string{"x-api-key": "real-account-key", "anthropic-version": "2023-06-01"},
+		Efforts: []effort.Entry{
+			{Name: "0", Value: "none"},
+			{Name: "1", Value: "low"},
+			{Name: "2", Value: "medium"},
+		},
+	}}
+}
+
+func doEntryRequest(t *testing.T, target resolve.ResolvedTarget, body string) map[string]any {
+	t.Helper()
+	cap := &captured{}
+	up := httptest.NewServer(cap.handler(http.StatusOK, `{"ok":true}`))
+	defer up.Close()
+	target.BaseURL = up.URL
+	h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{"my-claude": target}}, nil)
+	path, headers := "/v1/messages", map[string]string{"x-api-key": testKey}
+	if target.Protocol == "chat_completions" {
+		path, headers = "/v1/chat/completions", map[string]string{"Authorization": "Bearer " + testKey}
+	}
+	rec := doRequest(t, h, http.MethodPost, path, headers, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	gotBody, _, _ := cap.snapshot()
+	var got map[string]any
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("upstream body not json: %v", err)
+	}
+	return got
+}
+
+// TestEntryFormatReadAndStrip 锁定显式入口格式主路径:harness 自带的 effort
+// 字段按 EffortIn 读成规范档,写成上游形态后剥离入口残留键(含空壳中层对象);
+// 入口==上游有效形态时不剥离(剥离会吃掉刚写入的字段);入口未命中不剥离。
+func TestEntryFormatReadAndStrip(t *testing.T) {
+	base := entryTargets("")["my-claude"]
+
+	// openai_chat 入口 → anthropic auto 上游:写 output_config.effort,
+	// 剥离顶层 reasoning_effort。
+	base.EffortIn = effort.FormatOpenAIChat
+	got := doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"medium"}`)
+	output, _ := got["output_config"].(map[string]any)
+	if output["effort"] != "medium" {
+		t.Fatalf("openai_chat 入口应写 output_config.effort: %v", got)
+	}
+	if _, leaked := got["reasoning_effort"]; leaked {
+		t.Fatalf("入口残留 reasoning_effort 未剥离: %v", got)
+	}
+
+	// openai_responses 入口:只删 reasoning.effort,兄弟键 summary 保留。
+	base.EffortIn = effort.FormatOpenAIResponses
+	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning":{"effort":"low","summary":"auto"}}`)
+	output, _ = got["output_config"].(map[string]any)
+	if output["effort"] != "low" {
+		t.Fatalf("openai_responses 入口应写 output_config.effort: %v", got)
+	}
+	reasoning, ok := got["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("reasoning 兄弟键应保留: %v", got)
+	}
+	if _, leaked := reasoning["effort"]; leaked {
+		t.Fatalf("reasoning.effort 未剥离: %v", got)
+	}
+	if reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning.summary 应保留: %v", got)
+	}
+
+	// 入口==上游有效形态(均 openai_chat):写入即剥离会自吃,不得剥离。
+	base.Protocol = "chat_completions"
+	base.EffortIn = effort.FormatOpenAIChat
+	base.EffortFormat = ""
+	got = doEntryRequest(t, base, `{"model":"my-claude","messages":[],"reasoning_effort":"low"}`)
+	if got["reasoning_effort"] != "low" {
+		t.Fatalf("同形态不应剥离入口字段: %v", got)
+	}
+	base.Protocol = "anthropic"
+
+	// 入口字段未命中档位(预算 1000 不在映射):不写不剥离,原样透传。
+	base.EffortIn = effort.FormatAnthropicBudget
+	base.EffortBudgets = map[string]int{"medium": 8000}
+	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"thinking":{"type":"enabled","budget_tokens":1000}}`)
+	if _, assigned := got["output_config"]; assigned {
+		t.Fatalf("入口未命中不应写上游字段: %v", got)
+	}
+	thinking, _ := got["thinking"].(map[string]any)
+	if thinking["budget_tokens"] != float64(1000) {
+		t.Fatalf("入口未命中不应剥离入口字段: %v", got)
+	}
+}
+
+// TestEntryBudgetClampAndOffPolicy 锁定预算反查+钳制+关思考落定:覆盖表
+// 反查规范档,写 anthropic_budget 时钳到 max_tokens-1;0 档 off=omit 不写
+// 任何思考字段;off=between_tools 整对象顶替。
+func TestEntryBudgetClampAndOffPolicy(t *testing.T) {
+	base := entryTargets("")["my-claude"]
+	base.EffortIn = effort.FormatAnthropicBudget
+	base.EffortFormat = effort.FormatAnthropicBudget
+	base.EffortBudgets = map[string]int{"medium": 8000}
+
+	// 覆盖预算 8000 反查 medium,max_tokens=5000 钳到 4999。
+	got := doEntryRequest(t, base, `{"model":"my-claude","max_tokens":5000,"messages":[],"thinking":{"type":"enabled","budget_tokens":8000}}`)
+	thinking, _ := got["thinking"].(map[string]any)
+	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(4999) {
+		t.Fatalf("预算应反查 medium 并钳到 max_tokens-1: %v", got)
+	}
+
+	// 0 档 + off=omit:不写思考字段,入口残留照剥。
+	base.EffortIn = effort.FormatOpenAIChat
+	base.EffortFormat = ""
+	base.EffortBudgets = nil
+	base.EffortOff = effort.OffOmit
+	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"none"}`)
+	if _, ok := got["thinking"]; ok {
+		t.Fatalf("off=omit 不应写 thinking: %v", got)
+	}
+	if _, leaked := got["reasoning_effort"]; leaked {
+		t.Fatalf("入口残留 reasoning_effort 未剥离: %v", got)
+	}
+
+	// 0 档 + off=between_tools:整对象顶替。
+	base.EffortOff = effort.OffBetweenTools
+	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"none"}`)
+	thinking, _ = got["thinking"].(map[string]any)
+	if thinking["type"] != "between_tools" || len(thinking) != 1 {
+		t.Fatalf("off=between_tools 应整对象顶替: %v", got)
+	}
+
+	// 上游 anthropic_adaptive:载档写 thinking.type=adaptive + output_config.effort。
+	base.EffortOff = ""
+	base.EffortIn = effort.FormatOpenAIChat
+	base.EffortFormat = effort.FormatAnthropicAdaptive
+	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"medium"}`)
+	thinking, _ = got["thinking"].(map[string]any)
+	output, _ := got["output_config"].(map[string]any)
+	if thinking["type"] != "adaptive" || output["effort"] != "medium" {
+		t.Fatalf("adaptive 上游应写 thinking.type + output_config.effort: %v", got)
+	}
+	if _, leaked := got["reasoning_effort"]; leaked {
+		t.Fatalf("入口残留 reasoning_effort 未剥离: %v", got)
+	}
+}
+
+// TestEntryAutoLeavesBodyUntouched 锁定 EffortIn 空=auto=现状:不解析入口
+// 字段、不剥离(harness 自带的思考参数原样透传),reasoning_level 数字档
+// 仍照旧消费映射。
+func TestEntryAutoLeavesBodyUntouched(t *testing.T) {
+	base := entryTargets("")["my-claude"]
+
+	got := doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"medium","thinking":{"type":"enabled","budget_tokens":1000},"reasoning_level":"1"}`)
+	if got["reasoning_effort"] != "medium" {
+		t.Fatalf("auto 不应动 harness 自带 reasoning_effort: %v", got)
+	}
+	thinking, _ := got["thinking"].(map[string]any)
+	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(1000) {
+		t.Fatalf("auto 不应动 harness 自带 thinking: %v", got)
+	}
+	output, _ := got["output_config"].(map[string]any)
+	if output["effort"] != "low" {
+		t.Fatalf("reasoning_level=1 应映射 low: %v", got)
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+}
+
+// matrixCarries 判定入口格式能否承载该规范档:anthropic_off 只承载 none;
+// 预算类(anthropic_budget/gemini_budget)无 none 的线表示,不承载 none。
+func matrixCarries(format, value string) bool {
+	switch value {
+	case "high":
+		return format != effort.FormatAnthropicOff
+	case "none":
+		return format != effort.FormatAnthropicBudget && format != effort.FormatGeminiBudget
+	}
+	return false
+}
+
+// matrixEntry 按入口格式构造承载规范档的最小上行线体(每次返回新 map,
+// 供 applyReasoningLevel 原位改写)。auto/effort_index 用 reasoning_level 数字档。
+func matrixEntry(format, value string) map[string]any {
+	// reasoning_level 用 float64:生产路径经 json.Unmarshal 数字即 float64,
+	// reasoningLevel/numberOrString 按此识别(裸 int 不是线上形态)。
+	level := float64(3)
+	if value == "none" {
+		level = 0
+	}
+	switch format {
+	case "", effort.FormatIndex:
+		return map[string]any{"reasoning_level": level}
+	case effort.FormatOpenAIChat:
+		return map[string]any{"reasoning_effort": value}
+	case effort.FormatOpenAIResponses:
+		return map[string]any{"reasoning": map[string]any{"effort": value}}
+	case effort.FormatAnthropicEffort:
+		return map[string]any{"output_config": map[string]any{"effort": value}}
+	case effort.FormatAnthropicBudget:
+		return map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 10000}}
+	case effort.FormatAnthropicAdaptive:
+		return map[string]any{"thinking": map[string]any{"type": "adaptive"}, "output_config": map[string]any{"effort": value}}
+	case effort.FormatAnthropicOff:
+		return map[string]any{"thinking": map[string]any{"type": "disabled"}}
+	case effort.FormatGeminiLevel:
+		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": strings.ToUpper(value)}}}
+	case effort.FormatGeminiBudget:
+		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingBudget": 10000}}}
+	}
+	return nil
+}
+
+// matrixExpectUpstream 独立写定的上游期望线体(不复用引擎助手,做真值oracle):
+// 转换后上行体应恰好等于该形态——入口残留已剥离、规范档按上游格式落笔。
+func matrixExpectUpstream(format, value, off string) map[string]any {
+	if value == "none" {
+		switch format {
+		case effort.FormatIndex:
+			return map[string]any{"reasoning_level": 0}
+		case effort.FormatOpenAIChat:
+			return map[string]any{"reasoning_effort": "none"}
+		case effort.FormatOpenAIResponses:
+			return map[string]any{"reasoning": map[string]any{"effort": "none"}}
+		case effort.FormatGeminiLevel, effort.FormatGeminiBudget:
+			return map[string]any{}
+		case effort.FormatAnthropicEffort, effort.FormatAnthropicBudget,
+			effort.FormatAnthropicAdaptive, effort.FormatAnthropicOff:
+			switch off {
+			case effort.OffOmit:
+				return map[string]any{}
+			case effort.OffBetweenTools:
+				return map[string]any{"thinking": map[string]any{"type": "between_tools"}}
+			default:
+				return map[string]any{"thinking": map[string]any{"type": "disabled"}}
+			}
+		}
+		return nil
+	}
+	switch format {
+	case effort.FormatIndex:
+		return map[string]any{"reasoning_level": 3}
+	case effort.FormatOpenAIChat:
+		return map[string]any{"reasoning_effort": "high"}
+	case effort.FormatOpenAIResponses:
+		return map[string]any{"reasoning": map[string]any{"effort": "high"}}
+	case effort.FormatAnthropicEffort:
+		return map[string]any{"output_config": map[string]any{"effort": "high"}}
+	case effort.FormatAnthropicBudget:
+		return map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 10000}}
+	case effort.FormatAnthropicAdaptive:
+		return map[string]any{"thinking": map[string]any{"type": "adaptive"}, "output_config": map[string]any{"effort": "high"}}
+	case effort.FormatAnthropicOff:
+		return map[string]any{}
+	case effort.FormatGeminiLevel:
+		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "HIGH"}}}
+	case effort.FormatGeminiBudget:
+		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingBudget": 10000}}}
+	}
+	return nil
+}
+
+// TestEffortConversionMatrix 沙盒穷举:每一种入口格式 × 每一种上游格式 ×
+// 档值(high/none)驱动真实转发管线 applyReasoningLevel,断言上行体恰好落到
+// 该上游格式的线形态且入口残留键已剥离。这是「所有上下游转换能否成功」的
+// 决定性证据——覆盖 anthropic 族共用 output_config.effort / thinking.type 的
+// 交叉配对(写后剥离会自吃,必须先剥后写)。
+func TestEffortConversionMatrix(t *testing.T) {
+	list := []effort.Entry{
+		{Name: "0", Value: "none"},
+		{Name: "1", Value: "low"},
+		{Name: "2", Value: "medium"},
+		{Name: "3", Value: "high"},
+	}
+	protocolOf := map[string]string{
+		effort.FormatIndex:             "chat_completions",
+		effort.FormatOpenAIChat:        "chat_completions",
+		effort.FormatOpenAIResponses:   "responses",
+		effort.FormatAnthropicEffort:   "anthropic",
+		effort.FormatAnthropicBudget:   "anthropic",
+		effort.FormatAnthropicAdaptive: "anthropic",
+		effort.FormatAnthropicOff:      "anthropic",
+		effort.FormatGeminiLevel:       "gemini",
+		effort.FormatGeminiBudget:      "gemini",
+	}
+	upstreams := []string{
+		effort.FormatIndex, effort.FormatOpenAIChat, effort.FormatOpenAIResponses,
+		effort.FormatAnthropicEffort, effort.FormatAnthropicBudget, effort.FormatAnthropicAdaptive,
+		effort.FormatAnthropicOff, effort.FormatGeminiLevel, effort.FormatGeminiBudget,
+	}
+	entries := append([]string{""}, upstreams...) // auto + 九种显式入口
+
+	convert := func(value, off string, upstreams []string) int {
+		n := 0
+		for _, E := range entries {
+			if !matrixCarries(E, value) {
+				continue
+			}
+			for _, U := range upstreams {
+				body := matrixEntry(E, value)
+				target := resolve.ResolvedTarget{
+					Protocol: protocolOf[U], Efforts: list,
+					EffortIn: E, EffortFormat: U, EffortOff: off,
+				}
+				applyReasoningLevel(target, body)
+				want := matrixExpectUpstream(U, value, off)
+				n++
+				if !reflect.DeepEqual(body, want) {
+					t.Errorf("档值=%s off=%q 入口=%q 上游=%q:\n got %#v\nwant %#v", value, off, E, U, body, want)
+				}
+			}
+		}
+		return n
+	}
+
+	cases := convert("high", "", upstreams)
+	cases += convert("none", "", upstreams)
+	// off 变体只对 anthropic 族上游有意义(其余格式忽略 effort_off)。
+	anthropicUps := []string{
+		effort.FormatAnthropicEffort, effort.FormatAnthropicBudget,
+		effort.FormatAnthropicAdaptive, effort.FormatAnthropicOff,
+	}
+	for _, off := range []string{effort.OffBetweenTools, effort.OffOmit} {
+		cases += convert("none", off, anthropicUps)
+	}
+	t.Logf("effort 转换矩阵:%d 个 入口×上游×档值×off 用例全部通过", cases)
 }
 
 func TestGeminiForwardRewritesPathAndStripsKeyQuery(t *testing.T) {

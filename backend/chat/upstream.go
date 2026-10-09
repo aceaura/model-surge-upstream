@@ -157,13 +157,12 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 	return suffix, body, nil
 }
 
-// applyEffort 把对话页选定的推理档写进请求体,与转发面 reasoning_level
-// 数字档共用同一份映射逻辑:按模型的写入格式(effort_format,空=协议
-// 内置,effort.Apply:responses=reasoning.effort、chat_completions=
-// reasoning_effort、anthropic=output_config.effort 或 none 时 thinking
-// disabled、gemini=thinkingConfig.thinkingLevel)格式化写入。
+// applyEffort 把对话页选定的推理档写进请求体,与转发面共用同一份双端引擎:
+// 按模型的上游格式(effort_format,空=协议内置)落笔,none 语义随格式与
+// 关思考落定(effort_off),预算类格式按覆盖/内置映射取数并钳到体里上限。
 func applyEffort(target resolve.ResolvedTarget, body map[string]any, value string) {
-	effort.ApplyFormat(target.EffortFormat, target.Protocol, body, value)
+	effort.Write(target.EffortFormat, target.Protocol, target.Efforts, body, value,
+		target.EffortOff, target.EffortBudgets, effort.BodyMaxTokens(target.Protocol, body))
 }
 
 // messageList 生成 [{role, content}] 形态；content 由 perMessage 决定。

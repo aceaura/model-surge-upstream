@@ -45,6 +45,13 @@ type ResolvedTarget struct {
 	// EffortFormat 是模型的 effort 写入格式(effort.FormatXxx 枚举):
 	// 空=协议内置映射,非空=显式格式压过协议外形(厂商差异的承接点)。
 	EffortFormat string `json:"effort_format,omitempty"`
+	// EffortIn 是入口 effort 格式(空=auto=现状):非空时转发面按它从上行体
+	// 读规范档并剥离残留键,承接 harness/非官方 upstream 的形态差异。
+	EffortIn string `json:"effort_in,omitempty"`
+	// EffortOff 是 0 档在 anthropic 族上游的关思考落定(空=disabled)。
+	EffortOff string `json:"effort_off,omitempty"`
+	// EffortBudgets 是档位值→预算 token 覆盖(空=全内置映射),预算类格式生效。
+	EffortBudgets map[string]int `json:"effort_budgets,omitempty"`
 }
 
 // 认证头名。
@@ -171,7 +178,10 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Overrides:     m.Overrides,
 		Compact:       m.Compact,
 		Efforts:       r.effectiveEfforts(ctx, acc.Name, m),
-		EffortFormat:  m.EffortFormat,
+		EffortFormat:  effort.NormalizeFormat(m.EffortFormat),
+		EffortIn:      m.EffortIn,
+		EffortOff:     m.EffortOff,
+		EffortBudgets: m.EffortBudgets,
 	}, nil
 }
 

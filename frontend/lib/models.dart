@@ -305,6 +305,9 @@ class UpstreamModel {
     this.efforts,
     this.effortsEffective = const [],
     this.effortFormat = '',
+    this.effortIn = '',
+    this.effortOff = '',
+    this.effortBudgets = const {},
   });
 
   final String id;
@@ -332,6 +335,19 @@ class UpstreamModel {
   /// 承接「协议外壳+自家字段」的厂商差异(如 kimi 顶层 reasoning_effort)。
   final String effortFormat;
 
+  /// 入口 effort 格式:空=auto=现状(对话页选档与 reasoning_level 数字档,
+  /// 透传体不解析不剥离);非空=显式声明 harness 送进来的形态,转发面按它
+  /// 把体里的 effort 字段读成规范档并剥离残留键。
+  final String effortIn;
+
+  /// 0 档在 anthropic 族上游的关思考落定:空=disabled 标准写法 /
+  /// between_tools=Sonnet 5.5 顶替 disabled / omit=不写(上游思考恒开)。
+  final String effortOff;
+
+  /// 档位值→预算 token 覆盖(空=全内置映射 low=1024/medium=4000/high=10000/
+  /// xhigh=20000/max=32000),预算类上游格式(anthropic_budget/gemini_budget)生效。
+  final Map<String, int> effortBudgets;
+
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
     id: json['id'] as String,
     account: json['account'] as String? ?? '',
@@ -349,6 +365,10 @@ class UpstreamModel {
         .map((e) => EffortEntry.fromJson(e as Map<String, dynamic>))
         .toList(),
     effortFormat: json['effort_format'] as String? ?? '',
+    effortIn: json['effort_in'] as String? ?? '',
+    effortOff: json['effort_off'] as String? ?? '',
+    effortBudgets: (json['effort_budgets'] as Map<String, dynamic>? ?? const {})
+        .map((k, v) => MapEntry(k, (v as num).toInt())),
   );
 }
 

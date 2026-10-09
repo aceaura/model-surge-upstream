@@ -262,6 +262,59 @@ func TestResolvePassesParamLayersThrough(t *testing.T) {
 	}
 }
 
+// TestResolvePassesEffortConversionFieldsThrough 锁 DB→resolve→target 的
+// 双端转换四字段透传:入口格式/关思考落定/预算覆盖原样带出,上游格式经
+// NormalizeFormat 归一(新值不变、旧别名迁移)。转发面据此驱动读+写+剥离。
+func TestResolvePassesEffortConversionFieldsThrough(t *testing.T) {
+	accounts, models, _ := fixture()
+	m := models["kimi-1/k2"]
+	m.EffortIn = effort.FormatOpenAIChat
+	m.EffortFormat = effort.FormatAnthropicBudget
+	m.EffortOff = effort.OffBetweenTools
+	m.EffortBudgets = map[string]int{"high": 12000}
+	models["kimi-1/k2"] = m
+
+	got, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EffortIn != effort.FormatOpenAIChat {
+		t.Errorf("effort_in = %q, want verbatim passthrough", got.EffortIn)
+	}
+	if got.EffortFormat != effort.FormatAnthropicBudget {
+		t.Errorf("effort_format = %q, want new value unchanged", got.EffortFormat)
+	}
+	if got.EffortOff != effort.OffBetweenTools {
+		t.Errorf("effort_off = %q, want verbatim passthrough", got.EffortOff)
+	}
+	if got.EffortBudgets["high"] != 12000 || len(got.EffortBudgets) != 1 {
+		t.Errorf("effort_budgets = %v, want verbatim passthrough", got.EffortBudgets)
+	}
+}
+
+// TestResolveNormalizesLegacyEffortFormat 锁旧 effort_format 别名在解析层
+// 迁移到新词表(存量配置零改库即生效)。
+func TestResolveNormalizesLegacyEffortFormat(t *testing.T) {
+	for legacy, want := range map[string]string{
+		"chat_completions": effort.FormatOpenAIChat,
+		"responses":        effort.FormatOpenAIResponses,
+		"anthropic":        effort.FormatAnthropicEffort,
+		"gemini":           effort.FormatGeminiLevel,
+	} {
+		accounts, models, _ := fixture()
+		m := models["kimi-1/k2"]
+		m.EffortFormat = legacy
+		models["kimi-1/k2"] = m
+		got, err := NewResolver(accounts, models).Resolve(context.Background(), "kimi-1/k2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.EffortFormat != want {
+			t.Errorf("effort_format(%q) = %q, want %q", legacy, got.EffortFormat, want)
+		}
+	}
+}
+
 func TestResolveDisabledBranches(t *testing.T) {
 	t.Run("model disabled", func(t *testing.T) {
 		accounts, models, _ := fixture()

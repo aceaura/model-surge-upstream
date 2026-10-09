@@ -116,6 +116,17 @@ UPDATE models SET effort_format = 'gemini' WHERE effort_format = 'thinking_level
 -- 并列回落 id 序(即拖拽功能存在之前的显示顺序)。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
 
+-- effort 双端转换(2026-10-10):effort_in=入口 effort 格式(空=auto=现状:
+-- 对话页选档+reasoning_level 数字档,透传体不解析不剥离);非空=显式声明
+-- harness 送进来的形态,转发面按它读规范档并剥离残留键。
+-- effort_off=0 档在 anthropic 族上游的关思考落定(空=disabled /
+-- between_tools=Sonnet 5.5 顶替 / omit=不写即上游不可关)。
+-- effort_budgets=档位值→预算 token 覆盖映射(空对象=全内置映射),
+-- 预算类上游格式(anthropic_budget/gemini_budget)生效。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_in TEXT NOT NULL DEFAULT '';
+ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_off TEXT NOT NULL DEFAULT '';
+ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_budgets JSONB NOT NULL DEFAULT '{}';
+
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 
 -- 代理转发面配置：单行表（id 恒为 1）。api_key 为空表示转发面关闭。

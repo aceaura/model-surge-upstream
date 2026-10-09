@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, enabled, created_at, updated_at, sort_order`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, effort_in, effort_off, effort_budgets, enabled, created_at, updated_at, sort_order`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -49,7 +49,15 @@ type Input struct {
 	// EffortFormat 写入格式：nil=跟随现状（Create 落空串=协议内置，Update
 	// 保留旧值），指向空串=回内置映射，非空=显式格式（保存期校验枚举）。
 	EffortFormat *string
-	Enabled      bool
+	// EffortIn 入口格式：nil=跟随现状（Create 落空串=auto），非空=显式声明
+	// （保存期归一+校验词表）。
+	EffortIn *string
+	// EffortOff 关思考落定：nil=跟随现状（Create 落空串=disabled）。
+	EffortOff *string
+	// EffortBudgets 预算覆盖原始 JSON：空=跟随现状（Create 落 {}），
+	// "{}"=清空覆盖，对象=档位值→正整数（保存期校验）。
+	EffortBudgets json.RawMessage
+	Enabled       bool
 	// NewID 改名目标（仅 Update 使用）：空=沿用 ID；非空且不同于 ID 时把
 	// 记录主键改写为 NewID，同事务随迁 chat_sessions.model_id。
 	// usage_logs 是历史流水，保留改名前的旧标识。
@@ -71,10 +79,11 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortFormat, m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
+			m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
+			m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -145,6 +154,15 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	if in.EffortFormat == nil {
 		in.EffortFormat = &existing.EffortFormat
 	}
+	if in.EffortIn == nil {
+		in.EffortIn = &existing.EffortIn
+	}
+	if in.EffortOff == nil {
+		in.EffortOff = &existing.EffortOff
+	}
+	if len(in.EffortBudgets) == 0 {
+		in.EffortBudgets = json.RawMessage(marshalBudgets(existing.EffortBudgets))
+	}
 	newID := strings.TrimSpace(in.NewID)
 	rename := newID != "" && newID != existing.ID
 	if rename {
@@ -163,10 +181,12 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 			tag, err := r.pool.Exec(ctx, `UPDATE models SET
 				account=$2, native_model=$3, protocol=$4, context_window=$5,
 				defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
-				enabled=$11, updated_at=$12 WHERE id=$1`,
+				effort_in=$11, effort_off=$12, effort_budgets=$13,
+				enabled=$14, updated_at=$15 WHERE id=$1`,
 				m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 				[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-				m.EffortFormat, m.Enabled, m.UpdatedAt)
+				m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
+				m.Enabled, m.UpdatedAt)
 			if err != nil {
 				return apperr.Wrap(apperr.StorageError, "update model", err)
 			}
@@ -184,10 +204,12 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 		tag, err := tx.Exec(ctx, `UPDATE models SET
 			id=$2, account=$3, native_model=$4, protocol=$5, context_window=$6,
 			defaults=$7, overrides=$8, compact=$9, efforts=$10, effort_format=$11,
-			enabled=$12, updated_at=$13 WHERE id=$1`,
+			effort_in=$12, effort_off=$13, effort_budgets=$14,
+			enabled=$15, updated_at=$16 WHERE id=$1`,
 			existing.ID, m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
-			m.EffortFormat, m.Enabled, m.UpdatedAt)
+			m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
+			m.Enabled, m.UpdatedAt)
 		if err != nil {
 			return mapWriteErr(err, m.ID)
 		}
@@ -305,9 +327,31 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if in.EffortFormat != nil {
 		format = strings.TrimSpace(*in.EffortFormat)
 	}
+	format = effort.NormalizeFormat(format)
 	if !effort.ValidFormat(format) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
-			"effort_format must be one of: chat_completions, responses, anthropic, gemini")
+			"effort_format must be one of: auto, effort_index, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off, gemini_level, gemini_budget")
+	}
+	effortIn := ""
+	if in.EffortIn != nil {
+		effortIn = strings.TrimSpace(*in.EffortIn)
+	}
+	effortIn = effort.NormalizeFormat(effortIn)
+	if !effort.ValidFormat(effortIn) {
+		return Model{}, apperr.New(apperr.InvalidRequest,
+			"effort_in must be one of: auto, effort_index, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off, gemini_level, gemini_budget")
+	}
+	effortOff := ""
+	if in.EffortOff != nil {
+		effortOff = strings.TrimSpace(*in.EffortOff)
+	}
+	if !effort.ValidOff(effortOff) {
+		return Model{}, apperr.New(apperr.InvalidRequest,
+			"effort_off must be one of: disabled, between_tools, omit")
+	}
+	budgets, err := normalizeBudgets(in.EffortBudgets)
+	if err != nil {
+		return Model{}, err
 	}
 
 	return Model{
@@ -321,8 +365,40 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		Compact:       compactCfg,
 		Efforts:       efforts,
 		EffortFormat:  format,
+		EffortIn:      effortIn,
+		EffortOff:     effortOff,
+		EffortBudgets: budgets,
 		Enabled:       in.Enabled,
 	}, nil
+}
+
+// normalizeBudgets 校验预算覆盖 JSON:空=空 map;必须是对象且值为正整数。
+func normalizeBudgets(raw json.RawMessage) (map[string]int, error) {
+	out := map[string]int{}
+	if len(raw) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, apperr.New(apperr.InvalidJSON, fmt.Sprintf("effort_budgets must be a json object of value->positive int: %v", err))
+	}
+	for k, v := range out {
+		if v <= 0 {
+			return nil, apperr.New(apperr.InvalidRequest, fmt.Sprintf("effort_budgets[%q] must be positive", k))
+		}
+	}
+	return out, nil
+}
+
+// marshalBudgets 预算覆盖落库序列化;nil 落 {}。
+func marshalBudgets(m map[string]int) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }
 
 // normalizeEfforts 把空值补成 JSON null（自动=跟随上游声明）；数组形态的
@@ -407,15 +483,23 @@ func scan(s scanner) (Model, error) {
 		overrides []byte
 		compact   []byte
 		efforts   []byte
+		budgets   []byte
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
+		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &m.EffortIn, &m.EffortOff,
+		&budgets, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)
 	m.Overrides = json.RawMessage(overrides)
 	m.Compact = json.RawMessage(compact)
 	m.Efforts = json.RawMessage(efforts)
+	m.EffortBudgets = map[string]int{}
+	if len(budgets) > 0 {
+		if err := json.Unmarshal(budgets, &m.EffortBudgets); err != nil {
+			return Model{}, apperr.Wrap(apperr.StorageError, "parse effort_budgets", err)
+		}
+	}
 	if len(m.Defaults) == 0 {
 		m.Defaults = json.RawMessage(`{}`)
 	}

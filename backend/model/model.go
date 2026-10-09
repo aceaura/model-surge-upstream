@@ -29,6 +29,16 @@ type Model struct {
 	// 映射(按出站协议选字段);非空=显式格式压过协议外形,承接
 	// 「协议外壳+自家字段」的厂商差异。
 	EffortFormat string `json:"effort_format"`
+	// EffortIn 入口 effort 格式(空=auto=现状:对话页选档与 reasoning_level
+	// 数字档,透传体不解析不剥离);非空=显式声明 harness 送进来的形态,
+	// 转发面按它把体里的 effort 字段读成规范档并剥离残留键。
+	EffortIn string `json:"effort_in"`
+	// EffortOff 0 档在 anthropic 族上游的关思考落定:空=disabled 标准写法 /
+	// between_tools=Sonnet 5.5 顶替 disabled / omit=不写(上游思考恒开)。
+	EffortOff string `json:"effort_off"`
+	// EffortBudgets 档位值→预算 token 覆盖(空 map=全内置映射 low=1024/
+	// medium=4000/high=10000/xhigh=20000/max=32000),预算类上游格式生效。
+	EffortBudgets map[string]int `json:"effort_budgets"`
 	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
 	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
 	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。

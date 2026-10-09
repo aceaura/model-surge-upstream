@@ -623,17 +623,31 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 }
 
 // applyReasoningLevel 通用档位映射:reasoning_level 是本网关的扩展字段,
-// 消费即删(未命中也不得泄漏上游);先取档号,再在模型声明里查匹配
-// (查不到/值为空不落字段,上游吃自家默认),命中按模型的写入格式
-// (effort_format,空=协议内置)格式化进请求体。
+// 消费即删(未命中也不得泄漏上游)。入口格式显式声明时先按它从体里读规范档
+// (harness 自带 effort 字段的主路径),未命中回退 reasoning_level 数字档;
+// 命中后先剥离入口残留键(声明了入口格式即剥;先剥后写才不会吃掉上游刚写的
+// 同名字段),再按模型的上游格式(effort_format,空=协议内置)格式化进请求体。
 func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
-	level, _ := reasoningLevel(body["reasoning_level"])
+	value, hit := "", false
+	if target.EffortIn != "" {
+		value, hit = effort.Read(target.EffortIn, body, target.Efforts, target.EffortBudgets)
+	}
+	level, hasLevel := reasoningLevel(body["reasoning_level"])
 	delete(body, "reasoning_level")
-	mapped, hit := effort.LevelOf(target.Efforts, level)
+	if !hit && hasLevel {
+		value, hit = effort.LevelOf(target.Efforts, level)
+	}
 	if !hit {
 		return
 	}
-	effort.ApplyFormat(target.EffortFormat, target.Protocol, body, mapped)
+	// 先剥离入口残留再写上游:入口与上游共用键时(anthropic 族 output_config.effort /
+	// thinking.type),写后剥离会吃掉刚写入的字段;Read 已取到规范档,剥离不再依赖入口键。
+	// 声明了入口格式即剥离(auto 不剥——现状透传不破坏 harness 自带字段)。
+	if target.EffortIn != "" {
+		effort.StripKeys(target.EffortIn, body)
+	}
+	effort.Write(target.EffortFormat, target.Protocol, target.Efforts, body, value,
+		target.EffortOff, target.EffortBudgets, effort.BodyMaxTokens(target.Protocol, body))
 }
 
 // reasoningLevel 归一 reasoning_level 的取值:字符串("2")与整数
