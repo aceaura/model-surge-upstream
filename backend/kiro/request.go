@@ -1088,13 +1088,72 @@ func payloadSize(payload object) int {
 	return len(encoded)
 }
 
-// trimPayloadToLimit 复刻 payload_guards.py trim_payload_to_limit:超限时从最老
-// 的历史成对(user/assistant)删除、至少保留 2 条,再对齐到 userInputMessage 开头,
-// 最后修复裁剪产生的孤儿 toolResults。参考实现由 AUTO_TRIM_PAYLOAD 门控且默认
-// 关闭(config.py:553),本网关恒开:长 agentic 会话超 600KB 是常态,硬拒会让整段
-// 会话不可用,丢最老轮次的损失小于整请求失败;上游超限只回一句误导的
-// "Improperly formed request."(payload_guards 模块注释)。裁完仍超限(历史不足
-// 3 条)不静默放行,由 transport 的硬拒兜底报错。
+// trimFloorBytes 内容级截断的阈值与保留头部长度。
+const trimFloorBytes = 4096
+
+// trimTextHead 保留头部并退回 UTF-8 边界;标记沿用 truncation.go 的
+// [API Limitation] 前缀,Output Truncation Handling 注入段已向模型解释其含义。
+func trimTextHead(text string) string {
+	head := text[:trimFloorBytes]
+	for !utf8.ValidString(head) {
+		head = head[:len(head)-1]
+	}
+	return fmt.Sprintf("[API Limitation] Content truncated by gateway to fit payload size limit (first %d of %d bytes).\n%s", len(head), len(text), head)
+}
+
+// trimSlot 闭包原位回写;size 为收集时的快照,用于从大到小排序。
+type trimSlot struct {
+	size int
+	get  func() string
+	set  func(string)
+}
+
+func collectTrimSlots(v any, slots *[]trimSlot) {
+	switch node := v.(type) {
+	case object:
+		for key, value := range node {
+			if s, ok := value.(string); ok && len(s) > trimFloorBytes {
+				k, n := key, node
+				*slots = append(*slots, trimSlot{size: len(s), get: func() string { return str(n[k]) }, set: func(t string) { n[k] = t }})
+			} else {
+				collectTrimSlots(value, slots)
+			}
+		}
+	case []any:
+		for _, item := range node {
+			collectTrimSlots(item, slots)
+		}
+	}
+}
+
+// trimSlotsOf 只收工具面字符串:历史轮 user 的 toolResults content、assistant
+// 的 toolUses input,以及 currentMessage 的 toolResults content(末轮工具结果
+// 并入此处)。用户/助手正文不截,模型自述与指令优先保全。
+func trimSlotsOf(payload object) []trimSlot {
+	state := obj(payload["conversationState"])
+	slots := []trimSlot{}
+	for _, entry := range list(state["history"]) {
+		for _, raw := range list(obj(obj(obj(entry)["userInputMessage"])["userInputMessageContext"])["toolResults"]) {
+			collectTrimSlots(obj(raw)["content"], &slots)
+		}
+		for _, use := range list(obj(obj(entry)["assistantResponseMessage"])["toolUses"]) {
+			collectTrimSlots(obj(use)["input"], &slots)
+		}
+	}
+	for _, raw := range list(obj(obj(obj(state["currentMessage"])["userInputMessage"])["userInputMessageContext"])["toolResults"]) {
+		collectTrimSlots(obj(raw)["content"], &slots)
+	}
+	sort.SliceStable(slots, func(i, j int) bool { return slots[i].size > slots[j].size })
+	return slots
+}
+
+// trimPayloadToLimit 复刻 payload_guards.py trim_payload_to_limit 并前置内容级
+// 截断(刻意分歧):参考实现只有成对弹历史一招且 AUTO_TRIM_PAYLOAD 默认关闭
+// (config.py:553),单条巨型 toolResult/写文件 input(2026-10-09 生产实录 1643
+// 条消息的 agentic 会话两次硬拒)弹到下限仍超限。本网关恒开:先按字节从大到小
+// 把超限工具字符串截到头部,再成对(user/assistant)弹最老历史,仍超则清光历史
+// 保住当前轮,最后对齐到 userInputMessage 开头并修复孤儿 toolResults。连清光
+// 历史都救不回(currentMessage 正文本身巨大)由 transport 硬拒兜底。
 func trimPayloadToLimit(payload object) {
 	if payloadSize(payload) <= maxPayloadBytes {
 		return
@@ -1113,15 +1172,30 @@ func trimPayloadToLimit(payload object) {
 		}
 	}
 	state["history"] = history
+	// 内容级截断优先于弹历史:丢内容不丢轮次,会话结构保全。
+	for _, slot := range trimSlotsOf(payload) {
+		if payloadSize(payload) <= maxPayloadBytes {
+			break
+		}
+		slot.set(trimTextHead(slot.get()))
+	}
 	for len(history) > 2 && payloadSize(payload) > maxPayloadBytes {
 		history = history[2:]
 		state["history"] = history
+	}
+	// 截断+弹历史仍超限:清光历史兜底,当前轮仍可执行。
+	if payloadSize(payload) > maxPayloadBytes {
+		history = nil
 	}
 	// _align_to_user_message: 成对删除可能从 assistant 半截切开,须回到 user 开头。
 	for len(history) > 0 && obj(history[0])["userInputMessage"] == nil {
 		history = history[1:]
 	}
-	state["history"] = history
+	if len(history) > 0 {
+		state["history"] = history
+	} else {
+		delete(state, "history")
+	}
 	repairOrphanedToolResults(history)
 }
 

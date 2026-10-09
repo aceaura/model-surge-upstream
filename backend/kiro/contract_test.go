@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -381,9 +382,57 @@ func TestOversizedHistoryTrimmedToLimit(t *testing.T) {
 	if got := payloadSize(payload); got > maxPayloadBytes {
 		t.Fatalf("payload still %d bytes after trim", got)
 	}
+	// Content truncation runs before history popping: oversized tool results
+	// are cut to their heads largest-first until the payload fits, so no
+	// round is dropped. 800KB of results needs more than one truncation.
+	if got := strings.Count(jsonText(payload), "[API Limitation] Content truncated"); got < 1 || got > 8 {
+		t.Fatalf("truncation markers %d, want between 1 and 8", got)
+	}
 	history := list(obj(payload["conversationState"])["history"])
 	if len(history) < 2 {
 		t.Fatalf("history trimmed below the two entry floor: %d", len(history))
+	}
+	first := obj(obj(history[0])["userInputMessage"])
+	if first == nil || str(first["content"]) == "" || !strings.Contains(str(first["content"]), "start") {
+		t.Fatalf("oldest round was popped despite truncation: %v", obj(history[0]))
+	}
+	if strings.Contains(str(first["content"]), "[trimmed tool result]") {
+		t.Fatalf("orphan repair ran without popping: %.80q", str(first["content"]))
+	}
+	current := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
+	if !strings.HasSuffix(str(current["content"]), "final question") {
+		t.Fatalf("current message damaged: %.80q", str(current["content"]))
+	}
+}
+
+func TestOversizedSmallResultsPopHistory(t *testing.T) {
+	// Each result is below the truncation floor, so the only way back under
+	// the limit is dropping oldest rounds, as the reference does.
+	messages := []any{object{"role": "user", "content": "start"}}
+	for i := 1; i <= 250; i++ {
+		id := "call_" + strconv.Itoa(i)
+		messages = append(messages, object{"role": "assistant", "tool_calls": []any{object{
+			"id": id, "type": "function",
+			"function": object{"name": "lookup", "arguments": `{"x": 1}`},
+		}}})
+		messages = append(messages, object{"role": "tool", "tool_call_id": id, "content": strings.Repeat("y", 3000)})
+	}
+	messages = append(messages, object{"role": "user", "content": "final question"})
+	payload, _, err := convertRequest([]byte(jsonText(object{
+		"model": "claude-sonnet-4.6", "messages": messages, "tools": toolDefinition("openai"),
+	})), "openai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payloadSize(payload); got > maxPayloadBytes {
+		t.Fatalf("payload still %d bytes after trim", got)
+	}
+	if strings.Contains(jsonText(payload), "[API Limitation] Content truncated") {
+		t.Fatal("below-floor results must not be truncated")
+	}
+	history := list(obj(payload["conversationState"])["history"])
+	if len(history) < 2 || len(history) >= 500 {
+		t.Fatalf("expected popping to keep a shrunken history, got %d entries", len(history))
 	}
 	first := obj(obj(history[0])["userInputMessage"])
 	if first == nil {
@@ -400,6 +449,76 @@ func TestOversizedHistoryTrimmedToLimit(t *testing.T) {
 	current := obj(obj(obj(payload["conversationState"])["currentMessage"])["userInputMessage"])
 	if !strings.HasSuffix(str(current["content"]), "final question") {
 		t.Fatalf("current message damaged: %.80q", str(current["content"]))
+	}
+}
+
+func TestOversizedCurrentMessageClearsHistory(t *testing.T) {
+	// The current message alone exceeds the limit (user text is never
+	// truncated): history is dropped entirely so the round can still run,
+	// and the transport hard reject covers the rest.
+	messages := []any{object{"role": "user", "content": "start"}}
+	for i := 1; i <= 4; i++ {
+		id := "call_" + strconv.Itoa(i)
+		messages = append(messages, object{"role": "assistant", "tool_calls": []any{object{
+			"id": id, "type": "function",
+			"function": object{"name": "lookup", "arguments": `{"x": 1}`},
+		}}})
+		messages = append(messages, object{"role": "tool", "tool_call_id": id, "content": strings.Repeat("z", 3000)})
+	}
+	messages = append(messages, object{"role": "user", "content": strings.Repeat("w", 700000)})
+	payload, _, err := convertRequest([]byte(jsonText(object{
+		"model": "claude-sonnet-4.6", "messages": messages, "tools": toolDefinition("openai"),
+	})), "openai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := obj(payload["conversationState"])
+	if _, ok := state["history"]; ok {
+		t.Fatalf("history should be dropped when only the current message remains oversized: %d entries", len(list(state["history"])))
+	}
+	if got := payloadSize(payload); got <= maxPayloadBytes {
+		t.Fatalf("current message still %d bytes, expected above the limit for the transport reject", got)
+	}
+	current := obj(obj(state["currentMessage"])["userInputMessage"])
+	// No effort tier was requested, so fake-thinking tags precede the text.
+	if !strings.Contains(str(current["content"]), strings.Repeat("w", 1000)) {
+		t.Fatalf("current message damaged: %.80q", str(current["content"]))
+	}
+}
+
+func TestOversizedToolUseInputTruncated(t *testing.T) {
+	// A giant write-file argument lives in the assistant's toolUses input;
+	// it is truncated like tool results, keeping the call itself intact.
+	big := `{"command": "` + strings.Repeat("c", 700000) + `"}`
+	messages := []any{
+		object{"role": "user", "content": "start"},
+		object{"role": "assistant", "tool_calls": []any{object{
+			"id": "call_1", "type": "function",
+			"function": object{"name": "lookup", "arguments": big},
+		}}},
+		object{"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+		object{"role": "user", "content": "next"},
+	}
+	payload, _, err := convertRequest([]byte(jsonText(object{
+		"model": "claude-sonnet-4.6", "messages": messages, "tools": toolDefinition("openai"),
+	})), "openai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payloadSize(payload); got > maxPayloadBytes {
+		t.Fatalf("payload still %d bytes after trim", got)
+	}
+	encoded := jsonText(payload)
+	if !strings.Contains(encoded, "[API Limitation] Content truncated") || strings.Contains(encoded, strings.Repeat("c", 700000)) {
+		t.Fatal("toolUse input was not truncated")
+	}
+	history := list(obj(payload["conversationState"])["history"])
+	if len(history) != 2 {
+		t.Fatalf("history should be fully preserved, got %d entries", len(history))
+	}
+	uses := list(obj(obj(history[1])["assistantResponseMessage"])["toolUses"])
+	if len(uses) != 1 || str(obj(uses[0])["name"]) != "lookup" {
+		t.Fatalf("tool call damaged: %v", obj(history[1])["assistantResponseMessage"])
 	}
 }
 
