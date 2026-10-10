@@ -105,9 +105,9 @@ class _ModelFormState extends State<ModelForm> {
   // 压过协议外形,承接「协议外壳+自家字段」的厂商差异。存量旧值(四协议名)
   // 读时归一到双端词表,下次保存即迁移(与后端 NormalizeFormat 同表)。
   late String _effortFormat = _normalizeFormat(_source?.effortFormat ?? '');
-  // 入口 effort 格式:空=auto=现状(体里有 reasoning_level 就走它,对话页
+  // 下游格式(effort_in):空=auto=现状(体里有 reasoning_level 就走它,对话页
   // 选档走规范档,透传体不解析不剥离);非空=显式声明 harness 送进来的形态。
-  // 入口词表不收 gemini——存量 gemini 入口值读时回落 auto(下游适配已删)。
+  // 下游词表不收 gemini——存量 gemini 入口值读时回落 auto(下游适配已删)。
   late String _effortIn = _entryInit(_source?.effortIn ?? '');
   // 0 档在 anthropic 族上游的关思考落定:空=disabled / between_tools / omit。
   late String _effortOff = _source?.effortOff ?? '';
@@ -514,14 +514,14 @@ class _ModelFormState extends State<ModelForm> {
     if (_effortIn.isEmpty && _effortFormat.isEmpty) return base;
     final inName = _effortIn.isEmpty ? 'auto' : _normalizeFormat(_effortIn);
     final upName = _effortFormat.isEmpty ? '协议内置' : _normalizeFormat(_effortFormat);
-    return '$base · 入口 $inName → 上游 $upName';
+    return '$base · 下游 $inName → 上游 $upName';
   }
 
-  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):auto + 九种,
-  /// 含 gemini(gemini 仅作上游协议/上游格式保留)。
+  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):auto + 八种,
+  /// 含 gemini(gemini 仅作上游协议/上游格式保留)。effort_index 已废:
+  /// reasoning_level 数字档是网关扩展字段,只走 auto 路径。
   static const _effortFormats = [
     '',
-    'effort_index',
     'openai_chat',
     'openai_responses',
     'anthropic_effort',
@@ -532,11 +532,10 @@ class _ModelFormState extends State<ModelForm> {
     'gemini_budget',
   ];
 
-  /// 入口(下游)格式词表:auto + 七种,不收 gemini——gemini 下游适配已删,
+  /// 入口(下游)格式词表:auto + 六种,不收 gemini——gemini 下游适配已删,
   /// 与后端 effort.ValidEntryFormat 同集。
   static const _entryFormats = [
     '',
-    'effort_index',
     'openai_chat',
     'openai_responses',
     'anthropic_effort',
@@ -563,7 +562,6 @@ class _ModelFormState extends State<ModelForm> {
 
   /// 上游格式标签(auto=协议内置)。
   static String _formatLabel(String f) => switch (_normalizeFormat(f)) {
-    'effort_index' => 'effort_index · 顶层 reasoning_level 数字档',
     'openai_chat' => 'openai_chat · 顶层 reasoning_effort',
     'openai_responses' => 'openai_responses · 嵌套 reasoning.effort',
     'anthropic_effort' => 'anthropic_effort · output_config.effort',
@@ -630,11 +628,11 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 双端声明:入口格式(harness 送进来的形态)→ 上游格式(写出去的形态)。
+          // 双端声明:下游格式(harness 送进来的形态)→ 上游格式(写出去的形态)。
           FormRow2(
             LabeledField(
               key: const ValueKey('model-effort-in-field'),
-              label: '入口 effort 格式',
+              label: '下游格式',
               hint: '客户端/harness 用哪种形态把档位送进来',
               child: StyledDropdownFormField(
                 key: const ValueKey('model-effort-in'),
@@ -647,7 +645,7 @@ class _ModelFormState extends State<ModelForm> {
             ),
             LabeledField(
               key: const ValueKey('model-effort-format-field'),
-              label: '上游 effort 格式',
+              label: '上游格式',
               hint: '空=协议内置，按出站协议落定（与现状一致）',
               child: StyledDropdownFormField(
                 key: const ValueKey('model-effort-format'),

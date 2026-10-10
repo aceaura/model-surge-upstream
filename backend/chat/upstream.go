@@ -161,7 +161,7 @@ func buildRequest(target resolve.ResolvedTarget, history []Message) (string, map
 // 按模型的上游格式(effort_format,空=协议内置)落笔,none 语义随格式与
 // 关思考落定(effort_off),预算类格式按覆盖/内置映射取数并钳到体里上限。
 func applyEffort(target resolve.ResolvedTarget, body map[string]any, value string) {
-	effort.Write(target.EffortFormat, target.Protocol, target.Efforts, body, value,
+	effort.Write(target.EffortFormat, target.Protocol, body, value,
 		target.EffortOff, target.EffortBudgets, effort.BodyMaxTokens(target.Protocol, body))
 }
 

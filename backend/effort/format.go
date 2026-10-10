@@ -2,7 +2,6 @@ package effort
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/provider"
@@ -10,12 +9,13 @@ import (
 
 // 双端格式词表(2026-10-10 双端转换设计):入口与上游以规范档(efforts 列表
 // 的 value,含 none)桥接——Read 把入口形态读成规范档,Write 把规范档写成
-// 上游形态,StripKeys 剥离入口残留键。九种格式覆盖各家线形态:自有数字档、
-// openai 两族(纯路径差异)、anthropic 四族(effort/预算/自适应/关思考)、
-// gemini 两族(枚举/预算)。入口(下游)词表不收 gemini——gemini 仅作上游
-// 协议与上游格式保留,下游适配已删;入口合法集见 ValidEntryFormat。
+// 上游形态,StripKeys 剥离入口残留键。八种格式覆盖各家线形态:openai 两族
+// (纯路径差异)、anthropic 四族(effort/预算/自适应/关思考)、gemini 两族
+// (枚举/预算)。入口(下游)词表不收 gemini——gemini 仅作上游协议与上游
+// 格式保留,下游适配已删;入口合法集见 ValidEntryFormat。
+// 自有数字档(reasoning_level)不入词表:它是网关扩展字段,由 auto 路径
+// 直接消费(见 proxyplane.applyReasoningLevel),无需显式格式承载。
 const (
-	FormatIndex             = "effort_index"
 	FormatOpenAIChat        = "openai_chat"
 	FormatOpenAIResponses   = "openai_responses"
 	FormatAnthropicEffort   = "anthropic_effort"
@@ -44,10 +44,10 @@ func NormalizeFormat(raw string) string {
 }
 
 // ValidFormat 判定归一后是否属双端词表(空串=auto)。上游(effort_format)
-// 用此函数,九种全收(含 gemini)。
+// 用此函数,八种全收(含 gemini)。
 func ValidFormat(format string) bool {
 	switch NormalizeFormat(format) {
-	case FormatAuto, FormatIndex, FormatOpenAIChat, FormatOpenAIResponses,
+	case FormatAuto, FormatOpenAIChat, FormatOpenAIResponses,
 		FormatAnthropicEffort, FormatAnthropicBudget, FormatAnthropicAdaptive,
 		FormatAnthropicOff, FormatGeminiLevel, FormatGeminiBudget:
 		return true
@@ -55,12 +55,12 @@ func ValidFormat(format string) bool {
 	return false
 }
 
-// ValidEntryFormat 圈定入口(下游,effort_in)词表:auto + 七种非 gemini。
+// ValidEntryFormat 圈定入口(下游,effort_in)词表:auto + 六种非 gemini。
 // gemini 不作入口——下游适配已删,gemini 仅保留为上游协议与上游格式;
 // 旧值别名归一后判定(legacy "gemini"→gemini_level 同样被入口拒绝)。
 func ValidEntryFormat(format string) bool {
 	switch NormalizeFormat(format) {
-	case FormatAuto, FormatIndex, FormatOpenAIChat, FormatOpenAIResponses,
+	case FormatAuto, FormatOpenAIChat, FormatOpenAIResponses,
 		FormatAnthropicEffort, FormatAnthropicBudget, FormatAnthropicAdaptive,
 		FormatAnthropicOff:
 		return true
@@ -117,17 +117,11 @@ func ClampBudget(n, maxTokens int) int {
 }
 
 // Read 按入口格式从上行体读规范档;读不到回 "",false(回退链由调用方接)。
-// 数字档按档号在 list 里查值;预算类按 BudgetOf 反查精确命中(不猜最近档);
-// anthropic_off 认 disabled/between_tools 为 none。入口词表不收 gemini
-// (见 ValidEntryFormat),gemini 形态不再有入口读取路径。
+// 预算类按 BudgetOf 反查精确命中(不猜最近档);anthropic_off 认
+// disabled/between_tools 为 none。入口词表不收 gemini(见 ValidEntryFormat),
+// gemini 形态不再有入口读取路径。
 func Read(format string, body map[string]any, list []Entry, budgets map[string]int) (string, bool) {
 	switch NormalizeFormat(format) {
-	case FormatIndex:
-		level, ok := numberOrString(body["reasoning_level"])
-		if !ok {
-			return "", false
-		}
-		return LevelOf(list, level)
 	case FormatOpenAIChat:
 		s, ok := body["reasoning_effort"].(string)
 		return s, ok && s != ""
@@ -166,7 +160,7 @@ func Read(format string, body map[string]any, list []Entry, budgets map[string]i
 // Write 按上游格式把规范档写进上行体;none 语义随格式:openai 族原样写、
 // gemini 族与 anthropic_off 不动体、anthropic 载档三格式按 off 落定。
 // format=auto 委托 Apply(出站协议内置映射),与改动前逐字一致。
-func Write(format, protocol string, list []Entry, body map[string]any, value string, off string, budgets map[string]int, maxTokens int) {
+func Write(format, protocol string, body map[string]any, value string, off string, budgets map[string]int, maxTokens int) {
 	switch NormalizeFormat(format) {
 	case FormatAuto:
 		// 旧行为逐字保留(none→thinking disabled);仅当显式配置了关思考
@@ -176,8 +170,6 @@ func Write(format, protocol string, list []Entry, body map[string]any, value str
 			return
 		}
 		Apply(protocol, body, value)
-	case FormatIndex:
-		WriteIndex(body, list, value)
 	case FormatOpenAIChat:
 		body["reasoning_effort"] = value
 	case FormatOpenAIResponses:
@@ -220,29 +212,11 @@ func Write(format, protocol string, list []Entry, body map[string]any, value str
 	}
 }
 
-// WriteIndex 把规范档按档号写回 reasoning_level(effort_index 上游格式):
-// 档在 list 里的 Name 即档号;查不到(如未声明 0 档的 none)不写。
-func WriteIndex(body map[string]any, list []Entry, value string) {
-	for _, e := range list {
-		if e.Value != value {
-			continue
-		}
-		if n, err := strconv.Atoi(e.Name); err == nil {
-			body["reasoning_level"] = n
-			return
-		}
-		body["reasoning_level"] = e.Name
-		return
-	}
-}
-
 // StripKeys 剥离入口格式写过的键;openai_responses 只删 reasoning.effort
 // 保留兄弟键(summary 等);删空的中层对象一并清理;auto 为 no-op
 // (现状透传不破坏)。
 func StripKeys(format string, body map[string]any) {
 	switch NormalizeFormat(format) {
-	case FormatIndex:
-		delete(body, "reasoning_level")
 	case FormatOpenAIChat:
 		delete(body, "reasoning_effort")
 	case FormatOpenAIResponses:
@@ -334,23 +308,6 @@ func thinkingConfig(body map[string]any) map[string]any {
 		generation["thinkingConfig"] = thinking
 	}
 	return thinking
-}
-
-// numberOrString 数字档取值兼容 JSON 数/json.Number/字符串三种形态,回档号字符串。
-func numberOrString(v any) (string, bool) {
-	switch t := v.(type) {
-	case string:
-		return t, t != ""
-	case float64:
-		return strconv.Itoa(int(t)), true
-	case int:
-		return strconv.Itoa(t), true
-	case json.Number:
-		if f, err := t.Float64(); err == nil {
-			return strconv.Itoa(int(f)), true
-		}
-	}
-	return "", false
 }
 
 // asInt JSON 数(float64/int/json.Number)取整值;非数回 false。

@@ -330,7 +330,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	format = effort.NormalizeFormat(format)
 	if !effort.ValidFormat(format) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
-			"effort_format must be one of: auto, effort_index, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off, gemini_level, gemini_budget")
+			"effort_format must be one of: auto, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off, gemini_level, gemini_budget")
 	}
 	effortIn := ""
 	if in.EffortIn != nil {
@@ -339,7 +339,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	effortIn = effort.NormalizeFormat(effortIn)
 	if !effort.ValidEntryFormat(effortIn) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
-			"effort_in must be one of: auto, effort_index, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off")
+			"effort_in must be one of: auto, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off")
 	}
 	effortOff := ""
 	if in.EffortOff != nil {

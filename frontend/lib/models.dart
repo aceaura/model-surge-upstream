@@ -335,7 +335,7 @@ class UpstreamModel {
   /// 承接「协议外壳+自家字段」的厂商差异(如 kimi 顶层 reasoning_effort)。
   final String effortFormat;
 
-  /// 入口 effort 格式:空=auto=现状(对话页选档与 reasoning_level 数字档,
+  /// 下游格式(effort_in):空=auto=现状(对话页选档与 reasoning_level 数字档,
   /// 透传体不解析不剥离);非空=显式声明 harness 送进来的形态,转发面按它
   /// 把体里的 effort 字段读成规范档并剥离残留键。
   final String effortIn;

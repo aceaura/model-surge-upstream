@@ -642,7 +642,7 @@ func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
 	if target.EffortIn != "" {
 		effort.StripKeys(target.EffortIn, body)
 	}
-	effort.Write(target.EffortFormat, target.Protocol, target.Efforts, body, value,
+	effort.Write(target.EffortFormat, target.Protocol, body, value,
 		target.EffortOff, target.EffortBudgets, effort.BodyMaxTokens(target.Protocol, body))
 }
 

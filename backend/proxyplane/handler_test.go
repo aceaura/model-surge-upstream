@@ -805,16 +805,16 @@ func matrixCarries(format, value string) bool {
 }
 
 // matrixEntry 按入口格式构造承载规范档的最小上行线体(每次返回新 map,
-// 供 applyReasoningLevel 原位改写)。auto/effort_index 用 reasoning_level 数字档。
+// 供 applyReasoningLevel 原位改写)。auto 用 reasoning_level 数字档。
 func matrixEntry(format, value string) map[string]any {
 	// reasoning_level 用 float64:生产路径经 json.Unmarshal 数字即 float64,
-	// reasoningLevel/numberOrString 按此识别(裸 int 不是线上形态)。
+	// reasoningLevel 按此识别(裸 int 不是线上形态)。
 	level := float64(3)
 	if value == "none" {
 		level = 0
 	}
 	switch format {
-	case "", effort.FormatIndex:
+	case "":
 		return map[string]any{"reasoning_level": level}
 	case effort.FormatOpenAIChat:
 		return map[string]any{"reasoning_effort": value}
@@ -837,8 +837,6 @@ func matrixEntry(format, value string) map[string]any {
 func matrixExpectUpstream(format, value, off string) map[string]any {
 	if value == "none" {
 		switch format {
-		case effort.FormatIndex:
-			return map[string]any{"reasoning_level": 0}
 		case effort.FormatOpenAIChat:
 			return map[string]any{"reasoning_effort": "none"}
 		case effort.FormatOpenAIResponses:
@@ -859,8 +857,6 @@ func matrixExpectUpstream(format, value, off string) map[string]any {
 		return nil
 	}
 	switch format {
-	case effort.FormatIndex:
-		return map[string]any{"reasoning_level": 3}
 	case effort.FormatOpenAIChat:
 		return map[string]any{"reasoning_effort": "high"}
 	case effort.FormatOpenAIResponses:
@@ -881,7 +877,7 @@ func matrixExpectUpstream(format, value, off string) map[string]any {
 	return nil
 }
 
-// TestEffortConversionMatrix 沙盒穷举:每一种入口格式(auto+七种,gemini 不作
+// TestEffortConversionMatrix 沙盒穷举:每一种入口格式(auto+六种,gemini 不作
 // 入口) × 每一种上游格式(含 gemini) × 档值(high/none)驱动真实转发管线
 // applyReasoningLevel,断言上行体恰好落到该上游格式的线形态且入口残留键已剥离。
 // 这是「所有上下游转换能否成功」的决定性证据——覆盖 anthropic 族共用
@@ -895,7 +891,6 @@ func TestEffortConversionMatrix(t *testing.T) {
 		{Name: "3", Value: "high"},
 	}
 	protocolOf := map[string]string{
-		effort.FormatIndex:             "chat_completions",
 		effort.FormatOpenAIChat:        "chat_completions",
 		effort.FormatOpenAIResponses:   "responses",
 		effort.FormatAnthropicEffort:   "anthropic",
@@ -906,13 +901,13 @@ func TestEffortConversionMatrix(t *testing.T) {
 		effort.FormatGeminiBudget:      "gemini",
 	}
 	upstreams := []string{
-		effort.FormatIndex, effort.FormatOpenAIChat, effort.FormatOpenAIResponses,
+		effort.FormatOpenAIChat, effort.FormatOpenAIResponses,
 		effort.FormatAnthropicEffort, effort.FormatAnthropicBudget, effort.FormatAnthropicAdaptive,
 		effort.FormatAnthropicOff, effort.FormatGeminiLevel, effort.FormatGeminiBudget,
 	}
-	// 入口(下游)词表不收 gemini:auto + 七种非 gemini 显式入口。
+	// 入口(下游)词表不收 gemini:auto + 六种非 gemini 显式入口。
 	entries := []string{
-		"", effort.FormatIndex, effort.FormatOpenAIChat, effort.FormatOpenAIResponses,
+		"", effort.FormatOpenAIChat, effort.FormatOpenAIResponses,
 		effort.FormatAnthropicEffort, effort.FormatAnthropicBudget, effort.FormatAnthropicAdaptive,
 		effort.FormatAnthropicOff,
 	}

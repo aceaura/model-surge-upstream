@@ -248,6 +248,6 @@ func ApplyFormat(format, protocol string, body map[string]any, value string) {
 	case FormatAuto:
 		Apply(protocol, body, value)
 	default:
-		Write(format, protocol, nil, body, value, OffDisabled, nil, 0)
+		Write(format, protocol, body, value, OffDisabled, nil, 0)
 	}
 }

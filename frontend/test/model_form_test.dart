@@ -768,7 +768,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('推理档:双端声明(入口 effort_index → 上游 anthropic_budget)+关思考落定+预算覆盖随提交', (tester) async {
+  testWidgets('推理档:双端声明(下游 openai_chat → 上游 anthropic_budget)+关思考落定+预算覆盖随提交', (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -786,7 +786,8 @@ void main() {
     expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
     expect(find.byKey(const ValueKey('model-effort-budget-0')), findsNothing);
 
-    // 入口(下游)词表不收 gemini(下游适配已删);上游词表保留 gemini。
+    // 入口(下游)词表不收 gemini(下游适配已删);上游词表保留 gemini;
+    // effort_index 已废(reasoning_level 只走 auto),双端词表均不收。
     final entryOpts =
         tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).options;
     final upstreamOpts = tester
@@ -796,13 +797,15 @@ void main() {
     expect(entryOpts, isNot(contains('gemini_budget')));
     expect(upstreamOpts, contains('gemini_level'));
     expect(upstreamOpts, contains('gemini_budget'));
+    expect(entryOpts, isNot(contains('effort_index')));
+    expect(upstreamOpts, isNot(contains('effort_index')));
 
-    // 入口格式 → effort_index。
+    // 下游格式 → openai_chat。
     await tester.ensureVisible(find.byKey(const ValueKey('model-effort-in')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-in')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('effort_index · 顶层 reasoning_level 数字档'));
+    await tester.tap(find.text('openai_chat · 顶层 reasoning_effort'));
     await tester.pumpAndSettle();
 
     // 上游格式 → anthropic_budget(选定配对):预算列与关思考落定随即动态出现。
@@ -851,7 +854,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(sentBody, isNotNull);
-    expect(sentBody!['effort_in'], 'effort_index');
+    expect(sentBody!['effort_in'], 'openai_chat');
     expect(sentBody!['effort_format'], 'anthropic_budget');
     expect(sentBody!['effort_off'], 'between_tools');
     expect(sentBody!['effort_budgets'], {'high': 12000});
