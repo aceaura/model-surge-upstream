@@ -101,13 +101,12 @@ class _ModelFormState extends State<ModelForm> {
   late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
   late bool _disableThinking = _effortInit.off;
   late final List<_EffortRow> _effortRows = _effortInit.rows;
-  // effort 写入格式:空=协议内置映射(按出站协议选字段);非空=显式格式
-  // 压过协议外形,承接「协议外壳+自家字段」的厂商差异。存量旧值(四协议名)
-  // 读时归一到双端词表,下次保存即迁移(与后端 NormalizeFormat 同表)。
-  late String _effortFormat = _normalizeFormat(_source?.effortFormat ?? '');
-  // 下游格式(effort_in):空=auto=现状(体里有 reasoning_level 就走它,对话页
-  // 选档走规范档,透传体不解析不剥离);非空=显式声明 harness 送进来的形态。
-  // 下游词表不收 gemini——存量 gemini 入口值读时回落 auto(下游适配已删)。
+  // effort 写入格式:表单无 auto 默认项,恒为显式格式(缺省=词表首项
+  // openai_chat),压过协议外形,承接「协议外壳+自家字段」的厂商差异。
+  // 存量旧值(空/四协议名)读时归一并落到词表首项,下次保存即迁移。
+  late String _effortFormat = _upstreamInit(_source?.effortFormat ?? '');
+  // 下游格式(effort_in):同样恒为显式格式,缺省=词表首项 openai_chat。
+  // 存量空值(auto)/gemini 入口值读时一并落到首项(下游 gemini 适配已删)。
   late String _effortIn = _entryInit(_source?.effortIn ?? '');
   // 0 档在 anthropic 族上游的关思考落定:空=disabled / between_tools / omit。
   late String _effortOff = _source?.effortOff ?? '';
@@ -514,18 +513,13 @@ class _ModelFormState extends State<ModelForm> {
           '${i + 1}·${_effortRows[i].value.text.trim()}',
     ];
     final base = levels.isEmpty ? '不支持' : levels.join(' / ');
-    // 默认(双端均 auto)保持纯档位摘要;仅在显式声明入口/上游格式时追加,
-    // 让折叠标题一眼看出转换方向。
-    if (_effortIn.isEmpty && _effortFormat.isEmpty) return base;
-    final inName = _effortIn.isEmpty ? 'auto' : _normalizeFormat(_effortIn);
-    final upName = _effortFormat.isEmpty ? '协议内置' : _normalizeFormat(_effortFormat);
-    return '$base · 下游 $inName → 上游 $upName';
+    // 双端格式恒显式(无 auto 默认项),折叠标题常驻转换方向。
+    return '$base · 下游 $_effortIn → 上游 $_effortFormat';
   }
 
-  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):八种,无 auto 项——
-  /// auto(协议内置)不可选;存量 auto 模型的 value='' 不入菜单,触发器照常
-  /// 显示 auto 标签,菜单无勾选项。effort_index 已废:
-  /// reasoning_level 数字档是网关扩展字段,只走 auto 路径。
+  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):八种,无 auto 项;
+  /// 缺省与回落都取首项 openai_chat。effort_index 已废:
+  /// reasoning_level 数字档是网关扩展字段,不走显式格式。
   static const _effortFormats = [
     'openai_chat',
     'openai_responses',
@@ -537,8 +531,8 @@ class _ModelFormState extends State<ModelForm> {
     'gemini_budget',
   ];
 
-  /// 入口(下游)格式词表:六种,无 auto 项(不可选,存量 auto 值仅显示),
-  /// 不收 gemini——gemini 下游适配已删,与后端 effort.ValidEntryFormat 同集。
+  /// 入口(下游)格式词表:六种,无 auto 项,不收 gemini——gemini 下游适配
+  /// 已删,与后端 effort.ValidEntryFormat 同集。缺省与回落都取首项。
   static const _entryFormats = [
     'openai_chat',
     'openai_responses',
@@ -557,23 +551,18 @@ class _ModelFormState extends State<ModelForm> {
     _ => f,
   };
 
-  /// 入口值初始化:归一后若不在入口词表(如存量 gemini)回落 auto(空串)——
-  /// auto 只作存量值显示(不入菜单),StyledDropdown 允许 value 不在 options。
+  /// 入口值初始化:归一后若不在入口词表(存量空值 auto/已删的 gemini)
+  /// 落到词表首项 openai_chat,保证 value 恒在 options 内。
   static String _entryInit(String f) {
     final n = _normalizeFormat(f);
-    return _entryFormats.contains(n) ? n : '';
+    return _entryFormats.contains(n) ? n : _entryFormats.first;
   }
 
-  /// 上游格式标签:菜单只显格式名;空值(存量 auto,不入菜单)显示协议内置说明。
-  static String _formatLabel(String f) {
+  /// 上游值初始化:同理,存量空值(协议内置)/未知值落到词表首项。
+  static String _upstreamInit(String f) {
     final n = _normalizeFormat(f);
-    return n.isEmpty ? '协议内置（跟随出站协议，与现状逐字一致）' : n;
+    return _effortFormats.contains(n) ? n : _effortFormats.first;
   }
-
-  /// 入口格式标签:auto 文案与上游不同(强调现状透传不解析不剥离)。
-  static String _entryFormatLabel(String f) => f.isEmpty
-      ? 'auto=现状（reasoning_level 数字档 + 对话页选档，透传体不解析不剥离）'
-      : _formatLabel(f);
 
   /// 关思考落定选项与标签(0 档在 anthropic 族上游怎么写)。
   static const _effortOffs = ['', 'between_tools', 'omit'];
@@ -583,12 +572,12 @@ class _ModelFormState extends State<ModelForm> {
     _ => 'disabled（标准：thinking 改写为 disabled）',
   };
 
-  /// 显式选定的上游格式(归一后)。auto(空)不算「选定配对」——转发面回落
-  /// 协议内置写法,与现状逐字一致,不触发任何配对专属字段。
+  /// 显式选定的上游格式(归一后,恒在词表内)。配对专属字段(关思考落定/
+  /// 预算列)只在选定对应格式时出现。
   String get _upstreamFormat => _normalizeFormat(_effortFormat);
 
-  /// 关思考落定:仅在显式选定 anthropic 族上游格式后出现。auto 上游用内置
-  /// disabled 落定(现状),无需也不展示该下拉;其余格式忽略 effort_off。
+  /// 关思考落定:仅在选定 anthropic 族上游格式后出现;其余格式忽略
+  /// effort_off(转发面对非 anthropic 族不落关思考字段)。
   bool get _offRelevant => const {
     'anthropic_effort',
     'anthropic_budget',
@@ -596,8 +585,8 @@ class _ModelFormState extends State<ModelForm> {
     'anthropic_off',
   }.contains(_upstreamFormat);
 
-  /// 预算数输入:仅在显式选定预算类上游格式(anthropic_budget/gemini_budget)
-  /// 后出现。auto 永不落到预算族,故未选定配对时无此列。
+  /// 预算数输入:仅在选定预算类上游格式(anthropic_budget/gemini_budget)
+  /// 后出现;其余格式无预算列。
   bool get _budgetFamily => const {
     'anthropic_budget',
     'gemini_budget',
@@ -655,6 +644,7 @@ class _ModelFormState extends State<ModelForm> {
           ),
           const SizedBox(height: 18),
           // 双端声明:下游格式(harness 送进来的形态)→ 上游格式(写出去的形态)。
+          // 菜单项即格式名,无需 labelOf。
           FormRow2(
             LabeledField(
               key: const ValueKey('model-effort-in-field'),
@@ -665,21 +655,19 @@ class _ModelFormState extends State<ModelForm> {
                 value: _effortIn,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
                 options: _entryFormats,
-                labelOf: _entryFormatLabel,
-                onChanged: (v) => setState(() => _effortIn = v ?? ''),
+                onChanged: (v) => setState(() => _effortIn = v ?? _entryFormats.first),
               ),
             ),
             LabeledField(
               key: const ValueKey('model-effort-format-field'),
               label: '上游格式',
-              hint: '空=协议内置，按出站协议落定（与现状一致）',
+              hint: '档位按哪种协议形态写出（写往上游的字段结构）',
               child: StyledDropdownFormField(
                 key: const ValueKey('model-effort-format'),
                 value: _effortFormat,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
                 options: _effortFormats,
-                labelOf: _formatLabel,
-                onChanged: (v) => setState(() => _effortFormat = v ?? ''),
+                onChanged: (v) => setState(() => _effortFormat = v ?? _effortFormats.first),
               ),
             ),
           ),

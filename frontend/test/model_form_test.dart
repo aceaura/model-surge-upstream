@@ -654,14 +654,18 @@ void main() {
     });
     await pumpForm(tester, editing: editing, client: client);
 
-    // 显式列表无 none:开关关;旧中文名废弃,按行号重排为 1·low / 2·high。
+    // 显式列表无 none:开关关;旧中文名废弃,按行号重排为 1·low / 2·high;
+    // 双端格式缺省落词表首项 openai_chat,副标题常驻转换方向。
     expect(
       tester
           .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
           .value,
       isFalse,
     );
-    expect(find.text('1·low / 2·high'), findsOneWidget);
+    expect(
+      find.text('1·low / 2·high · 下游 openai_chat → 上游 openai_chat'),
+      findsOneWidget,
+    );
     expect(
       tester
           .widget<TextFormField>(
@@ -732,14 +736,18 @@ void main() {
     });
     await pumpForm(tester, editing: editing, client: client);
 
-    // 开关默认开,行=有效列表两条值(无 none 行),副标题按数字档展示。
+    // 开关默认开,行=有效列表两条值(无 none 行),副标题按数字档展示,
+    // 缺省双端格式(openai_chat)随副标题常驻。
     expect(
       tester
           .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
           .value,
       isTrue,
     );
-    expect(find.text('0·关闭思考 / 1·low / 2·ultra'), findsOneWidget);
+    expect(
+      find.text('0·关闭思考 / 1·low / 2·ultra · 下游 openai_chat → 上游 openai_chat'),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('model-effort-value-1')), findsOneWidget);
     expect(find.byKey(const ValueKey('model-effort-value-2')), findsNothing);
     expect(
@@ -778,14 +786,25 @@ void main() {
     );
     await pumpForm(tester, client: client);
 
-    // 未选定配对(上游=auto):即便协议是 anthropic,关思考落定与预算列都不出现
-    // ——配对专属字段只在显式选定上游格式后动态出现。
+    // 缺省双端格式=词表首项 openai_chat(无 auto 默认项):即便协议是
+    // anthropic,关思考落定与预算列都不出现——配对专属字段只在选定
+    // 对应格式后动态出现。
     expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
     expect(find.byKey(const ValueKey('model-effort-budget-0')), findsNothing);
+    expect(
+      tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).value,
+      'openai_chat',
+    );
+    expect(
+      tester
+          .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
+          .value,
+      'openai_chat',
+    );
 
-    // 双端词表均无 auto 默认项(存量 auto 值仅显示,不可选);
-    // 入口(下游)词表不收 gemini(下游适配已删);上游词表保留 gemini;
-    // effort_index 已废(reasoning_level 只走 auto),双端词表均不收。
+    // 双端词表均无 auto 默认项;入口(下游)词表不收 gemini(下游适配已删);
+    // 上游词表保留 gemini;effort_index 已废(reasoning_level 只走 auto),
+    // 双端词表均不收。
     final entryOpts =
         tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).options;
     final upstreamOpts = tester
