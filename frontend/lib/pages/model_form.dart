@@ -68,9 +68,9 @@ class _ModelFormState extends State<ModelForm> {
     text: prettyJson(_source?.overrides ?? const {}),
   );
 
-  // 上下文压缩策略:模式二选一(passive 元数据/error 拦截);阈值按百分比
-  // 录入(85 = 窗口的 85%),提交时换回比例。存量 auto(网关代压,已废)
-  // 载入归一为 error。
+  // 上下文限制开关:开=error(估算超窗即拦截,回 400 让客户端自压缩)、
+  // 关=passive(不拦截);UI 不再暴露 passive/error 词表。阈值按百分比录入
+  // (85 = 窗口的 85%),提交时换回比例。存量 auto(网关代压,已废)载入归一为开。
   late String _compactMode = _normalizeCompactMode(_source?.compact['mode']);
   late final TextEditingController _compactThreshold = TextEditingController(
     text: _compactThresholdText(_source?.compact),
@@ -389,10 +389,7 @@ class _ModelFormState extends State<ModelForm> {
 
   String get _contextSubtitle {
     final window = _contextWindow.text.trim();
-    final mode = switch (_compactMode) {
-      'error' => '拦截',
-      _ => '元数据',
-    };
+    final mode = _compactMode == 'error' ? '已开启' : '已关闭';
     final w = window.isEmpty || window == '0' ? '窗口未声明' : '窗口 ${window}k';
     return '$w · $mode';
   }
@@ -406,10 +403,39 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 下拉与输入框等高(StyledDropdown 已对齐 TextFormField),并排双列。
+          // 开关行与输入框等高(40),并排双列;阈值仅开启时显示
           FormRow2(
             LabeledField(
-              label: '上下文窗口',
+              key: const ValueKey('model-compact-mode-field'),
+              label: '开启上下文限制',
+              hint: '估算输入超过窗口比例时拦截，回 400 让客户端自压缩',
+              child: SizedBox(
+                height: 40,
+                child: Row(
+                  children: [
+                    // Switch 收缩包裹并左移抵掉内置 4px 水平内边距,轨道左缘
+                    // 才能对齐输入框列(与推理档开关同款处理)
+                    Transform.translate(
+                      offset: const Offset(-4, 0),
+                      child: Switch(
+                        key: const ValueKey('model-compact-switch'),
+                        value: _compactMode == 'error',
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onChanged: (v) =>
+                            setState(() => _compactMode = v ? 'error' : 'passive'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _compactMode == 'error' ? '已开启' : '已关闭',
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            LabeledField(
+              label: '上下文大小',
               child: TextFormField(
                 key: const ValueKey('model-context'),
                 controller: _contextWindow,
@@ -426,22 +452,6 @@ class _ModelFormState extends State<ModelForm> {
                   if (n < 0) return '不能为负数';
                   return null;
                 },
-              ),
-            ),
-            // 上下文压缩:模式下拉常驻;阈值仅 error 生效
-            LabeledField(
-              key: const ValueKey('model-compact-mode-field'),
-              label: '上下文压缩策略',
-              child: StyledDropdownFormField(
-                key: const ValueKey('model-compact-mode'),
-                value: _compactMode,
-                decoration: const InputDecoration(border: OutlineInputBorder()),
-                options: const ['passive', 'error'],
-                labelOf: (m) => switch (m) {
-                  'error' => '拦截',
-                  _ => '元数据',
-                },
-                onChanged: (v) => setState(() => _compactMode = v!),
               ),
             ),
           ),

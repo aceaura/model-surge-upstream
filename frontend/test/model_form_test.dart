@@ -415,7 +415,7 @@ void main() {
       findsOneWidget,
       reason: '收起也能靠副标题辨认基本信息',
     );
-    expect(find.text('窗口 262.144k · 元数据'), findsOneWidget);
+    expect(find.text('窗口 262.144k · 已关闭'), findsOneWidget);
     expect(
       find.textContaining('"temperature": 0.6'),
       findsAtLeastNWidgets(1),
@@ -491,7 +491,19 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('压缩策略:存量 auto 归一拦截,下拉只留元数据/拦截', (tester) async {
+  testWidgets('上下文限制:存量 auto 归一为开启,开关关掉后阈值消失且保存为 passive', (
+    tester,
+  ) async {
+    Map<String, dynamic>? sentBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        sentBody =
+            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      }),
+    );
     final source = UpstreamModel.fromJson(const {
       'id': 'kimi-1/legacy',
       'account': 'kimi-1',
@@ -501,19 +513,39 @@ void main() {
       'compact': {'mode': 'auto', 'keep_turns': 3},
       'enabled': true,
     });
-    await pumpForm(tester, editing: source);
+    await pumpForm(tester, editing: source, client: client);
 
-    final dropdown = tester.widget<StyledDropdown>(
-      dropdownIn('model-compact-mode-field'),
+    // 下拉已废弃:无元数据/拦截字样,开关按存量 auto 归一为开启。
+    expect(find.byKey(const ValueKey('model-compact-mode')), findsNothing);
+    expect(find.text('元数据'), findsNothing);
+    expect(
+      tester
+          .widget<Switch>(find.byKey(const ValueKey('model-compact-switch')))
+          .value,
+      isTrue,
     );
-    expect(dropdown.value, 'error');
-    expect(dropdown.options, const ['passive', 'error']);
-    // 保留轮数随 auto 一并消失;拦截模式下阈值行在场。
+    // 保留轮数随 auto 一并消失;开启时阈值行在场。
     expect(find.byKey(const ValueKey('model-compact-keep')), findsNothing);
     expect(
       find.byKey(const ValueKey('model-compact-threshold')),
       findsOneWidget,
     );
+
+    // 关掉开关:阈值行消失,保存落 passive 且不带阈值。
+    await tester.tap(find.byKey(const ValueKey('model-compact-switch')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('model-compact-threshold')),
+      findsNothing,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(sentBody, isNotNull);
+    expect(sentBody!['compact'], const {'mode': 'passive'});
+
+    // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('推理档:新建默认开关开且无档位行,数字映射值行动态增删随提交上行', (tester) async {
