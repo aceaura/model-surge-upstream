@@ -18,7 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, effort_in, effort_off, effort_budgets, enabled, created_at, updated_at, sort_order`
+const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, effort_in, effort_off, effort_budgets, effort_enabled, enabled, created_at, updated_at, sort_order`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -57,6 +57,8 @@ type Input struct {
 	// EffortBudgets 预算覆盖原始 JSON：空=跟随现状（Create 落 {}），
 	// "{}"=清空覆盖，对象=档位值→正整数（保存期校验）。
 	EffortBudgets json.RawMessage
+	// EffortEnabled 推理档转换总开关:false=转发面不读不写不剥离。
+	EffortEnabled bool
 	Enabled       bool
 	// NewID 改名目标（仅 Update 使用）：空=沿用 ID；非空且不同于 ID 时把
 	// 记录主键改写为 NewID，同事务随迁 chat_sessions.model_id。
@@ -79,11 +81,11 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
 			m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
-			m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
+			m.EffortEnabled, m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
 		return mapWriteErr(err, m.ID)
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.ModelKey(m.ID), m, persist); err != nil {
@@ -181,12 +183,12 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 			tag, err := r.pool.Exec(ctx, `UPDATE models SET
 				account=$2, native_model=$3, protocol=$4, context_window=$5,
 				defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
-				effort_in=$11, effort_off=$12, effort_budgets=$13,
-				enabled=$14, updated_at=$15 WHERE id=$1`,
+				effort_in=$11, effort_off=$12, effort_budgets=$13, effort_enabled=$14,
+				enabled=$15, updated_at=$16 WHERE id=$1`,
 				m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 				[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
 				m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
-				m.Enabled, m.UpdatedAt)
+				m.EffortEnabled, m.Enabled, m.UpdatedAt)
 			if err != nil {
 				return apperr.Wrap(apperr.StorageError, "update model", err)
 			}
@@ -204,12 +206,12 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 		tag, err := tx.Exec(ctx, `UPDATE models SET
 			id=$2, account=$3, native_model=$4, protocol=$5, context_window=$6,
 			defaults=$7, overrides=$8, compact=$9, efforts=$10, effort_format=$11,
-			effort_in=$12, effort_off=$13, effort_budgets=$14,
-			enabled=$15, updated_at=$16 WHERE id=$1`,
+			effort_in=$12, effort_off=$13, effort_budgets=$14, effort_enabled=$15,
+			enabled=$16, updated_at=$17 WHERE id=$1`,
 			existing.ID, m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
 			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
 			m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
-			m.Enabled, m.UpdatedAt)
+			m.EffortEnabled, m.Enabled, m.UpdatedAt)
 		if err != nil {
 			return mapWriteErr(err, m.ID)
 		}
@@ -368,6 +370,7 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		EffortIn:      effortIn,
 		EffortOff:     effortOff,
 		EffortBudgets: budgets,
+		EffortEnabled: in.EffortEnabled,
 		Enabled:       in.Enabled,
 	}, nil
 }
@@ -479,7 +482,7 @@ func scan(s scanner) (Model, error) {
 	)
 	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
 		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &m.EffortIn, &m.EffortOff,
-		&budgets, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
+		&budgets, &m.EffortEnabled, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)

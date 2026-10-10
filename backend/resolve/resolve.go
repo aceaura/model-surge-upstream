@@ -52,6 +52,9 @@ type ResolvedTarget struct {
 	EffortOff string `json:"effort_off,omitempty"`
 	// EffortBudgets 是档位值→预算 token 覆盖(空=全内置映射),预算类格式生效。
 	EffortBudgets map[string]int `json:"effort_budgets,omitempty"`
+	// EffortEnabled 是推理档转换总开关:false=转发面不读不写不剥离
+	// (reasoning_level 仍消费即删,网关扩展字段不泄漏上游)。
+	EffortEnabled bool `json:"effort_enabled"`
 }
 
 // 认证头名。
@@ -182,6 +185,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		EffortIn:      m.EffortIn,
 		EffortOff:     m.EffortOff,
 		EffortBudgets: m.EffortBudgets,
+		EffortEnabled: m.EffortEnabled,
 	}, nil
 }
 

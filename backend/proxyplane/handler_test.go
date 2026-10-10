@@ -172,6 +172,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "0", Value: "none"},
 				{Name: "1", Value: "high"},
 			},
+			EffortEnabled: true,
 		},
 		"my-gpt": {
 			ModelID: "my-gpt", Account: "openai-1", ProviderID: "openai",
@@ -182,6 +183,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "1", Value: "low"},
 				{Name: "2", Value: "high"},
 			},
+			EffortEnabled: true,
 		},
 		"my-resp": {
 			ModelID: "my-resp", Account: "openai-1", ProviderID: "openai",
@@ -191,11 +193,13 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "0", Value: "none"},
 				{Name: "1", Value: "low"},
 			},
+			EffortEnabled: true,
 		},
 		"my-gemini": {
 			ModelID: "my-gemini", Account: "g-1", ProviderID: "gemini.global.api.standard",
 			Protocol: "gemini", BaseURL: upstreamURL, NativeModel: "gemini-2.5-pro",
 			Headers: map[string]string{"Authorization": "Bearer real-gemini-key"},
+			EffortEnabled: true,
 		},
 		// my-kimi 配了显式写入格式:anthropic 外壳但档位走顶层
 		// reasoning_effort(kimi K3 官方口径),格式接管写入位置、内置映射
@@ -210,6 +214,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "3", Value: "max"},
 			},
 			EffortFormat: effort.FormatChatCompletions,
+			EffortEnabled: true,
 		},
 	}}
 	if upstreamURL == "" {
@@ -266,6 +271,7 @@ func TestEffortFormatForward(t *testing.T) {
 				Overrides:    json.RawMessage(tc.override),
 				EffortFormat: effort.FormatChatCompletions,
 				Efforts:      []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}},
+				EffortEnabled: true,
 			}
 			if tc.emptyEfforts {
 				target.Efforts = nil
@@ -565,6 +571,7 @@ func TestReasoningLevelYieldsToOverrides(t *testing.T) {
 				{Name: "0", Value: "none"},
 				{Name: "2", Value: "high"},
 			},
+			EffortEnabled: true,
 		},
 	}}
 	h := NewHandler(testKey, resolver, nil)
@@ -620,6 +627,23 @@ func TestReasoningLevelFormatTakesOver(t *testing.T) {
 	}
 }
 
+// 总开关关闭:不读不写不剥离——入口自带的 effort 字段原样透传,
+// reasoning_level 仍消费即删(扩展字段不泄漏上游)。
+func TestReasoningLevelSwitchOff(t *testing.T) {
+	target := entryTargets("")["my-claude"]
+	target.EffortEnabled = false
+	target.EffortIn = effort.FormatAnthropicEffort
+	got := doEntryRequest(t, target,
+		`{"model":"my-claude","max_tokens":100,"messages":[],"output_config":{"effort":"high"},"reasoning_level":"2"}`)
+	oc, _ := got["output_config"].(map[string]any)
+	if oc["effort"] != "high" {
+		t.Fatalf("开关关闭不应读改入口字段: %v", got)
+	}
+	if _, leaked := got["reasoning_level"]; leaked {
+		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
+	}
+}
+
 // entryTargets 双端转换回归夹具:anthropic 出站、档位 0=none/1=low/2=medium,
 // 每个用例按需改 EffortIn/EffortOff/EffortBudgets/EffortFormat。
 func entryTargets(baseURL string) map[string]resolve.ResolvedTarget {
@@ -632,6 +656,7 @@ func entryTargets(baseURL string) map[string]resolve.ResolvedTarget {
 			{Name: "1", Value: "low"},
 			{Name: "2", Value: "medium"},
 		},
+		EffortEnabled: true,
 	}}
 }
 
@@ -923,6 +948,7 @@ func TestEffortConversionMatrix(t *testing.T) {
 				target := resolve.ResolvedTarget{
 					Protocol: protocolOf[U], Efforts: list,
 					EffortIn: E, EffortFormat: U, EffortOff: off,
+					EffortEnabled: true,
 				}
 				applyReasoningLevel(target, body)
 				want := matrixExpectUpstream(U, value, off)

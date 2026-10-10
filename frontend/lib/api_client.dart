@@ -256,6 +256,7 @@ class ApiClient {
     String? effortIn,
     String? effortOff,
     Map<String, int>? effortBudgets,
+    bool effortEnabled = true,
     bool enabled = true,
   }) async {
     final body = await _send(
@@ -278,6 +279,8 @@ class ApiClient {
         'effort_in': ?effortIn,
         'effort_off': ?effortOff,
         'effort_budgets': ?effortBudgets,
+        // 推理档转换总开关:恒带键,false=转发面不读不写不剥离。
+        'effort_enabled': effortEnabled,
         'enabled': enabled,
       },
     );
@@ -299,6 +302,7 @@ class ApiClient {
     String? effortIn,
     String? effortOff,
     Map<String, int>? effortBudgets,
+    bool effortEnabled = true,
     required bool enabled,
   }) async {
     final body = await _send(
@@ -320,6 +324,7 @@ class ApiClient {
         'effort_in': ?effortIn,
         'effort_off': ?effortOff,
         'effort_budgets': ?effortBudgets,
+        'effort_enabled': effortEnabled,
         'enabled': enabled,
       },
     );

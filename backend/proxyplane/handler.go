@@ -624,6 +624,11 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 // 命中后先剥离入口残留键(声明了入口格式即剥;先剥后写才不会吃掉上游刚写的
 // 同名字段),再按模型的上游格式(effort_format,空=协议内置)格式化进请求体。
 func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
+	// 总开关关闭:不读不写不剥离,但 reasoning_level 仍消费即删(扩展字段不泄漏)。
+	if !target.EffortEnabled {
+		delete(body, "reasoning_level")
+		return
+	}
 	value, hit := "", false
 	if target.EffortIn != "" {
 		value, hit = effort.Read(target.EffortIn, body, target.Efforts, target.EffortBudgets)

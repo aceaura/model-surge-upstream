@@ -867,6 +867,49 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('推理档:总开关默认开,关掉后提交 effort_enabled=false', (tester) async {
+    Map<String, dynamic>? sentBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        sentBody =
+            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      }),
+    );
+    await pumpForm(tester, client: client);
+
+    final sw = find.byKey(const ValueKey('model-effort-enabled'));
+    expect(sw, findsOneWidget);
+    expect(tester.widget<Switch>(sw).value, isTrue);
+
+    await tester.ensureVisible(sw);
+    await tester.pumpAndSettle();
+    await tester.tap(sw);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(sw).value, isFalse);
+    // 关掉总开关不影响其余推理档字段常驻显示。
+    expect(find.byKey(const ValueKey('model-effort-in')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-effort-format')), findsOneWidget);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('model-id')), 'kimi-1/k2');
+    await tester.enterText(
+      find.byKey(const ValueKey('model-native')),
+      'kimi-k2-turbo',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '创建'));
+    await tester.pumpAndSettle();
+
+    expect(sentBody, isNotNull);
+    expect(sentBody!['effort_enabled'], isFalse);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('推理档:存量双端字段编辑时回填(入口/关思考/预算)', (tester) async {
     final editing = UpstreamModel.fromJson(const {
       'id': 'kimi-1/k2',

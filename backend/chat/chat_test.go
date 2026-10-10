@@ -143,6 +143,7 @@ func TestServiceCompleteKiroTokenRefresh(t *testing.T) {
 					Protocol: protocol, BaseURL: up.URL, NativeModel: "claude-sonnet-4.5",
 					Headers:  kiro.Headers(oldToken, "arn:aws:codewhisperer:us-east-1:123:profile/test"),
 					Defaults: json.RawMessage(`{"temperature":0.3}`), Overrides: json.RawMessage(`{"top_p":0.7}`),
+					EffortEnabled: true,
 				}
 				fresh := initial
 				fresh.Account = "kiro-fresh"

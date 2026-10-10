@@ -107,10 +107,11 @@ func history() []Message {
 
 func target(protocol string) resolve.ResolvedTarget {
 	return resolve.ResolvedTarget{
-		ModelID:     "m-" + protocol,
-		Protocol:    protocol,
-		BaseURL:     "https://up.example/api",
-		NativeModel: "native-1",
+		ModelID:       "m-" + protocol,
+		Protocol:      protocol,
+		BaseURL:       "https://up.example/api",
+		NativeModel:   "native-1",
+		EffortEnabled: true,
 	}
 }
 
@@ -446,13 +447,14 @@ func TestExtractReplyErrors(t *testing.T) {
 
 func codexTarget(baseURL string) resolve.ResolvedTarget {
 	return resolve.ResolvedTarget{
-		ModelID:     "codex-1/gpt-6.1-sol",
-		Account:     "codex-1",
-		ProviderID:  codex.ProviderID,
-		Protocol:    provider.ProtocolResponses,
-		BaseURL:     baseURL,
-		NativeModel: "gpt-6.1-sol",
-		Headers:     map[string]string{"Authorization": "Bearer at"},
+		ModelID:       "codex-1/gpt-6.1-sol",
+		Account:       "codex-1",
+		ProviderID:    codex.ProviderID,
+		Protocol:      provider.ProtocolResponses,
+		BaseURL:       baseURL,
+		NativeModel:   "gpt-6.1-sol",
+		Headers:       map[string]string{"Authorization": "Bearer at"},
+		EffortEnabled: true,
 	}
 }
 
@@ -644,6 +646,7 @@ func TestCompleteEffortInjection(t *testing.T) {
 			BaseURL: srv.URL, NativeModel: "b",
 			// overrides 里已有的 reasoning 键不能被 effort 覆盖丢失。
 			Overrides: json.RawMessage(`{"reasoning":{"summary":"auto"}}`),
+			EffortEnabled: true,
 		}
 		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
 			t.Fatalf("Complete: %v", err)
@@ -662,6 +665,7 @@ func TestCompleteEffortInjection(t *testing.T) {
 		tgt := resolve.ResolvedTarget{
 			ModelID: "a/b", Protocol: provider.ProtocolChatCompletions,
 			BaseURL: srv.URL, NativeModel: "b",
+			EffortEnabled: true,
 		}
 		if _, _, _, err := Complete(context.Background(), tgt, "s", "low", hist); err != nil {
 			t.Fatalf("Complete: %v", err)
@@ -678,6 +682,7 @@ func TestCompleteEffortInjection(t *testing.T) {
 			BaseURL: srv.URL, NativeModel: "b",
 			// overrides 钉死 low,对话页选 high 也被压盖。
 			Overrides: json.RawMessage(`{"reasoning":{"effort":"low"}}`),
+			EffortEnabled: true,
 		}
 		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
 			t.Fatalf("Complete: %v", err)
@@ -693,6 +698,7 @@ func TestCompleteEffortInjection(t *testing.T) {
 		tgt := resolve.ResolvedTarget{
 			ModelID: "a/b", Protocol: provider.ProtocolAnthropic,
 			BaseURL: srv.URL, NativeModel: "b",
+			EffortEnabled: true,
 		}
 		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
 			t.Fatalf("Complete: %v", err)
@@ -728,12 +734,28 @@ func TestCompleteEffortInjection(t *testing.T) {
 		tgt := resolve.ResolvedTarget{
 			ModelID: "a/b", Protocol: provider.ProtocolResponses,
 			BaseURL: srv.URL, NativeModel: "b",
+			EffortEnabled: true,
 		}
 		if _, _, _, err := Complete(context.Background(), tgt, "s", "", hist); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 		if _, ok := (*got)["reasoning"]; ok {
 			t.Error("empty effort must not inject reasoning")
+		}
+	})
+
+	t.Run("switch_off_no_write", func(t *testing.T) {
+		srv, got := capture(t, `{"output_text":"ok"}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolResponses,
+			BaseURL: srv.URL, NativeModel: "b",
+			EffortEnabled: false,
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if _, ok := (*got)["reasoning"]; ok {
+			t.Error("总开关关闭时选档不得落笔")
 		}
 	})
 }

@@ -127,6 +127,10 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_in TEXT NOT NULL DEFAULT '';
 ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_off TEXT NOT NULL DEFAULT '';
 ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_budgets JSONB NOT NULL DEFAULT '{}';
 
+-- 推理档转换总开关(2026-10-10):false=转发面不读不写不剥离(reasoning_level
+-- 仍消费即删,网关扩展字段不泄漏),对话页选档不落笔;默认 true 保旧行为。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 
 -- 代理转发面配置：单行表（id 恒为 1）。api_key 为空表示转发面关闭。

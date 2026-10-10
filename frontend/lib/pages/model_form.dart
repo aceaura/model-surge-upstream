@@ -111,6 +111,9 @@ class _ModelFormState extends State<ModelForm> {
   late String _effortIn = _entryInit(_source?.effortIn ?? '');
   // 0 档在 anthropic 族上游的关思考落定:空=disabled / between_tools / omit。
   late String _effortOff = _source?.effortOff ?? '';
+  // 推理档转换总开关:false=转发面不读不写不剥离,对话页选档不落笔;
+  // 其余推理档字段常驻显示(值保留,重新开启即用)。
+  late bool _effortEnabled = _source?.effortEnabled ?? true;
 
   ({bool off, List<_EffortRow> rows}) _initialEffort() {
     final source = _source;
@@ -221,6 +224,7 @@ class _ModelFormState extends State<ModelForm> {
           effortIn: _effortIn,
           effortOff: _effortOff,
           effortBudgets: _effortBudgets,
+          effortEnabled: _effortEnabled,
           enabled: _enabled,
         );
       } else {
@@ -238,6 +242,7 @@ class _ModelFormState extends State<ModelForm> {
           effortIn: _effortIn,
           effortOff: _effortOff,
           effortBudgets: _effortBudgets,
+          effortEnabled: _effortEnabled,
           enabled: _enabled,
         );
       }
@@ -628,6 +633,35 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // 总开关独占第一排(与上下文限制区同款):关闭=不读不写不剥离,
+          // 其余字段常驻显示,值保留供重新开启即用。
+          LabeledField(
+            key: const ValueKey('model-effort-enabled-field'),
+            label: '推理档转换',
+            hint: '关闭后转发面不读不写不剥离,对话页选档不落笔',
+            child: SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  Transform.translate(
+                    offset: const Offset(-4, 0),
+                    child: Switch(
+                      key: const ValueKey('model-effort-enabled'),
+                      value: _effortEnabled,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: (v) => setState(() => _effortEnabled = v),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _effortEnabled ? '已开启' : '已关闭',
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
           // 双端声明:下游格式(harness 送进来的形态)→ 上游格式(写出去的形态)。
           FormRow2(
             LabeledField(

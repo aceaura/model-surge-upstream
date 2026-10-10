@@ -39,6 +39,9 @@ type Model struct {
 	// EffortBudgets 档位值→预算 token 覆盖(空 map=全内置映射 low=1024/
 	// medium=4000/high=10000/xhigh=20000/max=32000),预算类上游格式生效。
 	EffortBudgets map[string]int `json:"effort_budgets"`
+	// EffortEnabled 推理档转换总开关:false=不读不写不剥离(对话页选档与
+	// 显式入口/上游格式全部旁路),reasoning_level 仍消费即删不泄漏上游。
+	EffortEnabled bool `json:"effort_enabled"`
 	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
 	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
 	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。

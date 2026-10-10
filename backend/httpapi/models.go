@@ -31,7 +31,9 @@ type modelRequest struct {
 	EffortOff *string `json:"effort_off"`
 	// EffortBudgets 预算覆盖:缺省不改现状,{}=清空,对象=档位值→正整数。
 	EffortBudgets json.RawMessage `json:"effort_budgets"`
-	Enabled       *bool           `json:"enabled"`
+	// EffortEnabled 推理档转换总开关:缺省=true(保旧行为),false=不读不写不剥离。
+	EffortEnabled *bool `json:"effort_enabled"`
+	Enabled       *bool `json:"enabled"`
 }
 
 func (r modelRequest) input(id string) model.Input {
@@ -49,7 +51,11 @@ func (r modelRequest) input(id string) model.Input {
 		EffortIn:      r.EffortIn,
 		EffortOff:     r.EffortOff,
 		EffortBudgets: r.EffortBudgets,
+		EffortEnabled: true,
 		Enabled:       true,
+	}
+	if r.EffortEnabled != nil {
+		in.EffortEnabled = *r.EffortEnabled
 	}
 	if r.Enabled != nil {
 		in.Enabled = *r.Enabled

@@ -308,6 +308,7 @@ class UpstreamModel {
     this.effortIn = '',
     this.effortOff = '',
     this.effortBudgets = const {},
+    this.effortEnabled = true,
   });
 
   final String id;
@@ -348,6 +349,9 @@ class UpstreamModel {
   /// xhigh=20000/max=32000),预算类上游格式(anthropic_budget/gemini_budget)生效。
   final Map<String, int> effortBudgets;
 
+  /// 推理档转换总开关:false=转发面不读不写不剥离,对话页选档不落笔。
+  final bool effortEnabled;
+
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
     id: json['id'] as String,
     account: json['account'] as String? ?? '',
@@ -369,6 +373,7 @@ class UpstreamModel {
     effortOff: json['effort_off'] as String? ?? '',
     effortBudgets: (json['effort_budgets'] as Map<String, dynamic>? ?? const {})
         .map((k, v) => MapEntry(k, (v as num).toInt())),
+    effortEnabled: json['effort_enabled'] as bool? ?? true,
   );
 }
 
