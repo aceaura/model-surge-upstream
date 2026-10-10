@@ -564,18 +564,11 @@ class _ModelFormState extends State<ModelForm> {
     return _entryFormats.contains(n) ? n : '';
   }
 
-  /// 上游格式标签(auto=协议内置)。
-  static String _formatLabel(String f) => switch (_normalizeFormat(f)) {
-    'openai_chat' => 'openai_chat · 顶层 reasoning_effort',
-    'openai_responses' => 'openai_responses · 嵌套 reasoning.effort',
-    'anthropic_effort' => 'anthropic_effort · output_config.effort',
-    'anthropic_budget' => 'anthropic_budget · thinking enabled + budget_tokens',
-    'anthropic_adaptive' => 'anthropic_adaptive · thinking adaptive + output_config.effort',
-    'anthropic_off' => 'anthropic_off · thinking disabled/between_tools（只承载关思考）',
-    'gemini_level' => 'gemini_level · thinkingConfig.thinkingLevel（大写）',
-    'gemini_budget' => 'gemini_budget · thinkingConfig.thinkingBudget（数字）',
-    _ => '协议内置（跟随出站协议，与现状逐字一致）',
-  };
+  /// 上游格式标签:菜单只显格式名;空值(存量 auto,不入菜单)显示协议内置说明。
+  static String _formatLabel(String f) {
+    final n = _normalizeFormat(f);
+    return n.isEmpty ? '协议内置（跟随出站协议，与现状逐字一致）' : n;
+  }
 
   /// 入口格式标签:auto 文案与上游不同(强调现状透传不解析不剥离)。
   static String _entryFormatLabel(String f) => f.isEmpty

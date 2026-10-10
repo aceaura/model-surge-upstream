@@ -592,17 +592,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
 
-    // 上游格式下拉框在双端声明行:默认协议内置,改选 openai_chat
-    // (顶层 reasoning_effort)随提交上行。
+    // 上游格式下拉框在双端声明行:默认协议内置,改选 openai_chat 随提交上行。
     await tester.ensureVisible(
       find.byKey(const ValueKey('model-effort-format')),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-format')));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.text('openai_chat · 顶层 reasoning_effort'),
-    );
+    await tester.tap(find.text('openai_chat').last);
     await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.byKey(const ValueKey('model-id')));
@@ -808,7 +805,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-in')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('openai_chat · 顶层 reasoning_effort'));
+    await tester.tap(find.text('openai_chat').last);
     await tester.pumpAndSettle();
 
     // 上游格式 → anthropic_budget(选定配对):预算列与关思考落定随即动态出现。
@@ -818,7 +815,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-format')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('anthropic_budget · thinking enabled + budget_tokens'));
+    await tester.tap(find.text('anthropic_budget'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('model-effort-off-policy')), findsOneWidget);
 
