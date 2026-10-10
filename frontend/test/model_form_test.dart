@@ -786,6 +786,17 @@ void main() {
     expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
     expect(find.byKey(const ValueKey('model-effort-budget-0')), findsNothing);
 
+    // 入口(下游)词表不收 gemini(下游适配已删);上游词表保留 gemini。
+    final entryOpts =
+        tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).options;
+    final upstreamOpts = tester
+        .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
+        .options;
+    expect(entryOpts, isNot(contains('gemini_level')));
+    expect(entryOpts, isNot(contains('gemini_budget')));
+    expect(upstreamOpts, contains('gemini_level'));
+    expect(upstreamOpts, contains('gemini_budget'));
+
     // 入口格式 → effort_index。
     await tester.ensureVisible(find.byKey(const ValueKey('model-effort-in')));
     await tester.pumpAndSettle();

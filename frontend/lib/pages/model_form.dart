@@ -107,7 +107,8 @@ class _ModelFormState extends State<ModelForm> {
   late String _effortFormat = _normalizeFormat(_source?.effortFormat ?? '');
   // 入口 effort 格式:空=auto=现状(体里有 reasoning_level 就走它,对话页
   // 选档走规范档,透传体不解析不剥离);非空=显式声明 harness 送进来的形态。
-  late String _effortIn = _normalizeFormat(_source?.effortIn ?? '');
+  // 入口词表不收 gemini——存量 gemini 入口值读时回落 auto(下游适配已删)。
+  late String _effortIn = _entryInit(_source?.effortIn ?? '');
   // 0 档在 anthropic 族上游的关思考落定:空=disabled / between_tools / omit。
   late String _effortOff = _source?.effortOff ?? '';
 
@@ -516,8 +517,8 @@ class _ModelFormState extends State<ModelForm> {
     return '$base · 入口 $inName → 上游 $upName';
   }
 
-  /// 双端格式词表(value 与后端 effort.FormatXxx 枚举一致):auto + 九种。
-  /// 入口与上游共用同一词表,两个下拉选项一致。
+  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):auto + 九种,
+  /// 含 gemini(gemini 仅作上游协议/上游格式保留)。
   static const _effortFormats = [
     '',
     'effort_index',
@@ -531,6 +532,19 @@ class _ModelFormState extends State<ModelForm> {
     'gemini_budget',
   ];
 
+  /// 入口(下游)格式词表:auto + 七种,不收 gemini——gemini 下游适配已删,
+  /// 与后端 effort.ValidEntryFormat 同集。
+  static const _entryFormats = [
+    '',
+    'effort_index',
+    'openai_chat',
+    'openai_responses',
+    'anthropic_effort',
+    'anthropic_budget',
+    'anthropic_adaptive',
+    'anthropic_off',
+  ];
+
   /// 存量旧值(四协议名)→ 双端词表别名,与后端 effort.NormalizeFormat 同表。
   static String _normalizeFormat(String f) => switch (f) {
     'chat_completions' => 'openai_chat',
@@ -539,6 +553,13 @@ class _ModelFormState extends State<ModelForm> {
     'gemini' => 'gemini_level',
     _ => f,
   };
+
+  /// 入口值初始化:归一后若不在入口词表(如存量 gemini)回落 auto(空串),
+  /// 保证下拉 value 恒在 options 内。
+  static String _entryInit(String f) {
+    final n = _normalizeFormat(f);
+    return _entryFormats.contains(n) ? n : '';
+  }
 
   /// 上游格式标签(auto=协议内置)。
   static String _formatLabel(String f) => switch (_normalizeFormat(f)) {
@@ -619,7 +640,7 @@ class _ModelFormState extends State<ModelForm> {
                 key: const ValueKey('model-effort-in'),
                 value: _effortIn,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
-                options: _effortFormats,
+                options: _entryFormats,
                 labelOf: _entryFormatLabel,
                 onChanged: (v) => setState(() => _effortIn = v ?? ''),
               ),

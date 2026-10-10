@@ -33,6 +33,20 @@ func TestNormalizeAndValidFormat(t *testing.T) {
 			t.Errorf("ValidFormat(%q) 应为假", f)
 		}
 	}
+	// 入口词表不收 gemini(下游适配已删):七种+auto+归一到非 gemini 的别名收;
+	// gemini_level/gemini_budget 及 legacy "gemini" 均被入口拒绝。
+	for _, f := range []string{"", FormatIndex, FormatOpenAIChat, FormatOpenAIResponses,
+		FormatAnthropicEffort, FormatAnthropicBudget, FormatAnthropicAdaptive, FormatAnthropicOff,
+		"chat_completions", "responses", "anthropic"} {
+		if !ValidEntryFormat(f) {
+			t.Errorf("ValidEntryFormat(%q) 应为真", f)
+		}
+	}
+	for _, f := range []string{FormatGeminiLevel, FormatGeminiBudget, "gemini", "bogus"} {
+		if ValidEntryFormat(f) {
+			t.Errorf("ValidEntryFormat(%q) 应为假", f)
+		}
+	}
 	if !ValidOff(OffDisabled) || !ValidOff(OffBetweenTools) || !ValidOff(OffOmit) || ValidOff("nope") {
 		t.Error("ValidOff 判定错误")
 	}
@@ -114,16 +128,6 @@ func TestRead(t *testing.T) {
 			if !ok || v != "none" {
 				t.Errorf("off 读 %s = %q,%v", typ, v, ok)
 			}
-		}
-	})
-	t.Run("gemini", func(t *testing.T) {
-		v, ok := Read(FormatGeminiLevel, map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "HIGH"}}}, nil, nil)
-		if !ok || v != "high" {
-			t.Errorf("level 读 = %q,%v", v, ok)
-		}
-		v, ok = Read(FormatGeminiBudget, map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingBudget": float64(4000)}}}, idxList, nil)
-		if !ok || v != "medium" {
-			t.Errorf("预算反查 = %q,%v", v, ok)
 		}
 	})
 }
@@ -229,17 +233,6 @@ func TestStripKeys(t *testing.T) {
 	if _, ok := body["reasoning"]; ok {
 		t.Errorf("删空中层应清理: %v", body)
 	}
-	body = map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "HIGH", "includeThoughts": true}}}
-	StripKeys(FormatGeminiLevel, body)
-	tc := body["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)
-	if _, ok := tc["thinkingLevel"]; ok || tc["includeThoughts"] != true {
-		t.Errorf("gemini 剥离 = %v", body)
-	}
-	body = map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "HIGH"}}}
-	StripKeys(FormatGeminiLevel, body)
-	if _, ok := body["generationConfig"]; ok {
-		t.Errorf("gemini 删空链应清理: %v", body)
-	}
 	body = map[string]any{"reasoning_effort": "high"}
 	StripKeys(FormatAuto, body)
 	if body["reasoning_effort"] != "high" {
@@ -247,10 +240,11 @@ func TestStripKeys(t *testing.T) {
 	}
 }
 
-// TestRoundTrip 九格式里载档格式 Write→Read 往返一致。
+// TestRoundTrip 入口可读格式 Write→Read 往返一致。gemini 只作上游(入口读
+// 已删),不在往返集内;anthropic_off 只承载 none,单独验。
 func TestRoundTrip(t *testing.T) {
 	for _, f := range []string{FormatOpenAIChat, FormatOpenAIResponses, FormatAnthropicEffort,
-		FormatAnthropicBudget, FormatAnthropicAdaptive, FormatGeminiLevel, FormatGeminiBudget, FormatIndex} {
+		FormatAnthropicBudget, FormatAnthropicAdaptive, FormatIndex} {
 		body := map[string]any{}
 		Write(f, "anthropic", idxList, body, "high", OffDisabled, nil, 0)
 		v, ok := Read(f, body, idxList, nil)

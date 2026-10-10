@@ -828,10 +828,6 @@ func matrixEntry(format, value string) map[string]any {
 		return map[string]any{"thinking": map[string]any{"type": "adaptive"}, "output_config": map[string]any{"effort": value}}
 	case effort.FormatAnthropicOff:
 		return map[string]any{"thinking": map[string]any{"type": "disabled"}}
-	case effort.FormatGeminiLevel:
-		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": strings.ToUpper(value)}}}
-	case effort.FormatGeminiBudget:
-		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingBudget": 10000}}}
 	}
 	return nil
 }
@@ -885,11 +881,12 @@ func matrixExpectUpstream(format, value, off string) map[string]any {
 	return nil
 }
 
-// TestEffortConversionMatrix 沙盒穷举:每一种入口格式 × 每一种上游格式 ×
-// 档值(high/none)驱动真实转发管线 applyReasoningLevel,断言上行体恰好落到
-// 该上游格式的线形态且入口残留键已剥离。这是「所有上下游转换能否成功」的
-// 决定性证据——覆盖 anthropic 族共用 output_config.effort / thinking.type 的
-// 交叉配对(写后剥离会自吃,必须先剥后写)。
+// TestEffortConversionMatrix 沙盒穷举:每一种入口格式(auto+七种,gemini 不作
+// 入口) × 每一种上游格式(含 gemini) × 档值(high/none)驱动真实转发管线
+// applyReasoningLevel,断言上行体恰好落到该上游格式的线形态且入口残留键已剥离。
+// 这是「所有上下游转换能否成功」的决定性证据——覆盖 anthropic 族共用
+// output_config.effort / thinking.type 的交叉配对(写后剥离会自吃,必须先剥后写),
+// 以及 gemini 仅作上游被各入口写入的配对。
 func TestEffortConversionMatrix(t *testing.T) {
 	list := []effort.Entry{
 		{Name: "0", Value: "none"},
@@ -913,7 +910,12 @@ func TestEffortConversionMatrix(t *testing.T) {
 		effort.FormatAnthropicEffort, effort.FormatAnthropicBudget, effort.FormatAnthropicAdaptive,
 		effort.FormatAnthropicOff, effort.FormatGeminiLevel, effort.FormatGeminiBudget,
 	}
-	entries := append([]string{""}, upstreams...) // auto + 九种显式入口
+	// 入口(下游)词表不收 gemini:auto + 七种非 gemini 显式入口。
+	entries := []string{
+		"", effort.FormatIndex, effort.FormatOpenAIChat, effort.FormatOpenAIResponses,
+		effort.FormatAnthropicEffort, effort.FormatAnthropicBudget, effort.FormatAnthropicAdaptive,
+		effort.FormatAnthropicOff,
+	}
 
 	convert := func(value, off string, upstreams []string) int {
 		n := 0

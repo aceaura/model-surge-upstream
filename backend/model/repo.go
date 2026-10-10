@@ -337,9 +337,9 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		effortIn = strings.TrimSpace(*in.EffortIn)
 	}
 	effortIn = effort.NormalizeFormat(effortIn)
-	if !effort.ValidFormat(effortIn) {
+	if !effort.ValidEntryFormat(effortIn) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
-			"effort_in must be one of: auto, effort_index, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off, gemini_level, gemini_budget")
+			"effort_in must be one of: auto, effort_index, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off")
 	}
 	effortOff := ""
 	if in.EffortOff != nil {

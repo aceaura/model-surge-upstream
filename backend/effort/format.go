@@ -8,11 +8,12 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-// 双端格式词表(2026-10-10 双端转换设计):入口与上游共用同一词表,
-// 中间以规范档(efforts 列表的 value,含 none)桥接——Read 把入口形态
-// 读成规范档,Write 把规范档写成上游形态,StripKeys 剥离入口残留键。
-// 九种格式覆盖各家线形态:自有数字档、openai 两族(纯路径差异)、
-// anthropic 四族(effort/预算/自适应/关思考)、gemini 两族(枚举/预算)。
+// 双端格式词表(2026-10-10 双端转换设计):入口与上游以规范档(efforts 列表
+// 的 value,含 none)桥接——Read 把入口形态读成规范档,Write 把规范档写成
+// 上游形态,StripKeys 剥离入口残留键。九种格式覆盖各家线形态:自有数字档、
+// openai 两族(纯路径差异)、anthropic 四族(effort/预算/自适应/关思考)、
+// gemini 两族(枚举/预算)。入口(下游)词表不收 gemini——gemini 仅作上游
+// 协议与上游格式保留,下游适配已删;入口合法集见 ValidEntryFormat。
 const (
 	FormatIndex             = "effort_index"
 	FormatOpenAIChat        = "openai_chat"
@@ -42,12 +43,26 @@ func NormalizeFormat(raw string) string {
 	return raw
 }
 
-// ValidFormat 判定归一后是否属双端词表(空串=auto)。
+// ValidFormat 判定归一后是否属双端词表(空串=auto)。上游(effort_format)
+// 用此函数,九种全收(含 gemini)。
 func ValidFormat(format string) bool {
 	switch NormalizeFormat(format) {
 	case FormatAuto, FormatIndex, FormatOpenAIChat, FormatOpenAIResponses,
 		FormatAnthropicEffort, FormatAnthropicBudget, FormatAnthropicAdaptive,
 		FormatAnthropicOff, FormatGeminiLevel, FormatGeminiBudget:
+		return true
+	}
+	return false
+}
+
+// ValidEntryFormat 圈定入口(下游,effort_in)词表:auto + 七种非 gemini。
+// gemini 不作入口——下游适配已删,gemini 仅保留为上游协议与上游格式;
+// 旧值别名归一后判定(legacy "gemini"→gemini_level 同样被入口拒绝)。
+func ValidEntryFormat(format string) bool {
+	switch NormalizeFormat(format) {
+	case FormatAuto, FormatIndex, FormatOpenAIChat, FormatOpenAIResponses,
+		FormatAnthropicEffort, FormatAnthropicBudget, FormatAnthropicAdaptive,
+		FormatAnthropicOff:
 		return true
 	}
 	return false
@@ -103,7 +118,8 @@ func ClampBudget(n, maxTokens int) int {
 
 // Read 按入口格式从上行体读规范档;读不到回 "",false(回退链由调用方接)。
 // 数字档按档号在 list 里查值;预算类按 BudgetOf 反查精确命中(不猜最近档);
-// 大写枚举归小写;anthropic_off 认 disabled/between_tools 为 none。
+// anthropic_off 认 disabled/between_tools 为 none。入口词表不收 gemini
+// (见 ValidEntryFormat),gemini 形态不再有入口读取路径。
 func Read(format string, body map[string]any, list []Entry, budgets map[string]int) (string, bool) {
 	switch NormalizeFormat(format) {
 	case FormatIndex:
@@ -143,18 +159,6 @@ func Read(format string, body map[string]any, list []Entry, budgets map[string]i
 			return "none", true
 		}
 		return "", false
-	case FormatGeminiLevel:
-		s, ok := thinkingConfig(body, false)["thinkingLevel"].(string)
-		if !ok || s == "" {
-			return "", false
-		}
-		return strings.ToLower(s), true
-	case FormatGeminiBudget:
-		n, ok := asInt(thinkingConfig(body, false)["thinkingBudget"])
-		if !ok {
-			return "", false
-		}
-		return tierByBudget(n, list, budgets)
 	}
 	return "", false
 }
@@ -207,12 +211,12 @@ func Write(format, protocol string, list []Entry, body map[string]any, value str
 		if value == "none" {
 			return
 		}
-		thinkingConfig(body, true)["thinkingLevel"] = strings.ToUpper(value)
+		thinkingConfig(body)["thinkingLevel"] = strings.ToUpper(value)
 	case FormatGeminiBudget:
 		if value == "none" {
 			return
 		}
-		thinkingConfig(body, true)["thinkingBudget"] = ClampBudget(BudgetOf(value, budgets), maxTokens)
+		thinkingConfig(body)["thinkingBudget"] = ClampBudget(BudgetOf(value, budgets), maxTokens)
 	}
 }
 
@@ -265,14 +269,6 @@ func StripKeys(format string, body map[string]any) {
 		thinking := existing(body, "thinking")
 		delete(thinking, "type")
 		cleanEmpty(body, "thinking")
-	case FormatGeminiLevel:
-		thinking := thinkingConfig(body, false)
-		delete(thinking, "thinkingLevel")
-		cleanThinkingConfig(body)
-	case FormatGeminiBudget:
-		thinking := thinkingConfig(body, false)
-		delete(thinking, "thinkingBudget")
-		cleanThinkingConfig(body)
 	}
 }
 
@@ -325,37 +321,19 @@ func cleanEmpty(body map[string]any, key string) {
 	}
 }
 
-// thinkingConfig 取(create=true 时必要时建)generationConfig.thinkingConfig。
-func thinkingConfig(body map[string]any, create bool) map[string]any {
+// thinkingConfig 取(必要时建)generationConfig.thinkingConfig,供 gemini 上游写路径。
+func thinkingConfig(body map[string]any) map[string]any {
 	generation, ok := body["generationConfig"].(map[string]any)
 	if !ok {
-		if !create {
-			return nil
-		}
 		generation = map[string]any{}
 		body["generationConfig"] = generation
 	}
 	thinking, ok := generation["thinkingConfig"].(map[string]any)
 	if !ok {
-		if !create {
-			return nil
-		}
 		thinking = map[string]any{}
 		generation["thinkingConfig"] = thinking
 	}
 	return thinking
-}
-
-// cleanThinkingConfig thinkingConfig/generationConfig 删空后逐级清理。
-func cleanThinkingConfig(body map[string]any) {
-	generation, ok := body["generationConfig"].(map[string]any)
-	if !ok {
-		return
-	}
-	if m, ok := generation["thinkingConfig"].(map[string]any); ok && len(m) == 0 {
-		delete(generation, "thinkingConfig")
-	}
-	cleanEmpty(body, "generationConfig")
 }
 
 // numberOrString 数字档取值兼容 JSON 数/json.Number/字符串三种形态,回档号字符串。
