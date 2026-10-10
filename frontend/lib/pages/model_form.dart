@@ -649,7 +649,7 @@ class _ModelFormState extends State<ModelForm> {
             LabeledField(
               key: const ValueKey('model-effort-in-field'),
               label: '下游格式',
-              hint: '客户端/harness 用哪种形态把档位送进来',
+              hint: '体里已有的档位字段形态：网关按它读出规范档并剥掉原键',
               child: StyledDropdownFormField(
                 key: const ValueKey('model-effort-in'),
                 value: _effortIn,
@@ -661,7 +661,7 @@ class _ModelFormState extends State<ModelForm> {
             LabeledField(
               key: const ValueKey('model-effort-format-field'),
               label: '上游格式',
-              hint: '档位按哪种协议形态写出（写往上游的字段结构）',
+              hint: '读出的规范档按此形态写回体里发上游（决定上行字段结构）',
               child: StyledDropdownFormField(
                 key: const ValueKey('model-effort-format'),
                 value: _effortFormat,
