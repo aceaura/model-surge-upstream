@@ -491,7 +491,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('上下文限制:存量 auto 归一为开启,开关关掉后阈值消失且保存为 passive', (
+  testWidgets('上下文限制:存量 auto 归一为开启,阈值常驻,关掉开关保存落 passive 不带阈值', (
     tester,
   ) async {
     Map<String, dynamic>? sentBody;
@@ -524,19 +524,19 @@ void main() {
           .value,
       isTrue,
     );
-    // 保留轮数随 auto 一并消失;开启时阈值行在场。
+    // 保留轮数随 auto 一并消失;阈值常驻不随开关隐藏。
     expect(find.byKey(const ValueKey('model-compact-keep')), findsNothing);
     expect(
       find.byKey(const ValueKey('model-compact-threshold')),
       findsOneWidget,
     );
 
-    // 关掉开关:阈值行消失,保存落 passive 且不带阈值。
+    // 关掉开关:阈值框仍在场,保存落 passive 且不带阈值。
     await tester.tap(find.byKey(const ValueKey('model-compact-switch')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('model-compact-threshold')),
-      findsNothing,
+      findsOneWidget,
     );
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();

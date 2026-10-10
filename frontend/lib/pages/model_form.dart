@@ -403,7 +403,8 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 开关独占第一排;上下文大小与触发阈值并排第二排(阈值仅开启时显示)
+          // 开关独占第一排;上下文大小与触发阈值并排第二排常驻(阈值仅开启时生效,
+          // 关闭时保存不落 threshold,但值保留在框里供开启即用)
           LabeledField(
             key: const ValueKey('model-compact-mode-field'),
             label: '开启上下文限制',
@@ -455,30 +456,27 @@ class _ModelFormState extends State<ModelForm> {
                 },
               ),
             ),
-            _compactMode != 'passive'
-                ? LabeledField(
-                    key: const ValueKey('model-compact-threshold-field'),
-                    label: '触发阈值',
-                    hint: '估算输入超过窗口此比例时拦截',
-                    child: TextFormField(
-                      key: const ValueKey('model-compact-threshold'),
-                      controller: _compactThreshold,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        suffixText: '%',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (v) {
-                        final n = double.tryParse(v?.trim() ?? '');
-                        if (n == null) return '请填写数字';
-                        if (n <= 0 || n > 100) return '须在 1–100 之间';
-                        return null;
-                      },
-                    ),
-                  )
-                : const SizedBox.shrink(),
+            LabeledField(
+              key: const ValueKey('model-compact-threshold-field'),
+              label: '触发阈值',
+              child: TextFormField(
+                key: const ValueKey('model-compact-threshold'),
+                controller: _compactThreshold,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  suffixText: '%',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  final n = double.tryParse(v?.trim() ?? '');
+                  if (n == null) return '请填写数字';
+                  if (n <= 0 || n > 100) return '须在 1–100 之间';
+                  return null;
+                },
+              ),
+            ),
           ),
         ],
       ),
