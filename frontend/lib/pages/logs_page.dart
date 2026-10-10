@@ -49,7 +49,7 @@ class _LogsPageState extends State<LogsPage> {
     'chat',
     'http',
     'server',
-    'others',
+    'misc',
   ];
 
   /// 转发/解析/对话/压缩条目的 msg 里都带 model=/account= 键值,筛选按它匹配;
