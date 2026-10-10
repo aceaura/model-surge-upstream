@@ -522,11 +522,11 @@ class _ModelFormState extends State<ModelForm> {
     return '$base · 下游 $inName → 上游 $upName';
   }
 
-  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):auto + 八种,
-  /// 含 gemini(gemini 仅作上游协议/上游格式保留)。effort_index 已废:
+  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):八种,无 auto 项——
+  /// auto(协议内置)不可选;存量 auto 模型的 value='' 不入菜单,触发器照常
+  /// 显示 auto 标签,菜单无勾选项。effort_index 已废:
   /// reasoning_level 数字档是网关扩展字段,只走 auto 路径。
   static const _effortFormats = [
-    '',
     'openai_chat',
     'openai_responses',
     'anthropic_effort',
@@ -537,10 +537,9 @@ class _ModelFormState extends State<ModelForm> {
     'gemini_budget',
   ];
 
-  /// 入口(下游)格式词表:auto + 六种,不收 gemini——gemini 下游适配已删,
-  /// 与后端 effort.ValidEntryFormat 同集。
+  /// 入口(下游)格式词表:六种,无 auto 项(不可选,存量 auto 值仅显示),
+  /// 不收 gemini——gemini 下游适配已删,与后端 effort.ValidEntryFormat 同集。
   static const _entryFormats = [
-    '',
     'openai_chat',
     'openai_responses',
     'anthropic_effort',
@@ -558,8 +557,8 @@ class _ModelFormState extends State<ModelForm> {
     _ => f,
   };
 
-  /// 入口值初始化:归一后若不在入口词表(如存量 gemini)回落 auto(空串),
-  /// 保证下拉 value 恒在 options 内。
+  /// 入口值初始化:归一后若不在入口词表(如存量 gemini)回落 auto(空串)——
+  /// auto 只作存量值显示(不入菜单),StyledDropdown 允许 value 不在 options。
   static String _entryInit(String f) {
     final n = _normalizeFormat(f);
     return _entryFormats.contains(n) ? n : '';
