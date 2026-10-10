@@ -403,37 +403,38 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 开关行与输入框等高(40),并排双列;阈值仅开启时显示
-          FormRow2(
-            LabeledField(
-              key: const ValueKey('model-compact-mode-field'),
-              label: '开启上下文限制',
-              hint: '估算输入超过窗口比例时拦截，回 400 让客户端自压缩',
-              child: SizedBox(
-                height: 40,
-                child: Row(
-                  children: [
-                    // Switch 收缩包裹并左移抵掉内置 4px 水平内边距,轨道左缘
-                    // 才能对齐输入框列(与推理档开关同款处理)
-                    Transform.translate(
-                      offset: const Offset(-4, 0),
-                      child: Switch(
-                        key: const ValueKey('model-compact-switch'),
-                        value: _compactMode == 'error',
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        onChanged: (v) =>
-                            setState(() => _compactMode = v ? 'error' : 'passive'),
-                      ),
+          // 开关独占第一排;上下文大小与触发阈值并排第二排(阈值仅开启时显示)
+          LabeledField(
+            key: const ValueKey('model-compact-mode-field'),
+            label: '开启上下文限制',
+            hint: '估算输入超过窗口比例时拦截，回 400 让客户端自压缩',
+            child: SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  // Switch 收缩包裹并左移抵掉内置 4px 水平内边距,轨道左缘
+                  // 才能对齐输入框列(与推理档开关同款处理)
+                  Transform.translate(
+                    offset: const Offset(-4, 0),
+                    child: Switch(
+                      key: const ValueKey('model-compact-switch'),
+                      value: _compactMode == 'error',
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: (v) =>
+                          setState(() => _compactMode = v ? 'error' : 'passive'),
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _compactMode == 'error' ? '已开启' : '已关闭',
-                      style: const TextStyle(fontSize: 12.5),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _compactMode == 'error' ? '已开启' : '已关闭',
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ],
               ),
             ),
+          ),
+          const SizedBox(height: 20),
+          FormRow2(
             LabeledField(
               label: '上下文大小',
               child: TextFormField(
@@ -454,35 +455,31 @@ class _ModelFormState extends State<ModelForm> {
                 },
               ),
             ),
+            _compactMode != 'passive'
+                ? LabeledField(
+                    key: const ValueKey('model-compact-threshold-field'),
+                    label: '触发阈值',
+                    hint: '估算输入超过窗口此比例时拦截',
+                    child: TextFormField(
+                      key: const ValueKey('model-compact-threshold'),
+                      controller: _compactThreshold,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        suffixText: '%',
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (v) {
+                        final n = double.tryParse(v?.trim() ?? '');
+                        if (n == null) return '请填写数字';
+                        if (n <= 0 || n > 100) return '须在 1–100 之间';
+                        return null;
+                      },
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
-          if (_compactMode != 'passive') ...[
-            const SizedBox(height: 20),
-            FormRow2(
-              LabeledField(
-                key: const ValueKey('model-compact-threshold-field'),
-                label: '触发阈值',
-                hint: '估算输入超过窗口此比例时拦截',
-                child: TextFormField(
-                  key: const ValueKey('model-compact-threshold'),
-                  controller: _compactThreshold,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    suffixText: '%',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (v) {
-                    final n = double.tryParse(v?.trim() ?? '');
-                    if (n == null) return '请填写数字';
-                    if (n <= 0 || n > 100) return '须在 1–100 之间';
-                    return null;
-                  },
-                ),
-              ),
-              const SizedBox.shrink(),
-            ),
-          ],
         ],
       ),
     );
