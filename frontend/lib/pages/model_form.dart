@@ -77,7 +77,8 @@ class _ModelFormState extends State<ModelForm> {
   );
 
   static String _normalizeCompactMode(Object? mode) {
-    if (mode == 'error') return 'error';
+    // 存量 auto(网关代压,已废)载入归一为 error;新建/未知值落 passive。
+    if (mode == 'error' || mode == 'auto') return 'error';
     return 'passive';
   }
 

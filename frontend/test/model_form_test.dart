@@ -491,6 +491,31 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('压缩策略:存量 auto 归一拦截,下拉只留元数据/拦截', (tester) async {
+    final source = UpstreamModel.fromJson(const {
+      'id': 'kimi-1/legacy',
+      'account': 'kimi-1',
+      'native_model': 'k3-256k',
+      'protocol': 'chat_completions',
+      'context_window': 200000,
+      'compact': {'mode': 'auto', 'keep_turns': 3},
+      'enabled': true,
+    });
+    await pumpForm(tester, editing: source);
+
+    final dropdown = tester.widget<StyledDropdown>(
+      dropdownIn('model-compact-mode-field'),
+    );
+    expect(dropdown.value, 'error');
+    expect(dropdown.options, const ['passive', 'error']);
+    // 保留轮数随 auto 一并消失;拦截模式下阈值行在场。
+    expect(find.byKey(const ValueKey('model-compact-keep')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('model-compact-threshold')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('推理档:新建默认开关开且无档位行,数字映射值行动态增删随提交上行', (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
