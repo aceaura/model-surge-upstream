@@ -1,20 +1,20 @@
 # 推理档映射规则(effort mapping)
 
-面向两类读者:**配置模型的管理员**(怎么填档位表、选双端格式)与**接入下游的开发者**(harness 怎么送档位、怎么拿声明)。
+面向两类读者:**配置模型的管理员**(怎么填映射表、选双端格式)与**接入下游的开发者**(harness 怎么送档位、怎么拿声明)。
 
-## 1. 总览:规范档桥接模型
+## 1. 总览:规范档桥接与先清后写
 
-网关不直接把下游的思考参数原样透传给上游,而是以**规范档**(模型档位表里声明的 value,含 `none`)为桥:
+网关不直接把下游的思考参数原样透传给上游,而是以**规范档**(映射对表行的上游值,含 `none`)为桥:
 
 ```
-下游请求体 ──Read(下游格式)──▶ 规范档 ──Coerce(档位表矫正)──▶ 声明档
-            ──StripKeys(剥入口残留键)──▶ ──Write(上游格式)──▶ 上行请求体
+下游请求体 ──Read(下游格式)──▶ 原始档 ──Coerce(映射表矫正)──▶ 上行值
+           ──StripAll(全键清除)──▶ ──Write(上游格式)──▶ 上行请求体
 ```
 
 - **Read**:按模型声明的下游格式(`effort_in`)从请求体里读出档位原始值。
-- **Coerce**:把原始值矫正进档位表(就低不就高,见 §6);每次矫正写运行日志。
-- **StripKeys**:剥掉入口格式读过的键(先剥后写,入口与上游共用键时才不会吃掉刚写入的字段)。
-- **Write**:按模型声明的上游格式(`effort_format`)把声明档写成上游认识的字段结构。
+- **Coerce**:把原始值矫正进映射对表(就低不就高,未知值取中,见 §6);产出是命中行的**上行值**;每次矫正写运行日志。
+- **StripAll**:映射命中后**无条件清除全部已知档位键**(八格式并集,不限入口格式)——客户端残留的旧形态字段不得与新写入字段并存污染上行。兄弟键保留,删空的中层对象一并清理。
+- **Write**:按模型声明的上游格式(`effort_format`)把上行值写成上游认识的字段结构。
 
 自有扩展字段 `reasoning_level`(数字档)不入词表:消费即删,未命中也不泄漏上游;它是 Read 未命中时的回退链(§3)。
 
@@ -23,26 +23,26 @@ sequenceDiagram
     autonumber
     participant C as 下游客户端/harness
     participant P as proxyplane (转发面)
-    participant E as effort (读/矫正/剥/写)
+    participant E as effort (读/矫正/清/写)
     participant R as ringlog
     participant U as 上游厂商
     participant M as 下发面 /v1/models
 
-    Note over M,C: 声明通道:模型列表携带 efforts(档号+上行值),下游按它渲染菜单/校验配置
-    M-->>C: efforts=[0·none,1·low,2·high,3·max]
+    Note over M,C: 声明通道:模型列表携带 efforts(下游档+上行值映射对),下游按它渲染菜单/校验配置
+    M-->>C: efforts=[{none,none},{low,low},{high,max}]
 
     C->>P: 请求体(自带档位字段 或 reasoning_level 数字档)
-    P->>P: 总开关闸:关=不读不写不剥,仅删 reasoning_level
-    Note over P,E: 双端格式词表全量可用(跨族组合合法),读写剥按各自声明的形态执行
-    P->>E: Read(下游格式):体里读规范档
+    P->>P: 总开关闸:关=不读不写不清,仅删 reasoning_level
+    Note over P,E: 双端格式词表全量可用(跨族组合合法),读写清按各自声明的形态执行
+    P->>E: Read(下游格式):体里读原始档
     E-->>P: 原始值(budget 反查亦走矫正)
-    P->>E: Coerce(声明表):别名归一→精确命中→向下钳→medium 兜底
-    E-->>P: 矫正后档位值
+    P->>E: Coerce(映射表):别名归一→Name 精确命中回 Value→就低钳→取中兜底
+    E-->>P: 上行值(命中行的 Value)
     opt 发生矫正
         P->>R: effort coerced: 原值→矫正值
     end
-    P->>E: StripKeys(下游格式):剥入口残留键(先剥后写)
-    P->>E: Write(上游格式):effort 类直写档位 / budget 类写预算 / 无档位类恒落关思考
+    P->>E: StripAll:清全部已知档位键(先清后写,无条件)
+    P->>E: Write(上游格式):effort 类直写档名 / budget 类写数字预算 / 无档位类恒落关思考
     Note over E: none 随格式落定:anthropic 载档族走 effort_off(disabled/between_tools/omit),<br/>gemini 族不动体,openai 族原样写;anthropic_off 命中任何档都落关思考
     P->>U: 上行请求(映射恒压 defaults;overrides 最后合并仍可压盖)
 ```
@@ -58,44 +58,61 @@ sequenceDiagram
 - 旧四值(`chat_completions`/`responses`/`anthropic`/`gemini`)读时归一到新词表(`openai_chat`/`openai_responses`/`anthropic_effort`/`gemini_level`)。
 - 组合是否合理由配置者负责:跨族写出的字段上游可能不认识,按厂商实际文档选。
 
-## 3. 档位表语义
+### 档词表(LevelsFor)
 
-- 档位表是**显式数字映射**:每行一个档位值,**行号即档号**(1、2、3…),0 档固定为「关闭思考」(上行值 `none`),由表单开关决定是否声明。
-- value 就是发给上游的档位字符串,不设固定词表:各家私有档(`ultra` 等)也能声明,上行按声明原样发送。
-- 上游思考恒开不可关的模型(kimi、codex)**不声明 0 档**即可,`none` 永远不会出现。
-- 下游请求顶层 `reasoning_level: "N"` 按档号 N 查表取值(网关扩展字段,消费即删);**越界档号钳到末行最高档**并记日志。
+档名类格式的官方档词表,驱动表单下拉与保存校验(代码:`effort.LevelsFor`):
 
-## 4. 下游格式词表(Read/StripKeys)
+| 格式族 | 档词表 |
+|---|---|
+| openai_chat / openai_responses | none, minimal, low, medium, high, xhigh, max(7 值,GPT-6.1 起含 max) |
+| anthropic_effort / anthropic_adaptive | none, low, medium, high, xhigh, max(none + 官方 5 档;关思考不是 effort 值,由映射行表达,写上游时按关思考落定) |
+| gemini_level | none, LOW, HIGH |
+| budget 类 / anthropic_off / auto | 无词表(右列是数字/none 或无档) |
 
-| 格式 | 认什么字段 | 剥什么键 |
-|---|---|---|
-| openai_chat | 顶层 `reasoning_effort`(字符串) | `reasoning_effort` |
-| openai_responses | `reasoning.effort` | 只删 `reasoning.effort`,兄弟键(summary 等)保留 |
-| anthropic_effort | `output_config.effort` | `output_config.effort`(删空则清理空壳) |
-| anthropic_budget | `thinking.type==enabled` 时的 `thinking.budget_tokens`,按预算区间反查档位(§6 规则 7) | `thinking.type` + `thinking.budget_tokens` |
-| anthropic_adaptive | `thinking.type==adaptive` 时的 `output_config.effort` | `thinking.type` 与 `output_config.effort` |
-| anthropic_off | `thinking.type` 为 `disabled`/`between_tools` → 读成 `none` | `thinking.type` |
+`none` 进两端词表,作为「无思考」档显式声明;不再设独立的 0 档开关。
 
-读不到(字段缺失/形态不符)不算错误:回退 `reasoning_level` 数字档,再未命中则本次请求不动思考字段。`''`(auto)不读不剥——体里自带字段原样透传。
+## 3. 映射对表语义
+
+- 档位表是**行式映射对**:每行 `{name: 下游档, value: 上行值}`——name 是客户端/对话页选档的标识,value 是发给上游的档位字符串。
+- **匹配按 name,产出取 value**:请求档精确命中某行 name → 上行发该行 value;非恒等映射(如 `low→medium`)由此表达。
+- **下游 budget 格式**(`effort_in=anthropic_budget`):左列 name 填**预算阈值数字串**(如 `1024`/`4000`/`10000`),请求预算按区间反查命中行(§6 规则 7)。
+- **上游 budget 格式**(`effort_format=anthropic_budget`/`gemini_budget`):右列 value 填 **token 数字串或 none**,写上行时数字直用(不再走内置预算表);none 按关思考落定/不动体。
+- **数字档**(`reasoning_level: "N"`)按**行序**查表:`"1"`=第 1 行、`"2"`=第 2 行……(含 none 行在内数);`"0"` 按名命中 none 行(声明了 none 才命中);**越界档号钳到末行**并记日志。
+- 上游思考恒开不可关的模型(kimi、codex)**不声明 none 行**即可,`none` 永远不会出现。
+- 校验(保存时):name 须在下游格式档词表内(下游 budget 时为正整数串);value 须在上游档词表内(上游 budget 时为正整数串或 none);大小写不敏感;词表外拒绝并列出合法集。anthropic_off 上游时映射表必须为空。
+- **存量迁移**(读时兼容,下次保存即改写):旧「行号即档号」的纯数字 name——值 none → `none→none`,其余 → 恒等映射 `value→value`;name 留空取 value;自动模式(null)生成恒等映射对。
+
+## 4. 下游格式词表(Read)
+
+| 格式 | 认什么字段 |
+|---|---|
+| openai_chat | 顶层 `reasoning_effort`(字符串) |
+| openai_responses | `reasoning.effort` |
+| anthropic_effort | `output_config.effort` |
+| anthropic_budget | `thinking.type==enabled` 时的 `thinking.budget_tokens`,按预算区间反查档位(§6 规则 7) |
+| anthropic_adaptive | `thinking.type==adaptive` 时的 `output_config.effort` |
+| anthropic_off | `thinking.type` 为 `disabled`/`between_tools` → 读成 `none` |
+
+读不到(字段缺失/形态不符)不算错误:回退 `reasoning_level` 数字档,再未命中则本次请求不动思考字段(也不清场)。`''`(auto)不读——但命中数字档回退时同样走「先清后写」。
 
 ## 5. 上游格式词表(Write)与三分类
 
 上游格式分三类,分类决定映射行为与表单填写框(代码:`effort.CategoryOf`):
 
-| 分类 | 格式 | 映射行为 | 表单填写框 |
+| 分类 | 格式 | 映射行为 | 表单右列 |
 |---|---|---|---|
-| effort 类(档位直写) | openai_chat, openai_responses, anthropic_effort, anthropic_adaptive, gemini_level | 档位值原样写入协议字段 | 档位表(0 档开关 + 1..N 档行);关思考落定仅 anthropic 两格式 |
-| budget 类(预算映射) | anthropic_budget, gemini_budget | 档位值→预算 token(BudgetOf+钳制) | 档位表 + 预算列;关思考落定仅 anthropic_budget |
-| 无档位类 | anthropic_off | 不载档;**命中任何档都落关思考形态**(模型思考恒关) | 无档位表/0 档开关/关思考落定,efforts 落 `[]` |
+| effort 类(档位直写) | openai_chat, openai_responses, anthropic_effort, anthropic_adaptive, gemini_level | 上行值(档名)原样写入协议字段 | 档词表下拉 |
+| budget 类(预算直写) | anthropic_budget, gemini_budget | 上行值数字串直写预算 token(钳到 < max_tokens);none 按落定/不动体 | 数字编辑框(或 none) |
+| 无档位类 | anthropic_off | 不载档;**命中任何档都落关思考形态**(模型思考恒关) | 无映射表,efforts 落 `[]` |
 
-下游格式(effort_in)对三类都有意义:不管上游是哪类,都按下游格式读档并剥掉原键。effort 类与 budget 类按档位数字映射(档号→声明表行→值);无档位类无需映射,直接改格式。
+下游格式(effort_in)对三类都有意义:不管上游是哪类,都按下游格式读档。
 
 | 格式 | 怎么写 | `none` 怎么落定 |
 |---|---|---|
 | openai_chat | 顶层 `reasoning_effort` | 原样写 `none`(OpenAI 值域含 none) |
 | openai_responses | `reasoning.effort`(不动其他 reasoning 键) | 原样写 |
 | anthropic_effort | `output_config.effort` | 按关思考落定(§7) |
-| anthropic_budget | `thinking:{type:enabled,budget_tokens:N}`,N 按预算表并钳到 < max_tokens | 按关思考落定 |
+| anthropic_budget | `thinking:{type:enabled,budget_tokens:N}`,N 取映射行 value 数字串并钳到 < max_tokens | 按关思考落定 |
 | anthropic_adaptive | `thinking:{type:adaptive}` + `output_config.effort` | 按关思考落定 |
 | anthropic_off | 无档位:命中任何档都按关思考落定(off 恒为 disabled 标准写法) | 同左 |
 | gemini_level | `generationConfig.thinkingConfig.thinkingLevel`(大写枚举) | 不动体(gemini 3.x 不可关思考) |
@@ -103,70 +120,69 @@ sequenceDiagram
 
 `''`(auto)=协议内置映射:按出站协议选字段(responses→`reasoning.effort`、chat_completions→`reasoning_effort`、anthropic→`output_config.effort` 且 none→`thinking:{type:disabled}`、gemini→`thinkingLevel`)。
 
-## 6. 矫正算法(就低不就高)
+## 6. 矫正算法(就低不就高,未知取中)
 
-统一原则:**请求档超出声明表时,钳到「强度不超过请求值」的最高档;低于最低档时取最低档**。保守不超档,避免悄悄放大思考预算。
+统一原则:**请求档超出映射表时,钳到「强度不超过请求值」的最高档;低于最低档时取最低档;完全未知的值按位置取中**。保守不超档,避免悄悄放大思考预算;匹配与强度比较都按行 name,**产出一律是命中行的 value**。
 
 内置强度序:`none < minimal < low < medium < high < xhigh < max`。
 
 管线(对 Read / reasoning_level 读出的原始值依次执行):
 
-1. **空声明表**(模型未声明任何档)→ 恒等透传,不矫正不拦截。
+1. **空映射表**(模型未声明任何行)→ 恒等透传,不矫正不拦截。
 2. **别名归一**:`off`/`disabled`→`none`,`extra-high`/`extra_high`→`xhigh`;大小写与空白归一。
-3. **精确命中**声明表 → 用声明原值(仅归一命中也算矫正,值被改写了)。
-4. **在强度序但未声明** → 向下钳到声明表内强度不超过请求值的最高档;请求强度低于全部声明档 → 取声明表最低档(声明了 `none` 它就是最低档)。
-5. **完全未知值**(不在强度序,如 `ultra`、`hihg`)→ 回落声明表中的 `medium`;无 medium 取首个非 none 档;表只有 none 回 none。
-6. **数字档越界**(`reasoning_level: "9"` 但只有 3 行)→ 钳到末行最高档。
-7. **budget 反查矫正**(下游 anthropic_budget)→ 不再要求精确命中:钳到预算不超过请求数的最高档,低于最小档取最小档。
+3. **精确命中**某行 name → 回该行 value(仅归一命中也算矫正,值被改写了)。
+4. **在强度序但未命中** → 向下钳到表内 name 强度不超过请求值的最高档行,回其 value;请求强度低于全部声明档 → 取最低档行的 value(声明了 `none` 它就是最低档)。
+5. **完全未知值**(不在强度序,如 `ultra`、`hihg`)→ **排除 none 行后按位置取中**:序号 `(n-1)/2` 下取整(4 行选 2、3 行选 2、5 行选 3、2 行选 1、1 行选 1),回该行 value;表只有 none 行(n=0)回首行 value(即 none)。
+6. **数字档越界**(`reasoning_level: "9"` 但只有 3 行)→ 钳到末行。
+7. **budget 反查矫正**(下游 anthropic_budget)→ 行 name 为数字串时直接作阈值,否则回退内置预算表;钳到预算不超过请求数的最高档,低于最小档取最小档。
 
 每次矫正写运行日志(日志页可见):`model effort coerced: 原值→矫正值 model=模型标识`。
 
-示例矩阵(声明表 `0·none / 1·low / 2·medium / 3·high`):
+示例矩阵(映射表 `{none,none} / {low,low} / {medium,medium} / {high,max}`):
 
 | 请求值 | 实际档 | 规则 |
 |---|---|---|
-| `high` | high | 精确命中 |
-| `HIGH` | high | 归一命中 |
+| `high` | max | 精确命中第 4 行,上行发该行 value |
+| `HIGH` | max | 归一命中 |
 | `off` | none | 别名归一 |
-| `xhigh` | high | 向下钳 |
-| `max` | high | 向下钳 |
+| `xhigh` | max | 向下钳到 high 行 |
 | `minimal` | none | 低于最低档取最低 |
-| `ultra` | medium | 未知值 medium 兜底 |
-| `reasoning_level: "9"` | high | 数字档越界钳末行 |
+| `ultra` | medium | 未知值排除 none 后 3 行取中=第 2 行 |
+| `reasoning_level: "9"` | max | 数字档越界钳末行 |
 
-声明表 `1·low / 2·high / 3·max`(无 0 档,如 kimi):请求 `none` → low(表内最低档);请求 `medium` → low(向下钳)。
+映射表 `{low,low} / {high,max} / {max,max}`(无 none 行,如 kimi):请求 `none` → low(表内最低档);请求 `medium` → low(向下钳)。
 
 ## 7. 附属规则
 
 | 规则 | 字段 | 何时生效 | 作用 |
 |---|---|---|---|
-| 总开关 | `effort_enabled` | 恒判 | false=不读不写不剥离,对话页选档不落笔;`reasoning_level` 仍消费即删 |
-| 关思考落定 | `effort_off` | 上游格式属 anthropic 载档族且档位为 `none`;anthropic_off(无档位类)命中任何档都落定 | `''`=disabled(标准,`thinking:{type:disabled}`);`between_tools`=Sonnet 5.5 顶替(整对象替换);`omit`=不写(上游思考恒开,0 档仅靠不声明承担) |
-| 预算覆盖 | `effort_budgets` | 预算类格式(anthropic_budget/gemini_budget)取数,及 anthropic_budget 入口反查 | 档位值→预算 token 的模型级覆盖;内置表 low 1024 / medium 4000 / high 10000 / xhigh 20000 / max 32000,表外档回 4000;写上行时钳到 < max_tokens(体里 max_tokens ≤1024 或未声明则不钳) |
-| 数字档 | `reasoning_level`(请求字段) | 下游格式 Read 未命中时回退 | 顶层扩展字段,档号即档位表行号;消费即删,越界钳末行 |
+| 总开关 | `effort_enabled` | 恒判 | false=不读不写不清场,对话页选档不落笔;`reasoning_level` 仍消费即删 |
+| 关思考落定 | `effort_off` | 上游格式属 anthropic 载档族且档位为 `none`;anthropic_off(无档位类)命中任何档都落定 | `''`=disabled(标准,`thinking:{type:disabled}`);`between_tools`=Sonnet 5.5 顶替(整对象替换);`omit`=不写(上游思考恒开,不声明 none 行承担) |
+| 预算覆盖 | `effort_budgets` | budget 反查/写上行时,行 name/value 为档名(非数字串)的兼容回退 | 档位值→预算 token 的模型级覆盖;内置表 low 1024 / medium 4000 / high 10000 / xhigh 20000 / max 32000,表外档回 4000;映射行直接填数字串时不经过此表 |
+| 数字档 | `reasoning_level`(请求字段) | 下游格式 Read 未命中时回退 | 顶层扩展字段,档号按映射表行序(§3);消费即删,越界钳末行 |
 
 ## 8. 声明契约:下游怎么配
 
-**拿声明**:网关下发面 `/v1/models` 各协议形态的每条模型携带 `efforts` 字段(`[{name,value}]`,name=档号/显示名,value=上行值)。下游应当:
+**拿声明**:网关下发面 `/v1/models` 各协议形态的每条模型携带 `efforts` 字段(`[{name,value}]`,name=下游档,value=上行值)。下游应当:
 
-- 用它渲染档位菜单(name 展示、value 上行);
-- 用它做本地校验——送表外值会被网关矫正(就低),不保证原样上行;
-- `reasoning_level` 数字档的合法档号就是 name 列(通常 `"0"`…`"N"`);
-- 列表里没有 `none` 条目 = 该模型不支持关闭思考,别送 0 档。
+- 用它渲染档位菜单(name 展示、选择后按模型下游格式送档或直接送 `reasoning_level`);
+- 用它做本地校验——送表外值会被网关矫正(就低/取中),不保证原样上行;
+- `reasoning_level` 数字档的合法档号是 `"1"`…`"N"`(行序,含 none 行),`"0"` 按名命中 none 行;
+- 列表里没有 `none` 行 = 该模型不支持关闭思考,别送 none/0 档。
 
 **送档位**:按模型的下游格式(effort_in)在请求体里携带对应字段(§4 表),或直接送顶层 `reasoning_level`。
 
 **每协议最小配置示例**(管理员视角):
 
-- chat_completions 模型:双端格式按缺省 openai_chat 即可(词表首项),只需填档位表。
+- chat_completions 模型:双端格式按缺省 openai_chat 即可(词表首项),只需填映射表(恒等映射:左档右同值)。
 - responses 模型:双端格式改选 openai_responses。
-- anthropic 模型(下游 harness 送预算):下游格式 anthropic_budget、上游格式按厂商选(如 anthropic_effort);需要关 0 档思考时声明 0 档并按厂商选关思考落定。
-- anthropic 无档位模型(思考恒关):上游格式 anthropic_off,无需档位表;下游格式按 harness 形态选(读档剥键仍生效),送什么档都按关思考发上游。
-- gemini 模型:上游格式 gemini_level(3.x)或 gemini_budget(2.5 预算制);下游格式按 harness 形态选(harness 不送档位字段时任选——读不到即回退 `reasoning_level`,再未命中不动体);不声明 0 档。
+- anthropic 模型(下游 harness 送预算):下游格式 anthropic_budget、上游格式按厂商选(如 anthropic_effort);左列填阈值数字串;需要支持关思考时加一行 `none→none` 并按厂商选关思考落定。
+- anthropic 无档位模型(思考恒关):上游格式 anthropic_off,无需映射表;下游格式按 harness 形态选(读档仍生效),送什么档都按关思考发上游。
+- gemini 模型:上游格式 gemini_level(3.x)或 gemini_budget(2.5 预算制);下游格式按 harness 形态选(harness 不送档位字段时任选——读不到即回退 `reasoning_level`,再未命中不动体);不声明 none 行。
 
 ## 9. 优先级与冲突
 
 - **参数合并顺序**:模型 defaults ← 请求体参数 ← 档位映射写入 ← 模型 overrides。映射恒压 defaults;**overrides 最后合并,仍可压盖映射结果**(留给「强制某档」的运维口径)。
-- **先剥后写**:入口与上游共用键时(anthropic 族 `output_config.effort`、`thinking.type`),写后剥离会吃掉刚写入的字段;Read 已取到规范档,剥离不依赖入口键,顺序固定为先 StripKeys 后 Write。
-- **入口==上游同格式**:写入即剥离会自吃?不会——先剥后写的顺序保证剥离发生在写入之前,同格式时字段最终按映射值落定。
-- **总开关优先于一切**:关闭时双端格式、档位表、附属规则全部旁路。
+- **先清后写**:映射命中后 StripAll **无条件**清全部已知档位键(不限入口格式,auto 入口命中数字档也清),再由 Write 按上游格式落笔——残留的旧形态字段不与新写入字段并存。未命中(Read 与数字档回退都落空)则完全不触碰请求体。
+- **同格式入=出**:清除发生在写入之前,同名字段清掉后由 Write 按映射值重写,不会自吃。
+- **总开关优先于一切**:关闭时双端格式、映射表、附属规则全部旁路。

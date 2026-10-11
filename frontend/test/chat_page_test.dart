@@ -667,7 +667,7 @@ void main() {
   testWidgets('推理档选择器:无「默认」,首次取最低档,回指上次所选,选择随发送上行', (tester) async {
     // kimi-1/k2 有效支持列表为空:选择器不露面;切到 codex-1/gpt-6.1-sol
     // (有效列表 minimal~high)出现并自动选中最低档 minimal(无「默认」项)。
-    // 菜单显示上行值原文(英文档位名,不显示条目 name 的中文转译),选
+    // 菜单显示下游档(条目 name;自动模式恒等映射对下 name=上行值),选
     // high 后 POST body 带 effort=high;且该模型记住 high——切走再切回、
     // 重建页面(模拟重启,shared_preferences mock 库跨实例存活)都回指 high。
     final sent = <Map<String, dynamic>>[];
@@ -702,10 +702,10 @@ void main() {
                 'overrides': <String, dynamic>{},
                 'efforts': null,
                 'efforts_effective': [
-                  {'name': '最小', 'value': 'minimal'},
-                  {'name': '低', 'value': 'low'},
-                  {'name': '中', 'value': 'medium'},
-                  {'name': '高', 'value': 'high'},
+                  {'name': 'minimal', 'value': 'minimal'},
+                  {'name': 'low', 'value': 'low'},
+                  {'name': 'medium', 'value': 'medium'},
+                  {'name': 'high', 'value': 'high'},
                 ],
                 'enabled': true,
               },

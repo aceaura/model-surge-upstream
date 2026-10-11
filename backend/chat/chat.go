@@ -372,10 +372,10 @@ func (s *Service) Send(ctx context.Context, sessionID, modelID, content, effortL
 	if err != nil {
 		return nil, err
 	}
-	if effortLevel != "" && !effort.ContainsValue(target.Efforts, effortLevel) {
+	if effortLevel != "" && !effort.ContainsName(target.Efforts, effortLevel) {
 		return nil, apperr.New(apperr.InvalidRequest,
 			fmt.Sprintf("model %q does not support reasoning effort %q (supported: %s)",
-				modelID, effortLevel, strings.Join(effort.Values(target.Efforts), ", ")))
+				modelID, effortLevel, strings.Join(effort.Names(target.Efforts), ", ")))
 	}
 	history, err := s.repo.ListMessages(ctx, sessionID)
 	if err != nil {

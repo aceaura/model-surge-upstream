@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,9 +321,21 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	effortIn := ""
+	if in.EffortIn != nil {
+		effortIn = strings.TrimSpace(*in.EffortIn)
+	}
+	effortIn = effort.NormalizeFormat(effortIn)
+	if !effort.ValidEntryFormat(effortIn) {
+		return Model{}, apperr.New(apperr.InvalidRequest,
+			"effort_in must be one of: auto, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off")
+	}
 	// 显式数组的形态合法性在写路径统一校验;有效列表(自动模式跟随上游
 	// 声明)由能访问上游的层(httpapi/resolve)现算,仓储不拼凑。
-	if _, err := effort.Effective(efforts, nil); err != nil {
+	// effortIn 先行解析:下游 budget 格式的数字 name 是阈值,Effective
+	// 的存量档号迁移须跳过(否则 1024 会被改写成上行值)。
+	pairs, err := effort.Effective(efforts, nil, effortIn)
+	if err != nil {
 		return Model{}, err
 	}
 	format := ""
@@ -334,15 +347,6 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
 			"effort_format must be one of: auto, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off, gemini_level, gemini_budget")
 	}
-	effortIn := ""
-	if in.EffortIn != nil {
-		effortIn = strings.TrimSpace(*in.EffortIn)
-	}
-	effortIn = effort.NormalizeFormat(effortIn)
-	if !effort.ValidEntryFormat(effortIn) {
-		return Model{}, apperr.New(apperr.InvalidRequest,
-			"effort_in must be one of: auto, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off")
-	}
 	effortOff := ""
 	if in.EffortOff != nil {
 		effortOff = strings.TrimSpace(*in.EffortOff)
@@ -353,6 +357,9 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	}
 	budgets, err := normalizeBudgets(in.EffortBudgets)
 	if err != nil {
+		return Model{}, err
+	}
+	if err := validateEffortPairs(pairs, effortIn, format, effort.Auto(efforts)); err != nil {
 		return Model{}, err
 	}
 
@@ -373,6 +380,57 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		EffortEnabled: in.EffortEnabled,
 		Enabled:       in.Enabled,
 	}, nil
+}
+
+// validateEffortPairs 行式映射对的词表校验(2026-10-11):name=下游档须在
+// 下游格式词表内(下游 budget 时为正整数串阈值),value=上行值须在上游
+// 格式词表内(上游 budget 时为正整数串或 none);格式为 auto(词表随出站
+// 协议运行时定)或 efforts 为自动模式时跳过。anthropic_off 上游恒关,
+// 显式声明必须为空数组。
+func validateEffortPairs(list []effort.Entry, effortIn, format string, auto bool) error {
+	if auto {
+		return nil
+	}
+	if format == effort.FormatAnthropicOff && len(list) > 0 {
+		return apperr.New(apperr.InvalidRequest,
+			"effort_format anthropic_off 为无档位类(思考恒关),efforts 须为空数组")
+	}
+	inVocab, outVocab := effort.LevelsFor(effortIn), effort.LevelsFor(format)
+	for _, e := range list {
+		if effortIn == effort.FormatAnthropicBudget {
+			if !positiveInt(e.Name) {
+				return apperr.New(apperr.InvalidRequest, fmt.Sprintf(
+					"effort entry name %q must be a positive integer budget threshold (effort_in anthropic_budget)", e.Name))
+			}
+		} else if inVocab != nil && !inVocabList(inVocab, e.Name) {
+			return apperr.New(apperr.InvalidRequest, fmt.Sprintf(
+				"effort entry name %q must be one of %s (effort_in %s)", e.Name, strings.Join(inVocab, ", "), effortIn))
+		}
+		if format == effort.FormatAnthropicBudget || format == effort.FormatGeminiBudget {
+			if !positiveInt(e.Value) && !strings.EqualFold(e.Value, "none") {
+				return apperr.New(apperr.InvalidRequest, fmt.Sprintf(
+					"effort entry value %q must be a positive integer budget or none (effort_format %s)", e.Value, format))
+			}
+		} else if outVocab != nil && !inVocabList(outVocab, e.Value) {
+			return apperr.New(apperr.InvalidRequest, fmt.Sprintf(
+				"effort entry value %q must be one of %s (effort_format %s)", e.Value, strings.Join(outVocab, ", "), format))
+		}
+	}
+	return nil
+}
+
+func positiveInt(s string) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	return err == nil && n > 0
+}
+
+func inVocabList(vocab []string, v string) bool {
+	for _, item := range vocab {
+		if strings.EqualFold(item, strings.TrimSpace(v)) {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeBudgets 校验预算覆盖 JSON:空=空 map;必须是对象且值为正整数。

@@ -169,8 +169,8 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			Defaults:  json.RawMessage(`{"temperature":0.6,"thinking":{"type":"enabled","budget_tokens":1000}}`),
 			Overrides: json.RawMessage(`{"max_tokens":8192,"thinking":{"budget_tokens":2000}}`),
 			Efforts: []effort.Entry{
-				{Name: "0", Value: "none"},
-				{Name: "1", Value: "high"},
+				{Name: "none", Value: "none"},
+				{Name: "high", Value: "high"},
 			},
 			EffortEnabled: true,
 		},
@@ -179,9 +179,9 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			Protocol: "chat_completions", BaseURL: upstreamURL, NativeModel: "gpt-5",
 			Headers: map[string]string{"Authorization": "Bearer real-openai-key"},
 			Efforts: []effort.Entry{
-				{Name: "0", Value: "none"},
-				{Name: "1", Value: "low"},
-				{Name: "2", Value: "high"},
+				{Name: "none", Value: "none"},
+				{Name: "low", Value: "low"},
+				{Name: "high", Value: "high"},
 			},
 			EffortEnabled: true,
 		},
@@ -190,8 +190,8 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			Protocol: "responses", BaseURL: upstreamURL, NativeModel: "gpt-6",
 			Headers: map[string]string{"Authorization": "Bearer real-openai-key"},
 			Efforts: []effort.Entry{
-				{Name: "0", Value: "none"},
-				{Name: "1", Value: "low"},
+				{Name: "none", Value: "none"},
+				{Name: "low", Value: "low"},
 			},
 			EffortEnabled: true,
 		},
@@ -209,9 +209,9 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 			Protocol: "anthropic", BaseURL: upstreamURL, NativeModel: "k3-256k",
 			Headers: map[string]string{"x-api-key": "real-account-key"},
 			Efforts: []effort.Entry{
-				{Name: "1", Value: "low"},
-				{Name: "2", Value: "high"},
-				{Name: "3", Value: "max"},
+				{Name: "low", Value: "low"},
+				{Name: "high", Value: "high"},
+				{Name: "max", Value: "max"},
 			},
 			EffortFormat:  effort.FormatChatCompletions,
 			EffortEnabled: true,
@@ -255,9 +255,9 @@ func TestEffortFormatForward(t *testing.T) {
 		{name: "client effort passes through", params: `{"reasoning_effort":"low"}`, want: "low"},
 		{name: "client none passes through", params: `{"reasoning_effort":"none"}`, want: "none"},
 		{name: "disabled level sends none", params: `{"reasoning_level":0,"reasoning_effort":"low"}`, want: "none"},
-		{name: "low", params: `{"reasoning_level":"1","reasoning_effort":"ultra"}`, want: "low"},
-		{name: "medium", params: `{"reasoning_level":"2"}`, want: "medium"},
-		{name: "xhigh", params: `{"reasoning_level":"3"}`, want: "xhigh"},
+		{name: "low", params: `{"reasoning_level":"2","reasoning_effort":"ultra"}`, want: "low"},
+		{name: "medium", params: `{"reasoning_level":"3"}`, want: "medium"},
+		{name: "xhigh", params: `{"reasoning_level":"4"}`, want: "xhigh"},
 		{name: "overrides win", params: `{}`, want: "xhigh", override: `{"reasoning_effort":"xhigh"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestEffortFormatForward(t *testing.T) {
 				Defaults:      json.RawMessage(`{"reasoning_effort":"medium"}`),
 				Overrides:     json.RawMessage(tc.override),
 				EffortFormat:  effort.FormatChatCompletions,
-				Efforts:       []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}},
+				Efforts:       []effort.Entry{{Name: "none", Value: "none"}, {Name: "low", Value: "low"}, {Name: "medium", Value: "medium"}, {Name: "xhigh", Value: "xhigh"}},
 				EffortEnabled: true,
 			}
 			if tc.emptyEfforts {
@@ -464,10 +464,11 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 		return got
 	}
 
-	// 字符串档号命中:2→high,reasoning_effort 赋值,reasoning_level 不进上游。
+	// 字符串档号命中:3→high(行序:1=none,2=low,3=high),reasoning_effort
+	// 赋值,reasoning_level 不进上游。
 	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey},
-		`{"model":"my-gpt","messages":[],"reasoning_level":"2"}`)
+		`{"model":"my-gpt","messages":[],"reasoning_level":"3"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -490,10 +491,10 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 		t.Fatalf("0 档 reasoning_effort = %v, want none", got["reasoning_effort"])
 	}
 
-	// responses 协议:1→low 进 reasoning.effort。
+	// responses 协议:2→low(行序:1=none,2=low)进 reasoning.effort。
 	rec = doRequest(t, h, http.MethodPost, "/v1/responses",
 		map[string]string{"Authorization": "Bearer " + testKey},
-		`{"model":"my-resp","input":[],"reasoning_level":"1"}`)
+		`{"model":"my-resp","input":[],"reasoning_level":"2"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -522,11 +523,12 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 		t.Fatalf("越界档位应钳到末行 high: %v", got)
 	}
 
-	// anthropic:1→high 进 output_config.effort;0→none 改写 thinking disabled
-	// (defaults 的 thinking 深合并,type 被客户端参数层的映射压盖)。
+	// anthropic:2→high(行序:1=none,2=high)进 output_config.effort;0→none
+	// 改写 thinking disabled(defaults 的 thinking 深合并,type 被客户端参数层
+	// 的映射压盖)。
 	rec = doRequest(t, h, http.MethodPost, "/v1/messages",
 		map[string]string{"x-api-key": testKey},
-		`{"model":"my-claude","max_tokens":1024,"messages":[],"reasoning_level":"1"}`)
+		`{"model":"my-claude","max_tokens":1024,"messages":[],"reasoning_level":"2"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -568,8 +570,8 @@ func TestReasoningLevelYieldsToOverrides(t *testing.T) {
 			Headers:   map[string]string{"Authorization": "Bearer real-openai-key"},
 			Overrides: json.RawMessage(`{"reasoning_effort":"low"}`),
 			Efforts: []effort.Entry{
-				{Name: "0", Value: "none"},
-				{Name: "2", Value: "high"},
+				{Name: "none", Value: "none"},
+				{Name: "high", Value: "high"},
 			},
 			EffortEnabled: true,
 		},
@@ -644,17 +646,18 @@ func TestReasoningLevelSwitchOff(t *testing.T) {
 	}
 }
 
-// entryTargets 双端转换回归夹具:anthropic 出站、档位 0=none/1=low/2=medium,
-// 每个用例按需改 EffortIn/EffortOff/EffortBudgets/EffortFormat。
+// entryTargets 双端转换回归夹具:anthropic 出站、映射对 none/low/medium
+// (行序 1=none,2=low,3=medium),每个用例按需改 EffortIn/EffortOff/
+// EffortBudgets/EffortFormat。
 func entryTargets(baseURL string) map[string]resolve.ResolvedTarget {
 	return map[string]resolve.ResolvedTarget{"my-claude": {
 		ModelID: "my-claude", Account: "kimi-1", ProviderID: "kimi.global.subscribe.coding",
 		Protocol: "anthropic", BaseURL: baseURL, NativeModel: "kimi-k2",
 		Headers: map[string]string{"x-api-key": "real-account-key", "anthropic-version": "2023-06-01"},
 		Efforts: []effort.Entry{
-			{Name: "0", Value: "none"},
-			{Name: "1", Value: "low"},
-			{Name: "2", Value: "medium"},
+			{Name: "none", Value: "none"},
+			{Name: "low", Value: "low"},
+			{Name: "medium", Value: "medium"},
 		},
 		EffortEnabled: true,
 	}}
@@ -720,13 +723,14 @@ func TestEntryFormatReadAndStrip(t *testing.T) {
 		t.Fatalf("reasoning.summary 应保留: %v", got)
 	}
 
-	// 入口==上游有效形态(均 openai_chat):写入即剥离会自吃,不得剥离。
+	// 入口==上游有效形态(均 openai_chat):先清场再落笔,同名字段清掉后
+	// 由 Write 按映射值重写,不自吃。
 	base.Protocol = "chat_completions"
 	base.EffortIn = effort.FormatOpenAIChat
 	base.EffortFormat = ""
 	got = doEntryRequest(t, base, `{"model":"my-claude","messages":[],"reasoning_effort":"low"}`)
 	if got["reasoning_effort"] != "low" {
-		t.Fatalf("同形态不应剥离入口字段: %v", got)
+		t.Fatalf("同形态应清场后重写入口字段: %v", got)
 	}
 	base.Protocol = "anthropic"
 
@@ -796,23 +800,37 @@ func TestEntryBudgetClampAndOffPolicy(t *testing.T) {
 	}
 }
 
-// TestEntryAutoLeavesBodyUntouched 锁定 EffortIn 空=auto=现状:不解析入口
-// 字段、不剥离(harness 自带的思考参数原样透传),reasoning_level 数字档
-// 仍照旧消费映射。
+// TestEntryAutoLeavesBodyUntouched 锁定 EffortIn 空=auto:不解析入口字段;
+// 未命中映射(无 reasoning_level)时体一概不碰,harness 自带思考参数原样
+// 透传。命中(数字档)则按 2026-10-11 先清后写:清掉体里全部已知档位键
+// (含 harness 自带残留)再落映射值,新旧字段不并存污染。
 func TestEntryAutoLeavesBodyUntouched(t *testing.T) {
 	base := entryTargets("")["my-claude"]
 
-	got := doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"medium","thinking":{"type":"enabled","budget_tokens":1000},"reasoning_level":"1"}`)
+	// 未命中:harness 自带字段原样透传,不读不清不写。
+	got := doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"medium","thinking":{"type":"enabled","budget_tokens":1000}}`)
 	if got["reasoning_effort"] != "medium" {
-		t.Fatalf("auto 不应动 harness 自带 reasoning_effort: %v", got)
+		t.Fatalf("未命中不应动 harness 自带 reasoning_effort: %v", got)
 	}
 	thinking, _ := got["thinking"].(map[string]any)
 	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(1000) {
-		t.Fatalf("auto 不应动 harness 自带 thinking: %v", got)
+		t.Fatalf("未命中不应动 harness 自带 thinking: %v", got)
+	}
+	if _, ok := got["output_config"]; ok {
+		t.Fatalf("未命中不应写 output_config: %v", got)
+	}
+
+	// 命中数字档(2→low):先清场(harness 残留全清)再写 output_config.effort。
+	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"reasoning_effort":"medium","thinking":{"type":"enabled","budget_tokens":1000},"reasoning_level":"2"}`)
+	if _, ok := got["reasoning_effort"]; ok {
+		t.Fatalf("命中后 harness 残留 reasoning_effort 应清除: %v", got)
+	}
+	if _, ok := got["thinking"]; ok {
+		t.Fatalf("命中后 harness 残留 thinking 应清除: %v", got)
 	}
 	output, _ := got["output_config"].(map[string]any)
 	if output["effort"] != "low" {
-		t.Fatalf("reasoning_level=1 应映射 low: %v", got)
+		t.Fatalf("reasoning_level=2 应映射 low: %v", got)
 	}
 	if _, leaked := got["reasoning_level"]; leaked {
 		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
@@ -836,7 +854,7 @@ func matrixCarries(format, value string) bool {
 func matrixEntry(format, value string) map[string]any {
 	// reasoning_level 用 float64:生产路径经 json.Unmarshal 数字即 float64,
 	// reasoningLevel 按此识别(裸 int 不是线上形态)。
-	level := float64(3)
+	level := float64(4)
 	if value == "none" {
 		level = 0
 	}
@@ -920,10 +938,10 @@ func matrixExpectUpstream(format, value, off string) map[string]any {
 // 以及 gemini 仅作上游被各入口写入的配对。
 func TestEffortConversionMatrix(t *testing.T) {
 	list := []effort.Entry{
-		{Name: "0", Value: "none"},
-		{Name: "1", Value: "low"},
-		{Name: "2", Value: "medium"},
-		{Name: "3", Value: "high"},
+		{Name: "none", Value: "none"},
+		{Name: "low", Value: "low"},
+		{Name: "medium", Value: "medium"},
+		{Name: "high", Value: "high"},
 	}
 	protocolOf := map[string]string{
 		effort.FormatOpenAIChat:        "chat_completions",

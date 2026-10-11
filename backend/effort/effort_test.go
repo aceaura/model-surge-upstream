@@ -42,84 +42,109 @@ func TestAuto(t *testing.T) {
 }
 
 // TestEffectiveAuto 校验自动模式:跟随上游声明,值按原样保留(声明序,
-// 词表外私有档不丢),名取 Label,去空去重;无声明即不支持。
+// 词表外私有档不丢),生成恒等映射对(下游档=上行值),去空去重;
+// 无声明即不支持。
 func TestEffectiveAuto(t *testing.T) {
-	got, err := Effective(nil, []string{"low", "ultra", "extra-high", "low", " "})
+	got, err := Effective(nil, []string{"low", "ultra", "extra-high", "low", " "}, "")
 	want := []Entry{
-		{Name: "低", Value: "low"},
+		{Name: "low", Value: "low"},
 		{Name: "ultra", Value: "ultra"},
-		{Name: "超高", Value: "extra-high"}, // 值原样上行,别名只用于取名
+		{Name: "extra-high", Value: "extra-high"},
 	}
 	if err != nil || !slices.Equal(got, want) {
-		t.Errorf("自动+声明 = %v, %v, want %v(原值声明序)", got, err, want)
+		t.Errorf("自动+声明 = %v, %v, want %v(恒等映射对,声明序)", got, err, want)
 	}
 
-	got, err = Effective(json.RawMessage(`null`), nil)
+	got, err = Effective(json.RawMessage(`null`), nil, "")
 	if err != nil || len(got) != 0 {
 		t.Errorf("自动+无声明 = %v, %v, want 空(不支持)", got, err)
 	}
 }
 
-// TestEffectiveExplicit 校验显式声明:[{name,value}] 条目,name 留空按值
-// 自动命名,按 value 去重(保留首个,顺序不动),压过上游声明;存量纯
-// 字符串元素兼容;空值/坏形态报错;显式空数组=不支持。
+// TestEffectiveExplicit 校验显式声明:[{name,value}] 条目,name 留空取
+// value(恒等),按 name 去重(保留首个,顺序不动——name 是下游档,两行
+// 同 value 不同 name 是合法映射),压过上游声明;存量纯字符串元素兼容;
+// 存量数字档号迁移为映射对;空值/坏形态报错;显式空数组=不支持。
 func TestEffectiveExplicit(t *testing.T) {
 	got, err := Effective(
-		json.RawMessage(`[{"name":"超","value":"high"},{"name":"","value":"ultra"},{"name":"重","value":"high"}]`),
-		[]string{"low"})
+		json.RawMessage(`[{"name":"low","value":"high"},{"name":"","value":"ultra"},{"name":"medium","value":"high"}]`),
+		[]string{"low"}, "")
 	want := []Entry{
-		{Name: "超", Value: "high"},
+		{Name: "low", Value: "high"},
 		{Name: "ultra", Value: "ultra"},
+		{Name: "medium", Value: "high"},
 	}
 	if err != nil || !slices.Equal(got, want) {
-		t.Errorf("显式条目 = %v, %v, want %v(顺序不动,按值去重)", got, err, want)
+		t.Errorf("显式条目 = %v, %v, want %v(顺序不动,按 name 去重)", got, err, want)
 	}
 
-	// 存量纯字符串元素:名按 Label 推导。
-	got, err = Effective(json.RawMessage(`["low","high"]`), nil)
-	want = []Entry{{Name: "低", Value: "low"}, {Name: "高", Value: "high"}}
+	// 存量纯字符串元素:恒等映射对。
+	got, err = Effective(json.RawMessage(`["low","high"]`), nil, "")
+	want = []Entry{{Name: "low", Value: "low"}, {Name: "high", Value: "high"}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("存量字符串数组 = %v, %v, want %v", got, err, want)
 	}
 
-	got, err = Effective(json.RawMessage(`[]`), []string{"low"})
+	// 存量数字档号(行号即档号)迁移:0/none→none→none,其余恒等。
+	got, err = Effective(json.RawMessage(`[{"name":"0","value":"none"},{"name":"1","value":"low"},{"name":"2","value":"max"}]`), nil, "")
+	want = []Entry{{Name: "none", Value: "none"}, {Name: "low", Value: "low"}, {Name: "max", Value: "max"}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("存量档号迁移 = %v, %v, want %v", got, err, want)
+	}
+
+	// 下游 budget 格式:纯数字 name 是预算阈值行,不做档号迁移。
+	got, err = Effective(json.RawMessage(`[{"name":"1024","value":"low"},{"name":"8000","value":"high"}]`), nil, FormatAnthropicBudget)
+	want = []Entry{{Name: "1024", Value: "low"}, {Name: "8000", Value: "high"}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("budget 阈值行 = %v, %v, want %v(数字 name 原样保留)", got, err, want)
+	}
+
+	got, err = Effective(json.RawMessage(`[]`), []string{"low"}, "")
 	if err != nil || len(got) != 0 {
 		t.Errorf("显式空数组 = %v, %v, want 空(不支持)", got, err)
 	}
 
-	if _, err = Effective(json.RawMessage(`[{"name":"空值","value":" "}]`), nil); err == nil {
+	if _, err = Effective(json.RawMessage(`[{"name":"空值","value":" "}]`), nil, ""); err == nil {
 		t.Error("空 value 应报错")
 	}
-	if _, err = Effective(json.RawMessage(`[1]`), nil); err == nil {
+	if _, err = Effective(json.RawMessage(`[1]`), nil, ""); err == nil {
 		t.Error("非字符串/对象元素应报错")
 	}
-	if _, err = Effective(json.RawMessage(`{"a":1}`), nil); err == nil {
+	if _, err = Effective(json.RawMessage(`{"a":1}`), nil, ""); err == nil {
 		t.Error("非数组形态应报错")
 	}
 }
 
-// TestContainsValue 与 Values 锁定发送侧校验的两个辅助。
-func TestContainsValue(t *testing.T) {
-	list := []Entry{{Name: "低", Value: "low"}, {Name: "私有", Value: "ultra"}}
-	if !ContainsValue(list, "ultra") || ContainsValue(list, "high") {
-		t.Errorf("ContainsValue 判定错误: %v", list)
+// TestContainsName 与 Names 锁定发送侧校验的两个辅助。
+func TestContainsName(t *testing.T) {
+	list := []Entry{{Name: "low", Value: "medium"}, {Name: "ultra", Value: "ultra"}}
+	if !ContainsName(list, "ultra") || ContainsName(list, "medium") {
+		t.Errorf("ContainsName 判定错误: %v", list)
 	}
-	if got := Values(list); !slices.Equal(got, []string{"low", "ultra"}) {
-		t.Errorf("Values = %v, want [low ultra]", got)
+	if got := Names(list); !slices.Equal(got, []string{"low", "ultra"}) {
+		t.Errorf("Names = %v, want [low ultra]", got)
 	}
 }
 
-// TestLevelOf 锁定数字档查映射:名即档号,命中回上行值,未命中回 false。
+// TestLevelOf 锁定数字档查映射:档号按行序("1"=第 1 行,"0"=none 行),
+// 命中回该行上行值,越界/空表回 false。
 func TestLevelOf(t *testing.T) {
-	list := []Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "high"}}
-	if v, ok := LevelOf(list, "2"); !ok || v != "high" {
-		t.Errorf("LevelOf(2) = %q, %v, want high, true", v, ok)
+	list := []Entry{{Name: "none", Value: "none"}, {Name: "low", Value: "medium"}, {Name: "high", Value: "xhigh"}}
+	if v, ok := LevelOf(list, "2"); !ok || v != "medium" {
+		t.Errorf("LevelOf(2) = %q, %v, want medium, true", v, ok)
+	}
+	if v, ok := LevelOf(list, "0"); !ok || v != "none" {
+		t.Errorf("LevelOf(0) = %q, %v, want none, true", v, ok)
 	}
 	if _, ok := LevelOf(list, "9"); ok {
 		t.Error("LevelOf(9) 应未命中")
 	}
 	if _, ok := LevelOf(nil, "1"); ok {
 		t.Error("空列表应未命中")
+	}
+	// 未声明 none 时 "0" 不命中。
+	if _, ok := LevelOf([]Entry{{Name: "low", Value: "low"}}, "0"); ok {
+		t.Error("无 none 行时 LevelOf(0) 应未命中")
 	}
 }
 

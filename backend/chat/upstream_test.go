@@ -154,7 +154,7 @@ func TestCompleteEffortFormat(t *testing.T) {
 			tgt := target(provider.ProtocolChatCompletions)
 			tgt.BaseURL = up.URL
 			tgt.EffortFormat = effort.FormatChatCompletions
-			tgt.Efforts = []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}}
+			tgt.Efforts = []effort.Entry{{Name: "none", Value: "none"}, {Name: "low", Value: "low"}, {Name: "medium", Value: "medium"}, {Name: "xhigh", Value: "xhigh"}}
 			tgt.Defaults = json.RawMessage(tc.defaults)
 			tgt.Overrides = json.RawMessage(tc.overrides)
 			defaults := rawObject(tgt.Defaults)

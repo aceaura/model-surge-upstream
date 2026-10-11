@@ -74,11 +74,40 @@ func TestBudgetAndClamp(t *testing.T) {
 	}
 }
 
-var idxList = []Entry{
-	{Name: "0", Value: "none"},
-	{Name: "1", Value: "low"},
-	{Name: "2", Value: "medium"},
-	{Name: "3", Value: "high"},
+// pairList 映射对表(2026-10-11 行式映射对):Name=下游档,Value=上行值。
+var pairList = []Entry{
+	{Name: "none", Value: "none"},
+	{Name: "low", Value: "low"},
+	{Name: "medium", Value: "medium"},
+	{Name: "high", Value: "high"},
+}
+
+// thresholdList 下游 budget 阈值行:Name=阈值数字串,Value=规范档。
+var thresholdList = []Entry{
+	{Name: "none", Value: "none"},
+	{Name: "1024", Value: "low"},
+	{Name: "4000", Value: "medium"},
+	{Name: "10000", Value: "high"},
+}
+
+func TestLevelsFor(t *testing.T) {
+	if got := LevelsFor(FormatOpenAIChat); len(got) != 7 || got[0] != "none" || got[6] != "max" {
+		t.Errorf("openai 词表 = %v, want none..max 7 值", got)
+	}
+	if got := LevelsFor(FormatAnthropicEffort); len(got) != 6 || got[1] != "low" || got[5] != "max" {
+		t.Errorf("anthropic 词表 = %v, want none+官方 5 档", got)
+	}
+	if got := LevelsFor("anthropic"); len(got) != 6 {
+		t.Errorf("旧值别名应归一后命中: %v", got)
+	}
+	if got := LevelsFor(FormatGeminiLevel); !reflect.DeepEqual(got, []string{"none", "LOW", "HIGH"}) {
+		t.Errorf("gemini 词表 = %v", got)
+	}
+	for _, f := range []string{"", FormatAnthropicBudget, FormatAnthropicOff, FormatGeminiBudget, "bogus"} {
+		if LevelsFor(f) != nil {
+			t.Errorf("LevelsFor(%q) 应回 nil", f)
+		}
+	}
 }
 
 func TestRead(t *testing.T) {
@@ -97,19 +126,28 @@ func TestRead(t *testing.T) {
 		if !ok || v != "max" {
 			t.Errorf("effort 读 = %q,%v", v, ok)
 		}
-		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(10000)}}, idxList, nil)
+		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(10000)}}, pairList, nil)
 		if !ok || v != "high" {
 			t.Errorf("预算反查 = %q,%v", v, ok)
 		}
 		// 矫正版区间反查:9999 钳到预算不超过它的最高档 medium(4000)。
-		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(9999)}}, idxList, nil)
+		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(9999)}}, pairList, nil)
 		if !ok || v != "medium" {
 			t.Errorf("预算 9999 应钳到 medium = %q,%v", v, ok)
 		}
 		// 低于最小档取最小档(low 1024)。
-		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(500)}}, idxList, nil)
+		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(500)}}, pairList, nil)
 		if !ok || v != "low" {
 			t.Errorf("预算 500 应钳到 low = %q,%v", v, ok)
+		}
+		// 阈值行(Name=数字串):Name 直接作阈值,返回 Name 由 Coerce 映射出
+		// 上行值;档名行回退 BudgetOf(上面三例已覆盖)。
+		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(9999)}}, thresholdList, nil)
+		if !ok || v != "4000" {
+			t.Errorf("阈值行预算 9999 应回 Name 4000 = %q,%v", v, ok)
+		}
+		if got, changed := Coerce(v, thresholdList); got != "medium" || !changed {
+			t.Errorf("Coerce(4000) = %q,%v, want medium,true", got, changed)
 		}
 		v, ok = Read(FormatAnthropicAdaptive, map[string]any{"thinking": map[string]any{"type": "adaptive"}, "output_config": map[string]any{"effort": "high"}}, nil, nil)
 		if !ok || v != "high" {
@@ -233,6 +271,18 @@ func TestWriteCarriers(t *testing.T) {
 	if got != 1024 {
 		t.Errorf("gemini 预算 = %v", body)
 	}
+	// 数字串上行值(映射对右列 budget 编辑框直填)不经 BudgetOf 直写。
+	body = map[string]any{}
+	Write(FormatAnthropicBudget, "anthropic", body, "8000", OffDisabled, nil, 0)
+	if body["thinking"].(map[string]any)["budget_tokens"] != 8000 {
+		t.Errorf("数字串预算直写 = %v", body)
+	}
+	body = map[string]any{}
+	Write(FormatGeminiBudget, "gemini", body, "2048", OffDisabled, nil, 0)
+	got = body["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)["thinkingBudget"]
+	if got != 2048 {
+		t.Errorf("gemini 数字串预算直写 = %v", body)
+	}
 }
 
 func TestStripKeys(t *testing.T) {
@@ -254,6 +304,69 @@ func TestStripKeys(t *testing.T) {
 	}
 }
 
+// TestStripAll 映射写入前的统一清场(2026-10-11 用户硬性要求:先清原档位
+// 参数再写新档):八格式键并集全清,兄弟键保留,删空的中层对象一并清理。
+func TestStripAll(t *testing.T) {
+	body := map[string]any{
+		"reasoning_effort": "high",
+		"reasoning":        map[string]any{"effort": "low", "summary": "auto"},
+		"output_config":    map[string]any{"effort": "max", "format": "json"},
+		"thinking":         map[string]any{"type": "enabled", "budget_tokens": 10000, "display": "summarized"},
+		"generationConfig": map[string]any{
+			"thinkingConfig": map[string]any{"thinkingLevel": "HIGH", "thinkingBudget": 1024},
+			"temperature":    0.6,
+		},
+		"keep": 1,
+	}
+	StripAll(body)
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Errorf("reasoning_effort 应清: %v", body)
+	}
+	reasoning := body["reasoning"].(map[string]any)
+	if _, ok := reasoning["effort"]; ok || reasoning["summary"] != "auto" {
+		t.Errorf("reasoning 应只留兄弟键: %v", body)
+	}
+	output := body["output_config"].(map[string]any)
+	if _, ok := output["effort"]; ok || output["format"] != "json" {
+		t.Errorf("output_config 应只留兄弟键: %v", body)
+	}
+	thinking := body["thinking"].(map[string]any)
+	if _, ok := thinking["type"]; ok {
+		t.Errorf("thinking.type 应清: %v", body)
+	}
+	if _, ok := thinking["budget_tokens"]; ok || thinking["display"] != "summarized" {
+		t.Errorf("thinking 应只留兄弟键: %v", body)
+	}
+	generation := body["generationConfig"].(map[string]any)
+	if _, ok := generation["thinkingConfig"]; ok || generation["temperature"] != 0.6 {
+		t.Errorf("thinkingConfig 删空应整键清,兄弟键保留: %v", body)
+	}
+	if body["keep"] != 1 {
+		t.Errorf("无关键不应动: %v", body)
+	}
+
+	// 删空的中层对象整键清理,不留空壳。
+	shell := map[string]any{
+		"reasoning":        map[string]any{"effort": "low"},
+		"thinking":         map[string]any{"type": "disabled"},
+		"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "LOW"}},
+	}
+	StripAll(shell)
+	if len(shell) != 0 {
+		t.Errorf("空壳中层应整键清: %v", shell)
+	}
+
+	// 清场后写入只存目标字段,旧形态残留不并存。
+	Write(FormatAnthropicEffort, "anthropic", body, "high", OffDisabled, nil, 0)
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Errorf("清场后写入不应有旧形态键: %v", body)
+	}
+	if body["output_config"].(map[string]any)["effort"] != "high" {
+		t.Errorf("写入目标字段 = %v", body)
+	}
+}
+
+
 // TestRoundTrip 入口可读格式 Write→Read 往返一致。gemini 只作上游(入口读
 // 已删),不在往返集内;anthropic_off 只承载 none,单独验。
 func TestRoundTrip(t *testing.T) {
@@ -261,14 +374,14 @@ func TestRoundTrip(t *testing.T) {
 		FormatAnthropicBudget, FormatAnthropicAdaptive} {
 		body := map[string]any{}
 		Write(f, "anthropic", body, "high", OffDisabled, nil, 0)
-		v, ok := Read(f, body, idxList, nil)
+		v, ok := Read(f, body, pairList, nil)
 		if !ok || v != "high" {
 			t.Errorf("%s 往返 = %q,%v (body %v)", f, v, ok, body)
 		}
 	}
 	body := map[string]any{}
 	Write(FormatAnthropicOff, "anthropic", body, "none", OffDisabled, nil, 0)
-	v, ok := Read(FormatAnthropicOff, body, idxList, nil)
+	v, ok := Read(FormatAnthropicOff, body, pairList, nil)
 	if !ok || v != "none" {
 		t.Errorf("off 往返 = %q,%v", v, ok)
 	}

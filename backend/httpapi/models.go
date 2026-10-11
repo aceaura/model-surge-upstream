@@ -71,7 +71,7 @@ func (h handler) decorateEfforts(ctx context.Context, m *model.Model) {
 	if effort.Auto(m.Efforts) && h.UpstreamModels != nil {
 		declared = h.UpstreamModels.DeclaredEfforts(ctx, m.Account, m.NativeModel)
 	}
-	eff, err := effort.Effective(m.Efforts, declared)
+	eff, err := effort.Effective(m.Efforts, declared, m.EffortIn)
 	if err != nil {
 		eff = []effort.Entry{}
 	}

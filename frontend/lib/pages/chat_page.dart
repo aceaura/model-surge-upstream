@@ -62,12 +62,12 @@ class _ChatPageState extends State<ChatPage> {
   bool _sending = false;
   Object? _error;
 
-  /// 当前所选模型的推理档选项:服务端算好的有效支持列表(上行值,
+  /// 当前所选模型的推理档选项:服务端算好的有效支持列表(下游档,
   /// 首项=最低档);空列表=该模型不支持,选择器不露面。
   List<String> get _effortOptions {
     for (final m in _models) {
       if (m.id == _modelId) {
-        return m.effortsEffective.map((e) => e.value).toList();
+        return m.effortsEffective.map((e) => e.name).toList();
       }
     }
     return const [];

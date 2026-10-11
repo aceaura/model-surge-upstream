@@ -1008,15 +1008,15 @@ func TestModelEffortsEffectiveDecoration(t *testing.T) {
 		return body.Model
 	}
 
-	wantAuto := []effort.Entry{{Name: "高", Value: "high"}, {Name: "低", Value: "low"}}
+	wantAuto := []effort.Entry{{Name: "high", Value: "high"}, {Name: "low", Value: "low"}}
 	if got := get().EffortsEffective; !slices.Equal(got, wantAuto) {
-		t.Errorf("自动模式 efforts_effective = %v, want %v(声明源,原值声明序)", got, wantAuto)
+		t.Errorf("自动模式 efforts_effective = %v, want %v(声明源,恒等映射对,原值声明序)", got, wantAuto)
 	}
 
 	m := f.models.data["kimi-1/k2"]
 	m.Efforts = json.RawMessage(`[{"name":"超","value":"xhigh"},{"name":"","value":"medium"}]`)
 	f.models.data["kimi-1/k2"] = m
-	wantExplicit := []effort.Entry{{Name: "超", Value: "xhigh"}, {Name: "中", Value: "medium"}}
+	wantExplicit := []effort.Entry{{Name: "超", Value: "xhigh"}, {Name: "medium", Value: "medium"}}
 	if got := get().EffortsEffective; !slices.Equal(got, wantExplicit) {
 		t.Errorf("显式条目 efforts_effective = %v, want %v", got, wantExplicit)
 	}
@@ -1133,9 +1133,9 @@ func TestDeliveryModelsCarryEfforts(t *testing.T) {
 	if len(body.Models) != 1 {
 		t.Fatalf("delivery list = %d models, want 1", len(body.Models))
 	}
-	want := []effort.Entry{{Name: "高", Value: "high"}, {Name: "ultra", Value: "ultra"}}
+	want := []effort.Entry{{Name: "high", Value: "high"}, {Name: "ultra", Value: "ultra"}}
 	if !slices.Equal(body.Models[0].Efforts, want) {
-		t.Errorf("delivery efforts = %v, want %v(声明源,原值声明序)", body.Models[0].Efforts, want)
+		t.Errorf("delivery efforts = %v, want %v(声明源,恒等映射对,原值声明序)", body.Models[0].Efforts, want)
 	}
 }
 

@@ -304,7 +304,8 @@ func TestEffortsRoundTrip(t *testing.T) {
 	}
 	assertRawEfforts(t, created.Efforts, `null`)
 
-	// 显式名+值条目:原样落库(去重/命名在消费侧现算);value 不限词表。
+	// 显式名+值条目:原样落库(去重/迁移在消费侧现算);双端格式均 auto
+	// 时词表校验跳过(见 TestEffortPairValidation 的显式格式校验)。
 	in.Efforts = json.RawMessage(`[{"name":"高","value":"high"},{"name":"私有","value":"ultra"}]`)
 	updated, err := repo.Update(ctx, in)
 	if err != nil {
@@ -353,6 +354,50 @@ func assertRawEfforts(t *testing.T, got json.RawMessage, want string) {
 	t.Helper()
 	if string(got) != want {
 		t.Fatalf("efforts = %s, want %s", got, want)
+	}
+}
+
+// TestEffortPairValidation 映射对保存校验(2026-10-11 行式映射对):name 须
+// 在下游格式词表内(下游 budget 时为正整数阈值串),value 须在上游格式词表
+// 内(上游 budget 时为正整数串或 none),大小写不敏感;任一端格式 auto
+// (词表运行时定)该端跳过;anthropic_off 上游显式声明须为空数组。
+func TestEffortPairValidation(t *testing.T) {
+	repo, _ := fixtures(t)
+	ctx := context.Background()
+	str := func(s string) *string { return &s }
+
+	cases := []struct {
+		name         string
+		format, in   *string
+		efforts      string
+		wantRejected bool
+	}{
+		{"档到档合法", str("anthropic_effort"), str("openai_chat"), `[{"name":"low","value":"high"}]`, false},
+		{"大小写不敏感", str("anthropic_effort"), str("openai_chat"), `[{"name":"LOW","value":"XHIGH"}]`, false},
+		{"name 词表外", str("anthropic_effort"), str("openai_chat"), `[{"name":"bogus","value":"high"}]`, true},
+		{"value 词表外", str("anthropic_effort"), str("openai_chat"), `[{"name":"low","value":"bogus"}]`, true},
+		{"上游 auto 跳过 value 校验", nil, str("openai_chat"), `[{"name":"low","value":"ultra"}]`, false},
+		{"下游 budget 阈值串合法", str("gemini_budget"), str("anthropic_budget"), `[{"name":"1024","value":"2048"}]`, false},
+		{"下游 budget name 非数字", str("gemini_budget"), str("anthropic_budget"), `[{"name":"low","value":"2048"}]`, true},
+		{"上游 budget value none 合法", str("gemini_budget"), str("anthropic_budget"), `[{"name":"1024","value":"none"}]`, false},
+		{"上游 budget value 非数字非 none", str("gemini_budget"), str("anthropic_budget"), `[{"name":"1024","value":"high"}]`, true},
+		{"anthropic_off 显式声明须空", str("anthropic_off"), str("openai_chat"), `[{"name":"low","value":"low"}]`, true},
+		{"anthropic_off 空数组放行", str("anthropic_off"), str("openai_chat"), `[]`, false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := input()
+			in.ID = fmt.Sprintf("kimi-1/pair-%d", i)
+			in.EffortFormat, in.EffortIn = tc.format, tc.in
+			in.Efforts = json.RawMessage(tc.efforts)
+			_, err := repo.Create(ctx, in)
+			if tc.wantRejected && apperr.CodeOf(err) != apperr.InvalidRequest {
+				t.Fatalf("应拒 InvalidRequest, got %v", err)
+			}
+			if !tc.wantRejected && err != nil {
+				t.Fatalf("应放行, got %v", err)
+			}
+		})
 	}
 }
 

@@ -8,14 +8,16 @@ package effort
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 )
 
-// Entry 是一个推理档:Name 是显示名(对话页档位菜单),Value 是
-// 发上游的档位字符串。
+// Entry 是一个推理档映射对(2026-10-11 行式映射对设计):Name 是下游档
+// (客户端/对话页选档的标识;下游 budget 格式时为阈值数字串),Value 是
+// 发上游的上行值(档名;上游 budget 时为 token 数字串或 none)。
 type Entry struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
@@ -58,17 +60,22 @@ func Auto(raw json.RawMessage) bool {
 	return s == "" || s == "null"
 }
 
-// Effective 算出模型的有效支持列表:
-//   - raw 为自动模式(null/缺省):跟随上游声明,值按上游原样保留
-//     (声明序,去空去重),名取 Label;无声明即不支持(回空列表,
+// Effective 算出模型的有效映射对列表:
+//   - raw 为自动模式(null/缺省):跟随上游声明,按声明值生成恒等映射对
+//     (下游档=上行值,声明序,去空去重);无声明即不支持(回空列表,
 //     选择器不露面)。
 //   - raw 为数组:管理员显式声明 [{name,value}](兼容存量纯字符串元素);
-//     value 去空白后必须非空,按 value 去重(保留首个),name 留空按
-//     Label 自动命名;显式空数组 [] 表示声明该模型不支持 effort。
-func Effective(raw json.RawMessage, declared []string) ([]Entry, error) {
+//     value 去空白后必须非空,name 留空取 value,按 name 去重(保留首个);
+//     显式空数组 [] 表示声明该模型不支持 effort。
+//
+// 存量「行号即档号」迁移:纯数字 name 读取时改映射对(值 none → none→none,
+// 其余恒等)——但下游 budget 格式(anthropic_budget)下数字 name 是新语义的
+// 预算阈值行,不做迁移(effortIn 传归一前的原值即可,内部归一)。
+func Effective(raw json.RawMessage, declared []string, effortIn string) ([]Entry, error) {
 	if Auto(raw) {
 		return entriesFromValues(declared), nil
 	}
+	budgetEntry := NormalizeFormat(effortIn) == FormatAnthropicBudget
 	var items []any
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, apperr.New(apperr.InvalidJSON,
@@ -96,19 +103,31 @@ func Effective(raw json.RawMessage, declared []string) ([]Entry, error) {
 			return nil, apperr.New(apperr.InvalidRequest,
 				"effort entry value must not be empty")
 		}
-		if seen[value] {
+		// 存量「行号即档号」迁移:name 为纯数字档号时改映射对——
+		// 值 none → none→none;其余恒等映射(下游档=上行值)。
+		// 下游 budget 格式的数字 name 是阈值,跳过迁移。
+		if _, err := strconv.Atoi(name); err == nil && !budgetEntry {
+			if strings.EqualFold(value, "none") {
+				name = "none"
+			} else {
+				name = value
+			}
+		}
+		// name 留空取 value(恒等映射对)。
+		if name == "" {
+			name = value
+		}
+		if seen[name] {
 			continue
 		}
-		seen[value] = true
-		if name == "" {
-			name = Label(value)
-		}
+		seen[name] = true
 		out = append(out, Entry{Name: name, Value: value})
 	}
 	return out, nil
 }
 
-// entriesFromValues 声明值列表 → 条目:去空、按值去重、保留原顺序,名取 Label。
+// entriesFromValues 声明值列表 → 恒等映射对(下游档=上行值):去空、按值
+// 去重、保留原顺序。
 func entriesFromValues(values []string) []Entry {
 	out := make([]Entry, 0, len(values))
 	seen := map[string]bool{}
@@ -118,30 +137,38 @@ func entriesFromValues(values []string) []Entry {
 			continue
 		}
 		seen[v] = true
-		out = append(out, Entry{Name: Label(v), Value: v})
+		out = append(out, Entry{Name: v, Value: v})
 	}
 	return out
 }
 
-// ContainsValue 判定条目列表是否含某档位值。
-func ContainsValue(list []Entry, value string) bool {
+// ContainsName 判定条目列表是否含某下游档(对话页选档校验)。
+func ContainsName(list []Entry, name string) bool {
 	for _, e := range list {
-		if e.Value == value {
+		if e.Name == name {
 			return true
 		}
 	}
 	return false
 }
 
-// LevelOf 按档位名(数字档)查映射出的上行值:命中返回值与 true。
-// 数字档是下游请求顶层 reasoning_level 的合法取值,名即档号。
+// LevelOf 按数字档(reasoning_level)查映射出的上行值:档号按行序解释,
+// "1"=第 1 行、"2"=第 2 行……"0"=none 行(声明了 none 才命中);越界由
+// 调用方钳末行。命中返回该行 Value 与 true。
 func LevelOf(list []Entry, level string) (string, bool) {
-	for _, e := range list {
-		if e.Name == level {
-			return e.Value, true
+	if level == "0" {
+		for _, e := range list {
+			if strings.EqualFold(strings.TrimSpace(e.Name), "none") {
+				return e.Value, true
+			}
 		}
+		return "", false
 	}
-	return "", false
+	n, err := strconv.Atoi(level)
+	if err != nil || n < 1 || n > len(list) {
+		return "", false
+	}
+	return list[n-1].Value, true
 }
 
 // Apply 把映射出的档位值按协议写进上行请求体(2026-10-04 逐协议核对
@@ -204,6 +231,15 @@ func Values(list []Entry) []string {
 	out := make([]string, 0, len(list))
 	for _, e := range list {
 		out = append(out, e.Value)
+	}
+	return out
+}
+
+// Names 取出条目列表的全部下游档(对话页选档错误提示用)。
+func Names(list []Entry) []string {
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		out = append(out, e.Name)
 	}
 	return out
 }

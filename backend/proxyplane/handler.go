@@ -660,12 +660,10 @@ func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
 			"model effort coerced: %s→%s model=%s", value, coerced, target.ModelID))
 		value = coerced
 	}
-	// 先剥离入口残留再写上游:入口与上游共用键时(anthropic 族 output_config.effort /
-	// thinking.type),写后剥离会吃掉刚写入的字段;Read 已取到规范档,剥离不再依赖入口键。
-	// 声明了入口格式即剥离(auto 不剥——现状透传不破坏 harness 自带字段)。
-	if target.EffortIn != "" {
-		effort.StripKeys(target.EffortIn, body)
-	}
+	// 先清场再写上游(用户硬性要求):体里全部已知档位键(八格式并集)一律
+	// 清除,客户端残留的旧形态字段不与新写入字段并存污染上行;Read 已取到
+	// 规范档,清除不再依赖入口键,先清后写也不会吃掉上游刚写的同名字段。
+	effort.StripAll(body)
 	effort.Write(target.EffortFormat, target.Protocol, body, value,
 		target.EffortOff, target.EffortBudgets, effort.BodyMaxTokens(target.Protocol, body))
 }

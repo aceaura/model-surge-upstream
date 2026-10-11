@@ -1,4 +1,5 @@
 .kiro/
+.qoder/
 *.exe
 *.db
 *.db-journal

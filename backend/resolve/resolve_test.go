@@ -156,12 +156,12 @@ func TestResolveEfforts(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []effort.Entry{
-			{Name: "高", Value: "high"},
-			{Name: "低", Value: "low"},
+			{Name: "high", Value: "high"},
+			{Name: "low", Value: "low"},
 			{Name: "ultra", Value: "ultra"}, // 私有档原值保留(声明序)
 		}
 		if !slices.Equal(got.Efforts, want) {
-			t.Errorf("efforts = %v, want %v(原值声明序)", got.Efforts, want)
+			t.Errorf("efforts = %v, want %v(恒等映射对,原值声明序)", got.Efforts, want)
 		}
 		if decls.calls != 1 {
 			t.Errorf("声明来源调用 = %d, want 1", decls.calls)
@@ -180,7 +180,7 @@ func TestResolveEfforts(t *testing.T) {
 		}
 		want := []effort.Entry{
 			{Name: "超", Value: "xhigh"},
-			{Name: "中", Value: "medium"}, // 名留空按值自动命名
+			{Name: "medium", Value: "medium"}, // 名留空取 value(恒等映射对)
 		}
 		if !slices.Equal(got.Efforts, want) {
 			t.Errorf("efforts = %v, want %v(显式声明)", got.Efforts, want)
@@ -439,7 +439,7 @@ func TestList(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("listing = %d entries, want 2", len(got))
 	}
-	want := []effort.Entry{{Name: "高", Value: "high"}, {Name: "ultra", Value: "ultra"}}
+	want := []effort.Entry{{Name: "high", Value: "high"}, {Name: "ultra", Value: "ultra"}}
 	for _, l := range got {
 		if l.ProviderID != "kimi.global.subscribe.coding" {
 			t.Errorf("provider_id = %q", l.ProviderID)

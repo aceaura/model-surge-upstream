@@ -2,6 +2,7 @@ package effort
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/aceaura/model-surge-upstream/backend/provider"
@@ -76,6 +77,24 @@ const (
 	CategoryBudget = "budget"
 	CategoryOff    = "off"
 )
+
+// levelVocab 各格式的档词表(2026-10-11 行式映射对设计,官方口径):
+// openai 两族 7 值(GPT-6.1 起含 max);anthropic 两族 none+官方 5 档
+// (low/medium/high/xhigh/max,关思考不是 effort 值,none 由映射行表达,
+// 写上游时按关思考落定);gemini_level none+LOW/HIGH。budget 类右列是
+// 数字或 none,off 类无档,均不入表。
+var levelVocab = map[string][]string{
+	FormatOpenAIChat:        {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
+	FormatOpenAIResponses:   {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
+	FormatAnthropicEffort:   {"none", "low", "medium", "high", "xhigh", "max"},
+	FormatAnthropicAdaptive: {"none", "low", "medium", "high", "xhigh", "max"},
+	FormatGeminiLevel:       {"none", "LOW", "HIGH"},
+}
+
+// LevelsFor 格式 → 档词表;budget/off/auto/未知值回 nil。
+func LevelsFor(format string) []string {
+	return levelVocab[NormalizeFormat(format)]
+}
 
 // CategoryOf 上游格式 → 三分类;归一后判定,auto/未知值回空串。
 func CategoryOf(format string) string {
@@ -212,7 +231,7 @@ func Write(format, protocol string, body map[string]any, value string, off strin
 		}
 		thinking := sub(body, "thinking")
 		thinking["type"] = "enabled"
-		thinking["budget_tokens"] = ClampBudget(BudgetOf(value, budgets), maxTokens)
+		thinking["budget_tokens"] = ClampBudget(budgetValue(value, budgets), maxTokens)
 	case FormatAnthropicAdaptive:
 		if value == "none" {
 			writeOff(body, off)
@@ -233,7 +252,7 @@ func Write(format, protocol string, body map[string]any, value string, off strin
 		if value == "none" {
 			return
 		}
-		thinkingConfig(body)["thinkingBudget"] = ClampBudget(BudgetOf(value, budgets), maxTokens)
+		thinkingConfig(body)["thinkingBudget"] = ClampBudget(budgetValue(value, budgets), maxTokens)
 	}
 }
 
@@ -271,6 +290,36 @@ func StripKeys(format string, body map[string]any) {
 	}
 }
 
+// StripAll 清除体里全部已知档位键(八格式并集;reasoning_level 由调用方删):
+// 映射写入前统一清场——客户端残留的旧形态字段不得与新写入字段并存污染
+// 上行(2026-10-11 用户硬性要求:先清原档位参数再写新档)。兄弟键保留
+// (reasoning.summary、output_config/thinking 其他键、thinking.display 等),
+// 删空的中层对象一并清理。
+func StripAll(body map[string]any) {
+	delete(body, "reasoning_effort")
+	reasoning := existing(body, "reasoning")
+	delete(reasoning, "effort")
+	cleanEmpty(body, "reasoning")
+	output := existing(body, "output_config")
+	delete(output, "effort")
+	cleanEmpty(body, "output_config")
+	thinking := existing(body, "thinking")
+	delete(thinking, "type")
+	delete(thinking, "budget_tokens")
+	cleanEmpty(body, "thinking")
+	if generation := existing(body, "generationConfig"); len(generation) > 0 {
+		tc := existing(generation, "thinkingConfig")
+		delete(tc, "thinkingLevel")
+		delete(tc, "thinkingBudget")
+		if len(tc) == 0 {
+			delete(generation, "thinkingConfig")
+		}
+		if len(generation) == 0 {
+			delete(body, "generationConfig")
+		}
+	}
+}
+
 // writeOff 0 档在 anthropic 族的落定写法。
 func writeOff(body map[string]any, off string) {
 	switch off {
@@ -284,22 +333,26 @@ func writeOff(body map[string]any, off string) {
 	}
 }
 
-// tierByBudget 预算数反查规范档(矫正版,2026-10-10):不再要求精确命中——
+// tierByBudget 预算数反查声明行(2026-10-11 行式映射对):行 Name 为数字串时
+// 直接作阈值(下游 budget 左列),否则回退 BudgetOf(兼容存量/auto 档名行);
 // 钳到预算不超过请求数的最高档,低于最小档取最小档(就低不就高,与 Coerce
-// 同原则);声明表无非 none 档才回未命中。
+// 同原则)。返回命中行的 Name,由 Coerce 映射出上行值;无非 none 行回未命中。
 func tierByBudget(n int, list []Entry, budgets map[string]int) (string, bool) {
 	best, bestB := "", -1
 	lowest, lowestB := "", 1<<30
 	for _, e := range list {
-		if strings.EqualFold(strings.TrimSpace(e.Value), "none") {
+		if strings.EqualFold(strings.TrimSpace(e.Name), "none") {
 			continue
 		}
 		b := BudgetOf(e.Value, budgets)
+		if v, err := strconv.Atoi(strings.TrimSpace(e.Name)); err == nil && v > 0 {
+			b = v
+		}
 		if b <= n && b > bestB {
-			best, bestB = e.Value, b
+			best, bestB = e.Name, b
 		}
 		if b < lowestB {
-			lowest, lowestB = e.Value, b
+			lowest, lowestB = e.Name, b
 		}
 	}
 	if best != "" {
@@ -309,6 +362,15 @@ func tierByBudget(n int, list []Entry, budgets map[string]int) (string, bool) {
 		return lowest, true
 	}
 	return "", false
+}
+
+// budgetValue 上行值 → 预算 token:数字串直用(行式映射对右列),档名走
+// 模型覆盖/内置表(兼容存量与 auto)。
+func budgetValue(value string, budgets map[string]int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && n > 0 {
+		return n
+	}
+	return BudgetOf(value, budgets)
 }
 
 // sub 取(必要时建)body 下的对象键,供写路径深合并。

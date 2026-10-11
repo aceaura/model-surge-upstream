@@ -197,7 +197,7 @@ func (r *Resolver) effectiveEfforts(ctx context.Context, accountName string, m m
 	if effort.Auto(m.Efforts) && r.efforts != nil {
 		declared = r.efforts.DeclaredEfforts(ctx, accountName, m.NativeModel)
 	}
-	eff, err := effort.Effective(m.Efforts, declared)
+	eff, err := effort.Effective(m.Efforts, declared, m.EffortIn)
 	if err != nil {
 		return []effort.Entry{}
 	}
