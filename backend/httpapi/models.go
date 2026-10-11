@@ -33,7 +33,9 @@ type modelRequest struct {
 	EffortBudgets json.RawMessage `json:"effort_budgets"`
 	// EffortEnabled 推理档转换总开关:缺省=true(保旧行为),false=不读不写不剥离。
 	EffortEnabled *bool `json:"effort_enabled"`
-	Enabled       *bool `json:"enabled"`
+	// Strip 清除配置:缺省(null)不改现状,数组=显式点路径列表(空数组=清空)。
+	Strip   json.RawMessage `json:"strip"`
+	Enabled *bool           `json:"enabled"`
 }
 
 func (r modelRequest) input(id string) model.Input {
@@ -52,6 +54,7 @@ func (r modelRequest) input(id string) model.Input {
 		EffortOff:     r.EffortOff,
 		EffortBudgets: r.EffortBudgets,
 		EffortEnabled: true,
+		Strip:         r.Strip,
 		Enabled:       true,
 	}
 	if r.EffortEnabled != nil {

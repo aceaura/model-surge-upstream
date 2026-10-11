@@ -72,6 +72,7 @@ func (h handler) probeModel(ctx context.Context, m model.Model, acc account.Acco
 			BaseURL:     acc.EffectiveBaseURL(spec),
 			NativeModel: m.NativeModel,
 			Headers:     headers,
+			Strip:       m.Strip,
 		})
 		if isKiro && result.StatusCode == http.StatusForbidden && attempt == 0 && h.OAuth != nil {
 			token := ""

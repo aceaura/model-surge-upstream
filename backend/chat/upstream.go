@@ -18,6 +18,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/strip"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
@@ -56,6 +57,9 @@ func Complete(ctx context.Context, target resolve.ResolvedTarget, sessionKey, ef
 		body = codex.ShapeBody(body, target.NativeModel)
 		suffix = codex.MapSuffix(suffix)
 	}
+	// 清除配置最后施加:请求体定稿后按点路径整键删除,优先级高于
+	// defaults/overrides 与协议整形——与转发面同一口径。
+	strip.Apply(body, target.Strip)
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return "", usage.Usage{}, 0, apperr.Wrap(apperr.InvalidJSON, "encode upstream request", err)

@@ -987,8 +987,14 @@ void main() {
       matching: find.byType(TextFormField),
     );
     expect(rightFields, findsNWidgets(2));
-    expect(tester.widget<TextFormField>(rightFields.at(0)).initialValue, 'none');
-    expect(tester.widget<TextFormField>(rightFields.at(1)).initialValue, 'high');
+    expect(
+      tester.widget<TextFormField>(rightFields.at(0)).initialValue,
+      'none',
+    );
+    expect(
+      tester.widget<TextFormField>(rightFields.at(1)).initialValue,
+      'high',
+    );
   });
 
   testWidgets('推理档:下游 budget 模型的数字阈值行不做档号迁移', (tester) async {
@@ -1032,6 +1038,106 @@ void main() {
     );
     expect(rowValue('model-effort-value-0').value, 'low');
     expect(rowValue('model-effort-value-1').value, 'high');
+  });
+
+  testWidgets('清除配置:存量路径回填、增删行、提交 strip 数组', (tester) async {
+    Map<String, dynamic>? sentBody;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        sentBody =
+            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      }),
+    );
+    final editing = UpstreamModel.fromJson(const {
+      'id': 'kimi-1/k2',
+      'account': 'kimi-1',
+      'native_model': 'kimi-k2-turbo',
+      'protocol': 'anthropic',
+      'context_window': 0,
+      'defaults': <String, dynamic>{},
+      'overrides': <String, dynamic>{},
+      'efforts': [
+        {'name': 'high', 'value': 'high'},
+      ],
+      'strip': ['store', 'metadata.user_id'],
+      'enabled': true,
+    });
+    await pumpForm(tester, editing: editing, client: client);
+
+    // 存量两条路径回填(有值默认展开)。TextFormField 的 decoration 经由
+    // 内层 TextField 落地,按 TextField 匹配、controller 文本断言回填值。
+    Finder stripFields() => find.byWidgetPredicate(
+      (w) =>
+          w is TextField && w.decoration?.hintText == '点路径，如 metadata.user_id',
+    );
+    expect(stripFields(), findsNWidgets(2));
+    expect(
+      tester.widget<TextField>(stripFields().at(0)).controller?.text,
+      'store',
+    );
+    expect(
+      tester.widget<TextField>(stripFields().at(1)).controller?.text,
+      'metadata.user_id',
+    );
+
+    // 加一行并填入新路径,再删掉首行:剩 metadata.user_id + reasoning.effort。
+    await tester.ensureVisible(find.byKey(const ValueKey('model-strip-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('model-strip-add')));
+    await tester.pumpAndSettle();
+    expect(stripFields(), findsNWidgets(3));
+    await tester.enterText(stripFields().at(2), 'reasoning.effort');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('model-strip-del-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('model-strip-del-0')));
+    await tester.pumpAndSettle();
+    expect(stripFields(), findsNWidgets(2));
+
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(sentBody, isNotNull);
+    expect(sentBody!['strip'], ['metadata.user_id', 'reasoning.effort']);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('清除配置:空路径段校验拦截提交', (tester) async {
+    var called = false;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((req) async {
+        called = true;
+        return http.Response('{}', 200);
+      }),
+    );
+    final editing = UpstreamModel.fromJson(const {
+      'id': 'kimi-1/k2',
+      'account': 'kimi-1',
+      'native_model': 'kimi-k2-turbo',
+      'protocol': 'anthropic',
+      'context_window': 0,
+      'defaults': <String, dynamic>{},
+      'overrides': <String, dynamic>{},
+      'efforts': [
+        {'name': 'high', 'value': 'high'},
+      ],
+      'strip': ['a..b'],
+      'enabled': true,
+    });
+    await pumpForm(tester, editing: editing, client: client);
+
+    await tester.ensureVisible(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '保存'));
+    await tester.pumpAndSettle();
+    expect(find.text('点路径每段不能为空'), findsOneWidget);
+    expect(called, isFalse);
   });
 
   testWidgets('推理档:切协议时双端格式不重置(同族约束已撤)', (tester) async {

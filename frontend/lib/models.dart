@@ -309,6 +309,7 @@ class UpstreamModel {
     this.effortOff = '',
     this.effortBudgets = const {},
     this.effortEnabled = true,
+    this.strip = const [],
   });
 
   final String id;
@@ -352,6 +353,10 @@ class UpstreamModel {
   /// 推理档转换总开关:false=转发面不读不写不剥离,对话页选档不落笔。
   final bool effortEnabled;
 
+  /// 清除配置:点路径列表(如 metadata.user_id),上行请求体定稿后按路径
+  /// 整键删除字段(优先级高于 defaults/overrides 与协议整形),空=不清除。
+  final List<String> strip;
+
   factory UpstreamModel.fromJson(Map<String, dynamic> json) => UpstreamModel(
     id: json['id'] as String,
     account: json['account'] as String? ?? '',
@@ -374,6 +379,9 @@ class UpstreamModel {
     effortBudgets: (json['effort_budgets'] as Map<String, dynamic>? ?? const {})
         .map((k, v) => MapEntry(k, (v as num).toInt())),
     effortEnabled: json['effort_enabled'] as bool? ?? true,
+    strip: (json['strip'] as List<dynamic>? ?? const [])
+        .map((e) => e as String)
+        .toList(),
   );
 }
 

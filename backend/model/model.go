@@ -42,6 +42,10 @@ type Model struct {
 	// EffortEnabled 推理档转换总开关:false=不读不写不剥离(对话页选档与
 	// 显式入口/上游格式全部旁路),reasoning_level 仍消费即删不泄漏上游。
 	EffortEnabled bool `json:"effort_enabled"`
+	// Strip 清除配置:点路径列表(如 metadata.user_id),上行请求体定稿后
+	// 按路径整键删除字段(优先级高于 defaults/overrides 与协议整形),
+	// 删除后回收变空的中层对象;空列表=不清除。
+	Strip []string `json:"strip"`
 	// EffortsEffective 是算好的有效支持列表（不落库；仓储读出为 nil，
 	// 由能访问上游的 httpapi/resolve 层现算填充），对话页按它渲染
 	// 档位选择器（name 显示、value 上行），发送侧按 value 校验所选档位。

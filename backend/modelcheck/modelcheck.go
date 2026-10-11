@@ -29,6 +29,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
+	"github.com/aceaura/model-surge-upstream/backend/strip"
 )
 
 // timeout 是单次探测的上游超时。CC Switch 默认 8s；探测体极小，取 10s
@@ -64,6 +65,9 @@ func Check(ctx context.Context, target resolve.ResolvedTarget) Result {
 		body = codex.ShapeBody(body, target.NativeModel)
 		suffix = codex.MapSuffix(suffix)
 	}
+	// 清除配置与转发面同口径施加:探针体最小,但管理员清掉探针也带的
+	// 字段(如上游拒收的 max_tokens)时,探测结果须与真实流量一致。
+	strip.Apply(body, target.Strip)
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return Result{Error: apperr.Wrap(apperr.InvalidJSON, "encode probe request", err).Error()}

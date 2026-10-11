@@ -257,6 +257,7 @@ class ApiClient {
     String? effortOff,
     Map<String, int>? effortBudgets,
     bool effortEnabled = true,
+    List<String>? strip,
     bool enabled = true,
   }) async {
     final body = await _send(
@@ -281,6 +282,8 @@ class ApiClient {
         'effort_budgets': ?effortBudgets,
         // 推理档转换总开关:恒带键,false=转发面不读不写不剥离。
         'effort_enabled': effortEnabled,
+        // 清除配置:恒带键,点路径数组(空数组=不清除)。
+        'strip': ?strip,
         'enabled': enabled,
       },
     );
@@ -303,6 +306,7 @@ class ApiClient {
     String? effortOff,
     Map<String, int>? effortBudgets,
     bool effortEnabled = true,
+    List<String>? strip,
     required bool enabled,
   }) async {
     final body = await _send(
@@ -325,6 +329,8 @@ class ApiClient {
         'effort_off': ?effortOff,
         'effort_budgets': ?effortBudgets,
         'effort_enabled': effortEnabled,
+        // 表单恒带键:空数组=清空清除配置;缺省不带键=不改现状。
+        'strip': ?strip,
         'enabled': enabled,
       },
     );
@@ -575,7 +581,12 @@ class ApiClient {
       'GET',
       '/admin/usage/accounts',
       query: _usageQuery(
-          start: start, end: end, model: model, account: account, source: source),
+        start: start,
+        end: end,
+        model: model,
+        account: account,
+        source: source,
+      ),
     );
     return (body['accounts'] as List<dynamic>? ?? const [])
         .map((e) => UsageGroup.fromJson(e as Map<String, dynamic>))

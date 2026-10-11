@@ -311,6 +311,50 @@ func TestEffortFormatForward(t *testing.T) {
 	}
 }
 
+// 清除配置(strip)在请求体定稿后施加:客户端带来的、defaults/overrides
+// 写入的字段都按点路径整键删除,变空的中层对象一并回收;空配置不动体。
+func TestStripAppliedLast(t *testing.T) {
+	cap := &captured{}
+	up := httptest.NewServer(cap.handler(http.StatusOK, `{"ok":true}`))
+	defer up.Close()
+	target := resolve.ResolvedTarget{
+		ModelID: "strip-test", ProviderID: "deepseek.global.api.standard", NativeModel: "deepseek-flash",
+		Protocol: provider.ProtocolChatCompletions, BaseURL: up.URL,
+		Defaults:      json.RawMessage(`{"metadata":{"user_id":"u","trace":"t"},"temperature":0.6}`),
+		Overrides:     json.RawMessage(`{"store":true,"safe":1}`),
+		Strip:         []string{"store", "metadata.user_id", "reasoning.effort"},
+		EffortEnabled: true,
+	}
+	h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{"strip-test": target}}, nil)
+	rec := doRequest(t, h, http.MethodPost, "/v1/chat/completions",
+		map[string]string{"Authorization": "Bearer " + testKey},
+		`{"model":"strip-test","messages":[],"reasoning":{"effort":"high"},"top_p":0.9}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	body, _, _ := cap.snapshot()
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["store"]; ok {
+		t.Errorf("store 应被清除(overrides 写入的也删): %s", body)
+	}
+	meta, _ := got["metadata"].(map[string]any)
+	if _, ok := meta["user_id"]; ok {
+		t.Errorf("metadata.user_id 应被清除: %s", body)
+	}
+	if meta["trace"] != "t" {
+		t.Errorf("metadata.trace 兄弟键应保留: %s", body)
+	}
+	if _, ok := got["reasoning"]; ok {
+		t.Errorf("reasoning 删空后应回收空壳: %s", body)
+	}
+	if got["safe"] != float64(1) || got["top_p"] != 0.9 || got["temperature"] != 0.6 {
+		t.Errorf("未配置路径的字段应原样保留: %s", body)
+	}
+}
+
 func TestAnthropicForwardRewritesModelMergesParamsSwapsAuth(t *testing.T) {
 	h, cap, cleanup := newTestHandler(t, "")
 	defer cleanup()

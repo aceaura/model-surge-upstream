@@ -131,6 +131,11 @@ ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_budgets JSONB NOT NULL DEFAUL
 -- 仍消费即删,网关扩展字段不泄漏),对话页选档不落笔;默认 true 保旧行为。
 ALTER TABLE models ADD COLUMN IF NOT EXISTS effort_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 
+-- strip 清除配置(2026-10-11):点路径字符串数组(如 metadata.user_id),
+-- 上行请求体定稿后按路径整键删除字段(优先级高于 defaults/overrides 与
+-- 协议整形),删除后回收变空的中层对象;空数组=不清除。
+ALTER TABLE models ADD COLUMN IF NOT EXISTS strip JSONB NOT NULL DEFAULT '[]';
+
 CREATE INDEX IF NOT EXISTS models_account_idx ON models(account);
 
 -- 代理转发面配置：单行表（id 恒为 1）。api_key 为空表示转发面关闭。

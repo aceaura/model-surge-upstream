@@ -267,6 +267,7 @@ Authorization: Bearer <密钥>
 | `context_window` | int | 恒有（管理面形态） | 上下文窗口 token 数声明；`0` 表示未声明 |
 | `defaults` | object | 恒有 | 缺省填充参数：调用方缺什么补什么；空对象表示无 |
 | `overrides` | object | 恒有 | 强制覆盖参数：无论调用方给什么都压盖；空对象表示无 |
+| `strip` | array&lt;string&gt; | 恒有（管理面形态） | 清除配置：点路径列表（如 `metadata.user_id`），上行请求体定稿后按路径整键删除字段——最后施加，优先级高于 `defaults`/`overrides` 与协议整形（如 codex 硬约束）；删除后回收变空的中层对象。空数组表示不清除 |
 | `effort_format` | string | 恒有（管理面形态） | effort 写入格式：空串=协议内置映射（按出站协议选字段：responses=`reasoning.effort`、chat_completions=顶层 `reasoning_effort`、anthropic=`output_config.effort`（none 改写 `thinking.type=disabled`）、gemini=`thinkingConfig.thinkingLevel` 大写）；非空=显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异。选档后网关先按档号在 `efforts` 元数据里查值（查不到不落字段，上游吃自家默认），再按此格式写入。合法取值：`chat_completions`（OpenAI Chat 协议格式，顶层 `reasoning_effort`）、`responses`（OpenAI Responses 协议格式，嵌套 `reasoning.effort`）、`anthropic`（Anthropic 协议格式，`output_config.effort`）、`gemini`（Gemini 协议格式，`thinkingConfig.thinkingLevel` 大写）。none（关闭思考）是否上行不由格式特判：模型在 `efforts` 里声明 0=none 就会原样上发（百炼 qwen3.8 官方 none 映射 `enable_thinking=False`；OpenAI chat 值域含 none），上游思考恒开不可关的（kimi、codex）不声明 0 档即可 |
 | `enabled` | bool | 恒有 | 模型开关；`false` 时 resolve 返回 `409 model_disabled` |
 | `created_at` | time | 恒有 | |
@@ -302,6 +303,7 @@ Authorization: Bearer <密钥>
 | `headers` | map[string]string | 恒有 | **含真实凭据**的认证头 + 账号自定义头，构成规则见下 |
 | `defaults` | object | 恒有 | 原样下发，不与服务端任何参数预合并 |
 | `overrides` | object | 恒有 | 同上 |
+| `strip` | array&lt;string&gt; | 非空时 | 清除配置（3.3）：调用方构造请求体定稿后应按这些点路径整键删除字段；空数组时字段缺省 |
 
 `headers` 的构成规则：
 
@@ -880,6 +882,7 @@ POST /admin/models
 | `context_window` | int | 否 | ≥ 0；缺省或 `0` = 未声明 | 上下文窗口 token 数 |
 | `defaults` | object | 否 | 须为 JSON 对象（数组/标量返回 `400 invalid_json`）；缺省或 `null` 落库为 `{}` | 缺省填充参数 |
 | `overrides` | object | 否 | 同 `defaults` | 强制覆盖参数 |
+| `strip` | array&lt;string&gt; | 否 | 点路径字符串数组，每条路径点分隔且每段非空（非法返回 `400 invalid_request`）；缺省落库为 `[]` | 清除配置：上行请求体定稿后按路径整键删除字段，最后施加、优先级最高 |
 | `effort_format` | string | 否 | 缺省或空串 = 协议内置映射；非空须为 3.3 列出的格式枚举之一，非法返回 `400` | effort 写入格式，见 3.3 与 7.2 第 2 条 |
 | `enabled` | bool | 否 | 缺省 `true` | 模型开关 |
 
@@ -986,6 +989,7 @@ PUT /admin/models/{id...}
 | `context_window` | 置 `0`（清除声明） |
 | `defaults` / `overrides` | 置 `{}`（清除） |
 | `effort_format` | **省略（`null`）保留原值**；显式空串 = 回协议内置映射 |
+| `strip` | **省略保留原值**；显式数组替换（空数组 = 清空清除配置） |
 | `enabled` | 置 `true`（重新启用） |
 
 **请求体结构**（完整替换形态；`id` 不出现在请求体中）：
@@ -1369,13 +1373,14 @@ curl http://localhost:8080/v1/accounts/ds-1/upstream-models \
 
 请求路径原样拼到解析出的账号 `base_url` 之后（`/v1/messages` → `{base_url}/v1/messages`）。上表之外的路径 `404`。
 
-**转发时只改五处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
+**转发时只改六处，其余字节原样流过**（含 SSE 流式逐事件直传、上游非 2xx 原样回传）：
 
 1. 请求体 `model` 字段由别名改写为 `native_model`（gemini 改的是 URL 路径段；别名含 `/` 无法进 gemini 路径，请走另外两族）；
 2. 请求体顶层 `reasoning_level`（数字档，字符串 `"2"` 或整数 `2` 均可）由通用映射逻辑消费（该网关字段恒不发上游，未命中同样删除）并给思考参数赋值。映射规则固定三段：先取档号，再按档号在模型声明的 `efforts` 元数据里查上行值（未提供、形态不对或未命中声明则不落字段，上游吃自家默认），命中后按模型的写入格式（`effort_format`，见 3.3）把值格式化进请求体——空串=协议内置（`responses` 写 `reasoning.effort`、`chat_completions` 写顶层 `reasoning_effort`，两协议值域均含 `none`=关闭思考；`anthropic` 写 `output_config.effort`，`none` 改写 `thinking: {"type":"disabled"}`；`gemini` 写 `generationConfig.thinkingConfig.thinkingLevel` 枚举大写，`none` 不动体），显式格式压过协议外形，按目标协议命名，承接「协议外壳+自家字段」的厂商差异（如 kimi K3 顶层 `reasoning_effort`、思考不可关，配 `chat_completions` 且不声明 0 档）。映射在 `defaults` 合并后、`overrides` 合并前施加：映射恒压 defaults 与客户端参数，JSON 覆盖参数恒可压盖映射结果。模型声明的档位清单见 7.3 模型列举的 `efforts` 键（`name`=档号、`value`=上行值）；
 3. 参数按 `defaults ← 客户端请求参数 ← overrides` 递归合并（对象深合并，数组与标量整体替换）——3.5 约定给调用方的合并职责在转发面由服务端执行；
-4. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
-5. 逐跳头（Connection 等）按 HTTP 规范不转发。
+4. 清除配置（`strip`，见 3.3）在请求体定稿后最后施加：按配置的点路径整键删除字段并回收变空的中层对象，优先级高于 `defaults`/`overrides` 与协议整形——是剔除上游不收字段的最终手段；
+5. 客户端认证痕迹（`Authorization`/`x-api-key`/`x-goog-api-key`/`?key=`）剥除，换成 3.5 规则生成的账号认证头；
+6. 逐跳头（Connection 等）按 HTTP 规范不转发。
 
 ### 7.3 模型列举
 

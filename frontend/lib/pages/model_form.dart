@@ -112,6 +112,13 @@ class _ModelFormState extends State<ModelForm> {
   // 其余推理档字段常驻显示(值保留,重新开启即用)。
   late bool _effortEnabled = _source?.effortEnabled ?? true;
 
+  // 清除配置(2026-10-11):点路径行列表,上行请求体定稿后按路径整键删除
+  // (最后施加,优先级高于 defaults/overrides 与协议整形)。默认空=不清除;
+  // 编辑/拷贝时回填存量路径。
+  late final List<_StripRow> _stripRows = [
+    for (final p in _source?.strip ?? const <String>[]) _StripRow(p),
+  ];
+
   List<_EffortRow> _initialEffort() {
     final source = _source;
     if (source == null) return <_EffortRow>[];
@@ -209,6 +216,11 @@ class _ModelFormState extends State<ModelForm> {
     final (defaults, defaultsErr) = parseJsonObject(_defaults.text);
     final (overrides, overridesErr) = parseJsonObject(_overrides.text);
     if (defaultsErr != null || overridesErr != null) return;
+    // 清除配置:trim 后丢弃空行,显式数组提交(空数组=清空)。
+    final strip = [
+      for (final r in _stripRows)
+        if (r.path.trim().isNotEmpty) r.path.trim(),
+    ];
 
     setState(() => _busy = true);
     try {
@@ -230,6 +242,7 @@ class _ModelFormState extends State<ModelForm> {
           effortOff: _effortOff,
           effortBudgets: _effortBudgets,
           effortEnabled: _effortEnabled,
+          strip: strip,
           enabled: _enabled,
         );
       } else {
@@ -248,6 +261,7 @@ class _ModelFormState extends State<ModelForm> {
           effortOff: _effortOff,
           effortBudgets: _effortBudgets,
           effortEnabled: _effortEnabled,
+          strip: strip,
           enabled: _enabled,
         );
       }
@@ -295,6 +309,8 @@ class _ModelFormState extends State<ModelForm> {
             _effortSection(),
             const SizedBox(height: 26),
             _paramsSection(),
+            const SizedBox(height: 26),
+            _stripSection(),
           ],
         ),
       ),
@@ -591,14 +607,23 @@ class _ModelFormState extends State<ModelForm> {
 
   /// 下游格式三分类(与 _formatCategories 同表):budget 类左列为阈值数字
   /// 编辑框,off 类只读 none,其余按词表下拉。
-  String get _entryCategory => _formatCategories[_normalizeFormat(_effortIn)] ?? '';
+  String get _entryCategory =>
+      _formatCategories[_normalizeFormat(_effortIn)] ?? '';
 
   /// 档词表(2026-10-11 行式映射对设计),与后端 effort.LevelsFor 同表:
   /// openai 两族 7 值;anthropic 两族 none+官方 5 档;gemini_level none+
   /// LOW/HIGH。budget/off 类不入表(右列/左列为编辑框或无档位)。
   static const _levelVocabs = <String, List<String>>{
     'openai_chat': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
-    'openai_responses': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    'openai_responses': [
+      'none',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ],
     'anthropic_effort': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     'anthropic_adaptive': ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     'gemini_level': ['none', 'LOW', 'HIGH'],
@@ -662,10 +687,13 @@ class _ModelFormState extends State<ModelForm> {
   /// 新增一行的默认值:左列取下游词表第一个非 none 档(budget 类给阈值
   /// 样例),右列取上游词表第一个非 none 档(budget 类给预算样例)。
   _EffortRow _newRow() {
-    String firstTier(List<String> lv) => lv.length > 1 ? lv[1] : (lv.isNotEmpty ? lv[0] : '');
+    String firstTier(List<String> lv) =>
+        lv.length > 1 ? lv[1] : (lv.isNotEmpty ? lv[0] : '');
     return _EffortRow(
       _entryCategory == 'budget' ? '2048' : firstTier(_levelsFor(_effortIn)),
-      _upstreamCategory == 'budget' ? '4096' : firstTier(_levelsFor(_effortFormat)),
+      _upstreamCategory == 'budget'
+          ? '4096'
+          : firstTier(_levelsFor(_effortFormat)),
     );
   }
 
@@ -803,7 +831,9 @@ class _ModelFormState extends State<ModelForm> {
                       const SizedBox(width: 24),
                       Expanded(
                         child: Text(
-                          outBudget ? '上行预算（tokens 或 none）' : '上行档（$_effortFormat）',
+                          outBudget
+                              ? '上行预算（tokens 或 none）'
+                              : '上行档（$_effortFormat）',
                           style: TextStyle(
                             fontSize: 12,
                             color: Theme.of(context).hintColor,
@@ -893,7 +923,8 @@ class _ModelFormState extends State<ModelForm> {
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
                       key: const ValueKey('model-effort-add'),
-                      onPressed: () => setState(() => _effortRows.add(_newRow())),
+                      onPressed: () =>
+                          setState(() => _effortRows.add(_newRow())),
                       icon: const Icon(Icons.add, size: 16),
                       label: const Text('添加映射'),
                     ),
@@ -941,6 +972,72 @@ class _ModelFormState extends State<ModelForm> {
       ),
     );
   }
+
+  // ── 清除配置(点路径行列表)──
+
+  Widget _stripSection() {
+    return CollapsibleSection(
+      icon: Icons.cleaning_services_outlined,
+      title: '清除配置',
+      subtitle: _stripRows.isEmpty
+          ? '按点路径清除上行 JSON 字段'
+          : '${_stripRows.length} 条路径',
+      // 已配路径时默认展开,新建空配置默认收起。
+      initiallyExpanded: _source?.strip.isNotEmpty ?? false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '每行一条点路径(如 metadata.user_id)。请求体定稿后按路径整键删除,'
+            '最后施加、优先级高于默认/覆盖参数;空行忽略。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (_stripRows.isNotEmpty) const SizedBox(height: 14),
+          for (var i = 0; i < _stripRows.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      key: _stripRows[i].key,
+                      initialValue: _stripRows[i].path,
+                      decoration: const InputDecoration(
+                        hintText: '点路径，如 metadata.user_id',
+                      ),
+                      validator: (v) {
+                        final p = (v ?? '').trim();
+                        if (p.isEmpty) return null; // 空行提交时忽略
+                        if (p.split('.').any((s) => s.isEmpty)) {
+                          return '点路径每段不能为空';
+                        }
+                        return null;
+                      },
+                      onChanged: (v) => setState(() => _stripRows[i].path = v),
+                    ),
+                  ),
+                  IconButton(
+                    key: ValueKey('model-strip-del-$i'),
+                    tooltip: '删除',
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: () => setState(() => _stripRows.removeAt(i)),
+                  ),
+                ],
+              ),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('model-strip-add'),
+              onPressed: () => setState(() => _stripRows.add(_StripRow())),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('添加路径'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 一行映射对(2026-10-11 行式映射对):name=下游档(下游 budget 类时为
@@ -954,4 +1051,13 @@ class _EffortRow {
   String value;
   final nameKey = UniqueKey();
   final valueKey = UniqueKey();
+}
+
+/// 一行清除配置路径。纯字符串态(onChanged 即写回),编辑框用
+/// initialValue + 行级 UniqueKey 保编辑态(增删行不按位置复用)。
+class _StripRow {
+  _StripRow([this.path = '']);
+
+  String path;
+  final key = UniqueKey();
 }

@@ -55,6 +55,9 @@ type ResolvedTarget struct {
 	// EffortEnabled 是推理档转换总开关:false=转发面不读不写不剥离
 	// (reasoning_level 仍消费即删,网关扩展字段不泄漏上游)。
 	EffortEnabled bool `json:"effort_enabled"`
+	// Strip 是清除配置:点路径列表,上行请求体定稿后按路径整键删除
+	// (优先级最高),空列表=不清除。
+	Strip []string `json:"strip,omitempty"`
 }
 
 // 认证头名。
@@ -186,6 +189,7 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		EffortOff:     m.EffortOff,
 		EffortBudgets: m.EffortBudgets,
 		EffortEnabled: m.EffortEnabled,
+		Strip:         m.Strip,
 	}, nil
 }
 

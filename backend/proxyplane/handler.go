@@ -24,6 +24,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/provider"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 	"github.com/aceaura/model-surge-upstream/backend/ringlog"
+	"github.com/aceaura/model-surge-upstream/backend/strip"
 	"github.com/aceaura/model-surge-upstream/backend/usage"
 )
 
@@ -287,6 +288,9 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 		merged = codex.ShapeBody(merged, target.NativeModel)
 		suffix = codex.MapSuffix(suffix)
 	}
+	// 清除配置最后施加:请求体定稿后按点路径整键删除,优先级高于
+	// defaults/overrides 与协议整形,是剔除上游不收字段的最终手段。
+	strip.Apply(merged, target.Strip)
 	h.forward(w, r, fam, target, suffix, merged)
 }
 
@@ -340,6 +344,8 @@ func (h *Handler) forwardGemini(w http.ResponseWriter, r *http.Request, suffix s
 	if tail != "" {
 		newSuffix += ":" + tail
 	}
+	// 清除配置最后施加:与标准族同口径(见 forwardJSON 尾部)。
+	strip.Apply(merged, target.Strip)
 	h.forward(w, r, familyGemini, target, newSuffix, merged)
 }
 

@@ -121,6 +121,67 @@ func TestCreateWithParams(t *testing.T) {
 	}
 }
 
+// 清除配置(strip):创建落库回读一致;Update 缺省保留旧值、显式数组覆盖、
+// 空数组清空;非法路径(空段/非数组)保存期拒绝。
+func TestStripConfig(t *testing.T) {
+	repo, _ := fixtures(t)
+	ctx := context.Background()
+
+	in := input()
+	in.Strip = json.RawMessage(`["store","metadata.user_id"]`)
+	created, err := repo.Create(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !slices.Equal(created.Strip, []string{"store", "metadata.user_id"}) {
+		t.Fatalf("strip = %v", created.Strip)
+	}
+	got, err := repo.Get(ctx, in.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !slices.Equal(got.Strip, []string{"store", "metadata.user_id"}) {
+		t.Fatalf("round trip strip = %v", got.Strip)
+	}
+
+	// Update 缺省(不带 strip 键)保留旧值。
+	updated, err := repo.Update(ctx, Input{ID: in.ID, EffortEnabled: true, Enabled: true})
+	if err != nil {
+		t.Fatalf("update keep: %v", err)
+	}
+	if !slices.Equal(updated.Strip, []string{"store", "metadata.user_id"}) {
+		t.Fatalf("update should keep strip, got %v", updated.Strip)
+	}
+	// 显式空数组清空。
+	updated, err = repo.Update(ctx, Input{ID: in.ID, Strip: json.RawMessage(`[]`), EffortEnabled: true, Enabled: true})
+	if err != nil {
+		t.Fatalf("update clear: %v", err)
+	}
+	if len(updated.Strip) != 0 {
+		t.Fatalf("update should clear strip, got %v", updated.Strip)
+	}
+
+	for _, bad := range []string{`["a..b"]`, `[""]`, `["."]`, `{"a":1}`, `"store"`} {
+		badIn := input()
+		badIn.ID = "kimi-1/bad-strip"
+		badIn.Strip = json.RawMessage(bad)
+		if _, err := repo.Create(ctx, badIn); err == nil {
+			t.Errorf("strip %s should be rejected", bad)
+		}
+	}
+	// 路径整体 trim 后落库。
+	trimIn := input()
+	trimIn.ID = "kimi-1/trim-strip"
+	trimIn.Strip = json.RawMessage(`[" store "]`)
+	trimmed, err := repo.Create(ctx, trimIn)
+	if err != nil {
+		t.Fatalf("create trim: %v", err)
+	}
+	if !slices.Equal(trimmed.Strip, []string{"store"}) {
+		t.Errorf("strip should be trimmed, got %v", trimmed.Strip)
+	}
+}
+
 func TestCreateRejects(t *testing.T) {
 	repo, _ := fixtures(t)
 	ctx := context.Background()

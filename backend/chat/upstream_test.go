@@ -708,6 +708,32 @@ func TestCompleteEffortInjection(t *testing.T) {
 		}
 	})
 
+	t.Run("strip 最后施加", func(t *testing.T) {
+		srv, got := capture(t, `{"output_text":"ok"}`)
+		tgt := resolve.ResolvedTarget{
+			ModelID: "a/b", Protocol: provider.ProtocolResponses,
+			BaseURL: srv.URL, NativeModel: "b",
+			// 清除配置压过选档写入与 overrides:reasoning.effort 删掉后
+			// 空壳 reasoning 回收;store 整键删除;其他字段不动。
+			Overrides:     json.RawMessage(`{"store":true,"reasoning":{"summary":"auto"}}`),
+			Strip:         []string{"store", "reasoning.effort"},
+			EffortEnabled: true,
+		}
+		if _, _, _, err := Complete(context.Background(), tgt, "s", "high", hist); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if _, ok := (*got)["store"]; ok {
+			t.Errorf("store 应被清除: %v", *got)
+		}
+		reasoning, _ := (*got)["reasoning"].(map[string]any)
+		if _, ok := reasoning["effort"]; ok {
+			t.Errorf("reasoning.effort 应被清除(压过选档): %v", *got)
+		}
+		if reasoning["summary"] != "auto" {
+			t.Errorf("reasoning.summary 兄弟键应保留: %v", *got)
+		}
+	})
+
 	t.Run("codex_keeps_reasoning_and_include", func(t *testing.T) {
 		var got map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
