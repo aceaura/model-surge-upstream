@@ -55,51 +55,6 @@ func ValidFormat(format string) bool {
 	return false
 }
 
-// FormatsForProtocol 协议同族约束(2026-10-10 映射重设计):声明协议决定
-// 双端格式的合法集合——跨族组合写出的字段上游根本不认识,纯属误配入口。
-// gemini 词表不收下游形态(下游适配已删),entry 回空=表单隐藏下游格式字段,
-// effort_in 恒存 ''(auto=透传,体里自带字段不破坏)。未知协议回空集合,
-// CompatibleWithProtocol 对其放行(协议合法性由 provider 校验承担)。
-func FormatsForProtocol(protocol string) (entry, upstream []string) {
-	switch protocol {
-	case provider.ProtocolChatCompletions:
-		return []string{FormatOpenAIChat}, []string{FormatOpenAIChat}
-	case provider.ProtocolResponses:
-		return []string{FormatOpenAIResponses}, []string{FormatOpenAIResponses}
-	case provider.ProtocolAnthropic:
-		family := []string{FormatAnthropicEffort, FormatAnthropicBudget,
-			FormatAnthropicAdaptive, FormatAnthropicOff}
-		return family, family
-	case provider.ProtocolGemini:
-		return nil, []string{FormatGeminiLevel, FormatGeminiBudget}
-	}
-	return nil, nil
-}
-
-// CompatibleWithProtocol 判定格式与协议是否同族:空串(auto)恒放行——
-// 兼容存量与 gemini 下游;旧值先归一再比对;未知协议不拦。
-func CompatibleWithProtocol(format, protocol string) bool {
-	if format == "" {
-		return true
-	}
-	entry, upstream := FormatsForProtocol(protocol)
-	if entry == nil && upstream == nil {
-		return true
-	}
-	n := NormalizeFormat(format)
-	for _, f := range entry {
-		if f == n {
-			return true
-		}
-	}
-	for _, f := range upstream {
-		if f == n {
-			return true
-		}
-	}
-	return false
-}
-
 // ValidEntryFormat 圈定入口(下游,effort_in)词表:auto + 六种非 gemini。
 // gemini 不作入口——下游适配已删,gemini 仅保留为上游协议与上游格式;
 // 旧值别名归一后判定(legacy "gemini"→gemini_level 同样被入口拒绝)。

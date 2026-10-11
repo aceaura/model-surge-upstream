@@ -153,45 +153,49 @@ func TestCreateRejects(t *testing.T) {
 	}
 }
 
-// TestCreateValidatesFormatProtocolFamily 协议同族约束:双端格式必须属声明
-// 协议的格式族,空串(auto)放行,旧值归一后判定;跨族组合保存即拒。
-func TestCreateValidatesFormatProtocolFamily(t *testing.T) {
+// TestCreateAllowsCrossFamilyFormats 同族约束已撤销(2026-10-11):双端格式
+// 词表全量可用,跨族组合合法(承接「协议外壳+自家字段」的厂商差异);
+// 词表外值仍按 ValidFormat/ValidEntryFormat 拒。
+func TestCreateAllowsCrossFamilyFormats(t *testing.T) {
 	repo, _ := fixtures(t)
 	ctx := context.Background()
 
 	str := func(s string) *string { return &s }
-	rejects := map[string]struct{ format, in *string }{
-		"effort_format 跨族":        {format: str("openai_chat")},
-		"effort_in 跨族":            {in: str("openai_chat")},
-		"effort_format gemini 跨族": {format: str("gemini_level")},
-	}
-	for name, tc := range rejects {
-		t.Run(name, func(t *testing.T) {
-			in := input() // anthropic 协议
-			in.EffortFormat, in.EffortIn = tc.format, tc.in
-			_, err := repo.Create(ctx, in)
-			if err == nil || apperr.CodeOf(err) != apperr.InvalidRequest {
-				t.Fatalf("跨族应拒 InvalidRequest, got %v", err)
-			}
-		})
-	}
-
 	accepts := []struct {
 		name       string
 		format, in *string
 	}{
 		{"空串放行", nil, nil},
 		{"同族格式", str("anthropic_budget"), str("anthropic_adaptive")},
-		{"旧值归一后同族", str("anthropic"), nil},
+		{"旧值归一", str("anthropic"), nil},
 		{"auto 入口放行", nil, str("")},
+		{"effort_format 跨族", str("openai_chat"), nil},
+		{"effort_in 跨族", nil, str("openai_chat")},
+		{"effort_format gemini 跨族", str("gemini_level"), nil},
 	}
 	for i, tc := range accepts {
 		t.Run(tc.name, func(t *testing.T) {
-			in := input()
-			in.ID = fmt.Sprintf("kimi-1/ok-%d", i)
+			in := input() // anthropic 协议
+			in.ID = fmt.Sprintf("kimi-1/xfam-%d", i)
 			in.EffortFormat, in.EffortIn = tc.format, tc.in
 			if _, err := repo.Create(ctx, in); err != nil {
-				t.Fatalf("同族应放行: %v", err)
+				t.Fatalf("跨族应放行: %v", err)
+			}
+		})
+	}
+
+	rejects := map[string]struct{ format, in *string }{
+		"effort_format 词表外":   {format: str("bogus")},
+		"effort_in 词表外":       {in: str("bogus")},
+		"effort_in gemini 不收": {in: str("gemini_level")},
+	}
+	for name, tc := range rejects {
+		t.Run(name, func(t *testing.T) {
+			in := input()
+			in.EffortFormat, in.EffortIn = tc.format, tc.in
+			_, err := repo.Create(ctx, in)
+			if err == nil || apperr.CodeOf(err) != apperr.InvalidRequest {
+				t.Fatalf("词表外应拒 InvalidRequest, got %v", err)
 			}
 		})
 	}

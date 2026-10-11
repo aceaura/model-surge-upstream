@@ -101,12 +101,11 @@ class _ModelFormState extends State<ModelForm> {
   late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
   late bool _disableThinking = _effortInit.off;
   late final List<_EffortRow> _effortRows = _effortInit.rows;
-  // effort 写入格式:恒为显式格式,词表按声明协议过滤(协议同族约束,
-  // 跨族组合写出的字段上游不认识)。缺省与回落都取本协议上游族首项;
-  // 存量旧值(空/四协议名)读时归一,跨族存量落族首项,下次保存即迁移。
+  // effort 写入格式:恒为显式格式,双端词表全量罗列(跨族组合合法——
+  // 承接「协议外壳+自家字段」的厂商差异)。缺省与回落都取词表首项;
+  // 存量旧值(空/四协议名)读时归一,不在词表落首项,下次保存即迁移。
   late String _effortFormat;
-  // 下游格式(effort_in):同样按协议族过滤;gemini 无下游形态(入口族
-  // 为空)→ 字段隐藏,恒存 ''(auto=透传,不破坏体里自带字段)。
+  // 下游格式(effort_in):同样全量词表恒显示,缺省=词表首项。
   late String _effortIn;
   // 0 档在 anthropic 族上游的关思考落定:空=disabled / between_tools / omit。
   late String _effortOff = _source?.effortOff ?? '';
@@ -186,7 +185,6 @@ class _ModelFormState extends State<ModelForm> {
       if (!_protocols.contains(_protocol)) {
         _protocol = _protocols.firstOrNull;
       }
-      _syncFormatsToProtocol();
     });
   }
 
@@ -340,10 +338,7 @@ class _ModelFormState extends State<ModelForm> {
                 value: _protocol,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
                 options: _protocols,
-                onChanged: (v) => setState(() {
-                  _protocol = v;
-                  _syncFormatsToProtocol();
-                }),
+                onChanged: (v) => setState(() => _protocol = v),
                 validator: (v) => v == null ? '请选择协议' : null,
               ),
             ),
@@ -525,43 +520,32 @@ class _ModelFormState extends State<ModelForm> {
     final base = _offCategory
         ? '无档位（思考恒关）'
         : (levels.isEmpty ? '不支持' : levels.join(' / '));
-    // 双端格式恒显式(无 auto 默认项),折叠标题常驻转换方向;
-    // gemini 无下游形态(字段隐藏),方向标注为透传。
-    final route = _entryFormats.isEmpty
-        ? '上游 $_effortFormat（下游透传）'
-        : '下游 $_effortIn → 上游 $_effortFormat';
-    return '$base · $route';
+    // 双端格式恒显式(无 auto 默认项),折叠标题常驻转换方向。
+    return '$base · 下游 $_effortIn → 上游 $_effortFormat';
   }
 
-  /// 协议同族约束(2026-10-10 映射重设计):双端格式词表由声明协议决定,
-  /// 值为 (下游族, 上游族),与后端 effort.FormatsForProtocol 同表。单选项族
-  /// 仍渲染(明示形态);gemini 不收下游形态(下游适配已删)→ 入口族为空 =
-  /// 下游格式字段隐藏,effort_in 恒存 ''(auto=透传)。
+  /// 双端格式词表(2026-10-11 用户定:上游下游都用全部协议格式,不做
+  /// 协议同族过滤——跨族组合承接「协议外壳+自家字段」的厂商差异)。
+  /// 下游 6 种(词表不收 gemini 下游形态);上游 8 种(含 gemini 两族)。
   /// effort_index 已废:reasoning_level 数字档是网关扩展字段,不走显式格式。
-  static const _formatsByProtocol = <String, (List<String>, List<String>)>{
-    'chat_completions': (['openai_chat'], ['openai_chat']),
-    'responses': (['openai_responses'], ['openai_responses']),
-    'anthropic': (
-      [
-        'anthropic_effort',
-        'anthropic_budget',
-        'anthropic_adaptive',
-        'anthropic_off',
-      ],
-      [
-        'anthropic_effort',
-        'anthropic_budget',
-        'anthropic_adaptive',
-        'anthropic_off',
-      ],
-    ),
-    'gemini': (<String>[], ['gemini_level', 'gemini_budget']),
-  };
-
-  List<String> get _entryFormats =>
-      _formatsByProtocol[_protocol]?.$1 ?? const [];
-  List<String> get _upstreamFormats =>
-      _formatsByProtocol[_protocol]?.$2 ?? const [];
+  static const _entryFormats = [
+    'openai_chat',
+    'openai_responses',
+    'anthropic_effort',
+    'anthropic_budget',
+    'anthropic_adaptive',
+    'anthropic_off',
+  ];
+  static const _upstreamFormats = [
+    'openai_chat',
+    'openai_responses',
+    'anthropic_effort',
+    'anthropic_budget',
+    'anthropic_adaptive',
+    'anthropic_off',
+    'gemini_level',
+    'gemini_budget',
+  ];
 
   /// 存量旧值(四协议名)→ 双端词表别名,与后端 effort.NormalizeFormat 同表。
   static String _normalizeFormat(String f) => switch (f) {
@@ -572,29 +556,16 @@ class _ModelFormState extends State<ModelForm> {
     _ => f,
   };
 
-  /// 入口值初始化:归一后若不在本协议入口族(存量空值 auto/跨族存量/已删的
-  /// gemini 入口)落到族首项;入口族为空(gemini)回 ''(透传)。
-  String _entryInit(String f) {
-    final fam = _entryFormats;
-    if (fam.isEmpty) return '';
+  /// 入口值初始化:归一后不在词表(存量空值 auto/未知值)落词表首项。
+  static String _entryInit(String f) {
     final n = _normalizeFormat(f);
-    return fam.contains(n) ? n : fam.first;
+    return _entryFormats.contains(n) ? n : _entryFormats.first;
   }
 
-  /// 上游值初始化:归一后若不在本协议上游族(存量空值/跨族存量/未知值)
-  /// 落到族首项。
-  String _upstreamInit(String f) {
-    final fam = _upstreamFormats;
+  /// 上游值初始化:同理,存量空值/未知值落词表首项。
+  static String _upstreamInit(String f) {
     final n = _normalizeFormat(f);
-    if (fam.contains(n)) return n;
-    return fam.isEmpty ? '' : fam.first;
-  }
-
-  /// 协议切换(含账号联动重置协议)时同步双端格式:族内值保留并归一,
-  /// 跨族落新族首项(gemini 下游落 ''=透传)。
-  void _syncFormatsToProtocol() {
-    _effortFormat = _upstreamInit(_effortFormat);
-    _effortIn = _entryInit(_effortIn);
+    return _upstreamFormats.contains(n) ? n : _upstreamFormats.first;
   }
 
   /// 关思考落定选项与标签(0 档在 anthropic 族上游怎么写)。
@@ -655,9 +626,6 @@ class _ModelFormState extends State<ModelForm> {
   Widget _effortSection() {
     final rows = _effortRows;
     final budgetFamily = _budgetFamily;
-    final entryFormats = _entryFormats;
-    // 上游格式字段单选项族也渲染(明示形态);gemini 入口族为空时下游格式
-    // 字段隐藏,只渲染上游格式。
     final upstreamField = LabeledField(
       key: const ValueKey('model-effort-format-field'),
       label: '上游格式',
@@ -709,28 +677,23 @@ class _ModelFormState extends State<ModelForm> {
           ),
           const SizedBox(height: 18),
           // 双端声明:下游格式(harness 送进来的形态)→ 上游格式(写出去的形态)。
-          // 词表按协议同族过滤;菜单项即格式名,无需 labelOf。
-          if (entryFormats.isEmpty)
-            upstreamField
-          else
-            FormRow2(
-              LabeledField(
-                key: const ValueKey('model-effort-in-field'),
-                label: '下游格式',
-                hint: '体里已有的档位字段形态：网关按它读出规范档并剥掉原键',
-                child: StyledDropdownFormField(
-                  key: const ValueKey('model-effort-in'),
-                  value: _effortIn,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                  ),
-                  options: entryFormats,
-                  onChanged: (v) =>
-                      setState(() => _effortIn = v ?? entryFormats.first),
-                ),
+          // 词表全量罗列,跨族组合合法;菜单项即格式名,无需 labelOf。
+          FormRow2(
+            LabeledField(
+              key: const ValueKey('model-effort-in-field'),
+              label: '下游格式',
+              hint: '体里已有的档位字段形态：网关按它读出规范档并剥掉原键',
+              child: StyledDropdownFormField(
+                key: const ValueKey('model-effort-in'),
+                value: _effortIn,
+                decoration: const InputDecoration(border: OutlineInputBorder()),
+                options: _entryFormats,
+                onChanged: (v) =>
+                    setState(() => _effortIn = v ?? _entryFormats.first),
               ),
-              upstreamField,
             ),
+            upstreamField,
+          ),
           const SizedBox(height: 18),
           // 关思考落定:仅 anthropic 族载档上游出现(anthropic_off 本身即
           // 关思考,无需填;openai/gemini 族忽略 effort_off)。

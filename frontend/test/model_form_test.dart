@@ -216,9 +216,9 @@ void main() {
           expect(submitted!['efforts'], [
             {'name': '1', 'value': 'high'},
           ]);
-          // 存量 chat_completions 归一为 openai_chat 后与 anthropic 协议跨族,
-          // 回落 anthropic 族首项。
-          expect(submitted!['effort_format'], 'anthropic_effort');
+          // 存量 chat_completions 归一为 openai_chat 后保留(同族约束已撤,
+          // 跨族值不再回落族首项)。
+          expect(submitted!['effort_format'], 'openai_chat');
           expect(submitted!['enabled'], isFalse);
         }
         expect(tester.takeException(), isNull);
@@ -595,7 +595,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
 
-    // 上游格式下拉框在双端声明行:默认 anthropic 族首项 anthropic_effort,
+    // 上游格式下拉框在双端声明行:默认词表首项 openai_chat,
     // 改选 anthropic_budget 随提交上行。
     await tester.ensureVisible(
       find.byKey(const ValueKey('model-effort-format')),
@@ -659,7 +659,7 @@ void main() {
     await pumpForm(tester, editing: editing, client: client);
 
     // 显式列表无 none:开关关;旧中文名废弃,按行号重排为 1·low / 2·high;
-    // 双端格式缺省落本协议族首项 anthropic_effort,副标题常驻转换方向。
+    // 双端格式缺省落词表首项 openai_chat,副标题常驻转换方向。
     expect(
       tester
           .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
@@ -667,7 +667,7 @@ void main() {
       isFalse,
     );
     expect(
-      find.text('1·low / 2·high · 下游 anthropic_effort → 上游 anthropic_effort'),
+      find.text('1·low / 2·high · 下游 openai_chat → 上游 openai_chat'),
       findsOneWidget,
     );
     expect(
@@ -741,7 +741,7 @@ void main() {
     await pumpForm(tester, editing: editing, client: client);
 
     // 开关默认开,行=有效列表两条值(无 none 行),副标题按数字档展示,
-    // 缺省双端格式(anthropic 族首项 anthropic_effort)随副标题常驻。
+    // 缺省双端格式(词表首项 openai_chat)随副标题常驻。
     expect(
       tester
           .widget<Switch>(find.byKey(const ValueKey('model-effort-off')))
@@ -749,9 +749,7 @@ void main() {
       isTrue,
     );
     expect(
-      find.text(
-        '0·关闭思考 / 1·low / 2·ultra · 下游 anthropic_effort → 上游 anthropic_effort',
-      ),
+      find.text('0·关闭思考 / 1·low / 2·ultra · 下游 openai_chat → 上游 openai_chat'),
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('model-effort-value-1')), findsOneWidget);
@@ -794,50 +792,51 @@ void main() {
       );
       await pumpForm(tester, client: client);
 
-      // 协议同族约束:默认协议 anthropic,双端词表只剩 anthropic 四族,
-      // 缺省=族首项 anthropic_effort;关思考落定随 anthropic 族出现,
+      // 同族约束已撤:双端词表全量罗列,缺省=词表首项 openai_chat;
+      // openai_chat 非 anthropic 载档族,关思考落定先隐藏,
       // 预算列只在选定预算类格式后出现。
       expect(
         find.byKey(const ValueKey('model-effort-off-policy')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(find.byKey(const ValueKey('model-effort-budget-0')), findsNothing);
       expect(
         tester
             .widget<StyledDropdown>(dropdownIn('model-effort-in-field'))
             .value,
-        'anthropic_effort',
+        'openai_chat',
       );
       expect(
         tester
             .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
             .value,
-        'anthropic_effort',
+        'openai_chat',
       );
 
-      // 双端词表按协议过滤:anthropic 协议下无 auto 空项、无 openai/gemini 格式;
+      // 双端词表全量:下游 6 种(不收 gemini)、上游 8 种,跨族组合合法;
       // effort_index 已废(reasoning_level 只走 auto),双端词表均不收。
-      const anthropicFamily = [
+      const entryVocab = [
+        'openai_chat',
+        'openai_responses',
         'anthropic_effort',
         'anthropic_budget',
         'anthropic_adaptive',
         'anthropic_off',
       ];
+      const upstreamVocab = [...entryVocab, 'gemini_level', 'gemini_budget'];
       final entryOpts = tester
           .widget<StyledDropdown>(dropdownIn('model-effort-in-field'))
           .options;
       final upstreamOpts = tester
           .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
           .options;
-      expect(entryOpts, anthropicFamily);
-      expect(upstreamOpts, anthropicFamily);
+      expect(entryOpts, entryVocab);
+      expect(upstreamOpts, upstreamVocab);
       expect(entryOpts, isNot(contains('')));
-      expect(upstreamOpts, isNot(contains('openai_chat')));
-      expect(upstreamOpts, isNot(contains('gemini_level')));
       expect(entryOpts, isNot(contains('effort_index')));
       expect(upstreamOpts, isNot(contains('effort_index')));
 
-      // 下游格式 → anthropic_adaptive(族内改选)。
+      // 下游格式 → anthropic_adaptive(跨族改选)。
       await tester.ensureVisible(find.byKey(const ValueKey('model-effort-in')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('model-effort-in')));
@@ -978,10 +977,10 @@ void main() {
     await pumpForm(tester, editing: editing, client: stubClient());
 
     // 上游/关思考下拉回填选中值;存量跨族入口值(openai_chat 与 anthropic
-    // 协议不同族)读时回落族首项 anthropic_effort;预算列出现且预填 16000。
+    // 协议跨族)同族约束已撤,原样保留;预算列出现且预填 16000。
     expect(
       tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).value,
-      'anthropic_effort',
+      'openai_chat',
     );
     expect(
       tester
@@ -1004,21 +1003,19 @@ void main() {
     );
   });
 
-  testWidgets('推理档:切协议时双端格式联动重置到新族首项', (tester) async {
+  testWidgets('推理档:切协议时双端格式不重置(同族约束已撤)', (tester) async {
     await pumpForm(tester);
 
-    // 缺省 anthropic:双端 anthropic_effort,关思考落定随族出现。
+    // 缺省:双端词表首项 openai_chat;openai_chat 非 anthropic 载档族,
+    // 关思考落定隐藏。
     expect(
       tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).value,
-      'anthropic_effort',
+      'openai_chat',
     );
-    expect(
-      find.byKey(const ValueKey('model-effort-off-policy')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
 
-    // 族内改上游为 anthropic_budget 后切协议到 chat_completions:
-    // 跨族值不迁移,双端落新族首项 openai_chat,关思考落定隐藏。
+    // 改上游为 anthropic_budget 后切协议到 chat_completions:
+    // 双端值不迁移不重置,关思考落定随 anthropic 族保持显示。
     await tester.ensureVisible(
       find.byKey(const ValueKey('model-effort-format')),
     );
@@ -1043,12 +1040,15 @@ void main() {
       tester
           .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
           .value,
-      'openai_chat',
+      'anthropic_budget',
     );
-    expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('model-effort-off-policy')),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('推理档:gemini 协议隐藏下游格式,effort_in 提交空串透传', (tester) async {
+  testWidgets('推理档:gemini 协议双端字段常显,缺省落词表首项随提交', (tester) async {
     Map<String, dynamic>? sentBody;
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -1088,23 +1088,24 @@ void main() {
       providersOverride: geminiProviders,
     );
 
-    // gemini 无下游形态:下游格式字段隐藏,上游词表只剩 gemini 两族,
-    // 副标题标注透传;关思考落定不属 gemini 族,隐藏。
-    expect(find.byKey(const ValueKey('model-effort-in-field')), findsNothing);
+    // 同族约束已撤:gemini 协议下游格式字段也常显,双端缺省都落词表首项
+    // openai_chat;openai_chat 非 anthropic 载档族,关思考落定隐藏。
+    expect(find.byKey(const ValueKey('model-effort-in-field')), findsOneWidget);
     expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
+    expect(
+      tester.widget<StyledDropdown>(dropdownIn('model-effort-in-field')).value,
+      'openai_chat',
+    );
     expect(
       tester
           .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
           .value,
-      'gemini_level',
+      'openai_chat',
     );
     expect(
-      tester
-          .widget<StyledDropdown>(dropdownIn('model-effort-format-field'))
-          .options,
-      ['gemini_level', 'gemini_budget'],
+      find.textContaining('下游 openai_chat → 上游 openai_chat'),
+      findsOneWidget,
     );
-    expect(find.textContaining('（下游透传）'), findsOneWidget);
 
     await tester.enterText(find.byKey(const ValueKey('model-id')), 'g-1/gm');
     await tester.enterText(
@@ -1116,8 +1117,8 @@ void main() {
 
     expect(sentBody, isNotNull);
     expect(sentBody!['protocol'], 'gemini');
-    expect(sentBody!['effort_in'], '');
-    expect(sentBody!['effort_format'], 'gemini_level');
+    expect(sentBody!['effort_in'], 'openai_chat');
+    expect(sentBody!['effort_format'], 'openai_chat');
 
     await tester.pump(const Duration(seconds: 3));
     await tester.pumpAndSettle();
@@ -1136,15 +1137,13 @@ void main() {
     );
     await pumpForm(tester, client: client);
 
-    // 载档类(anthropic_effort):档位表与关思考落定在;加一行 high 备用。
+    // 缺省 openai_chat(effort 类):档位表在;非 anthropic 载档族,关思考落定
+    // 隐藏。加一行 high 备用。
     expect(
       find.byKey(const ValueKey('model-effort-mode-field')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const ValueKey('model-effort-off-policy')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('model-effort-off-policy')), findsNothing);
     await tester.ensureVisible(find.byKey(const ValueKey('model-effort-add')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('model-effort-add')));

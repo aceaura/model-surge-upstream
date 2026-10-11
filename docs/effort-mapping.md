@@ -33,7 +33,7 @@ sequenceDiagram
 
     C->>P: 请求体(自带档位字段 或 reasoning_level 数字档)
     P->>P: 总开关闸:关=不读不写不剥,仅删 reasoning_level
-    Note over P,E: 双端格式恒与声明协议同族(配置面强制),读写剥必在同族字段集内
+    Note over P,E: 双端格式词表全量可用(跨族组合合法),读写剥按各自声明的形态执行
     P->>E: Read(下游格式):体里读规范档
     E-->>P: 原始值(budget 反查亦走矫正)
     P->>E: Coerce(声明表):别名归一→精确命中→向下钳→medium 兜底
@@ -47,23 +47,16 @@ sequenceDiagram
     P->>U: 上行请求(映射恒压 defaults;overrides 最后合并仍可压盖)
 ```
 
-## 2. 协议同族约束
+## 2. 双端词表全量可用
 
-模型的出站协议(`protocol`)决定双端格式的合法集合;**跨族组合写出的字段上游根本不认识**,配置面只渲染同族选项,后端保存时同族校验(空串=auto 放行):
+双端格式与出站协议(`protocol`)**解耦**:配置面恒罗列全部词表,跨族组合合法——承接「协议外壳 + 自家字段」的厂商差异(如 anthropic 外壳的端点却收 OpenAI 式顶层 `reasoning_effort`)。
 
-| 声明协议 | 下游格式(effort_in) | 上游格式(effort_format) |
-|---|---|---|
-| chat_completions | openai_chat | openai_chat |
-| responses | openai_responses | openai_responses |
-| anthropic | anthropic_effort / anthropic_budget / anthropic_adaptive / anthropic_off | 同左四种 |
-| gemini | 无(词表不收 gemini 下游)→ 表单隐藏该字段,恒存 `''` | gemini_level / gemini_budget |
-
-细则:
-
-- 单选项族(chat_completions/responses)下拉只有一项,等同落定,仍渲染以明示形态。
-- gemini 协议下游走 `''`(auto=不读不剥,体里自带字段透传;`reasoning_level` 数字档照常消费)。
-- 表单切协议时,双端格式重置为新协议族首项(族内值保留);存量跨族值读时回落族首项,下次保存即迁移,落库原值不动。
+- 下游格式(`effort_in`)词表 6 种:`openai_chat` / `openai_responses` / `anthropic_effort` / `anthropic_budget` / `anthropic_adaptive` / `anthropic_off`(不收 gemini 下游形态——gemini 无下游适配)。
+- 上游格式(`effort_format`)词表 8 种:下游 6 种 + `gemini_level` / `gemini_budget`。
+- 后端保存只校验值在词表内(`ValidFormat` / `ValidEntryFormat`),不做协议同族校验。
+- 表单缺省落词表首项 `openai_chat`;切协议不重置双端格式;存量值读时归一后原样保留。
 - 旧四值(`chat_completions`/`responses`/`anthropic`/`gemini`)读时归一到新词表(`openai_chat`/`openai_responses`/`anthropic_effort`/`gemini_level`)。
+- 组合是否合理由配置者负责:跨族写出的字段上游可能不认识,按厂商实际文档选。
 
 ## 3. 档位表语义
 
@@ -165,11 +158,11 @@ sequenceDiagram
 
 **每协议最小配置示例**(管理员视角):
 
-- chat_completions 模型:协议选 chat_completions,双端格式自动落定 openai_chat,只需填档位表。
-- responses 模型:同上,双端 openai_responses。
+- chat_completions 模型:双端格式按缺省 openai_chat 即可(词表首项),只需填档位表。
+- responses 模型:双端格式改选 openai_responses。
 - anthropic 模型(下游 harness 送预算):下游格式 anthropic_budget、上游格式按厂商选(如 anthropic_effort);需要关 0 档思考时声明 0 档并按厂商选关思考落定。
 - anthropic 无档位模型(思考恒关):上游格式 anthropic_off,无需档位表;下游格式按 harness 形态选(读档剥键仍生效),送什么档都按关思考发上游。
-- gemini 模型:下游格式隐藏(透传),上游格式 gemini_level(3.x)或 gemini_budget(2.5 预算制);不声明 0 档。
+- gemini 模型:上游格式 gemini_level(3.x)或 gemini_budget(2.5 预算制);下游格式按 harness 形态选(harness 不送档位字段时任选——读不到即回退 `reasoning_level`,再未命中不动体);不声明 0 档。
 
 ## 9. 优先级与冲突
 
