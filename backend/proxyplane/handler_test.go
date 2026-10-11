@@ -198,7 +198,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 		"my-gemini": {
 			ModelID: "my-gemini", Account: "g-1", ProviderID: "gemini.global.api.standard",
 			Protocol: "gemini", BaseURL: upstreamURL, NativeModel: "gemini-2.5-pro",
-			Headers: map[string]string{"Authorization": "Bearer real-gemini-key"},
+			Headers:       map[string]string{"Authorization": "Bearer real-gemini-key"},
 			EffortEnabled: true,
 		},
 		// my-kimi 配了显式写入格式:anthropic 外壳但档位走顶层
@@ -213,7 +213,7 @@ func newTestHandler(t *testing.T, upstreamURL string) (*Handler, *captured, func
 				{Name: "2", Value: "high"},
 				{Name: "3", Value: "max"},
 			},
-			EffortFormat: effort.FormatChatCompletions,
+			EffortFormat:  effort.FormatChatCompletions,
 			EffortEnabled: true,
 		},
 	}}
@@ -249,7 +249,7 @@ func TestEffortFormatForward(t *testing.T) {
 		override           string
 	}{
 		{name: "missing", params: `{}`, want: "medium"},
-		{name: "unknown level", params: `{"reasoning_level":"99"}`, want: "medium"},
+		{name: "unknown level clamps to last row", params: `{"reasoning_level":"99"}`, want: "xhigh"},
 		{name: "invalid level", params: `{"reasoning_level":{}}`, want: "medium"},
 		{name: "empty efforts", params: `{"reasoning_level":"2"}`, want: "medium", emptyEfforts: true},
 		{name: "client effort passes through", params: `{"reasoning_effort":"low"}`, want: "low"},
@@ -267,10 +267,10 @@ func TestEffortFormatForward(t *testing.T) {
 			target := resolve.ResolvedTarget{
 				ModelID: "bailian-test", ProviderID: "bailian.cn.subscribe.token-plan", NativeModel: "qwen3.8-max",
 				Protocol: provider.ProtocolChatCompletions, BaseURL: up.URL,
-				Defaults:     json.RawMessage(`{"reasoning_effort":"medium"}`),
-				Overrides:    json.RawMessage(tc.override),
-				EffortFormat: effort.FormatChatCompletions,
-				Efforts:      []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}},
+				Defaults:      json.RawMessage(`{"reasoning_effort":"medium"}`),
+				Overrides:     json.RawMessage(tc.override),
+				EffortFormat:  effort.FormatChatCompletions,
+				Efforts:       []effort.Entry{{Name: "0", Value: "none"}, {Name: "1", Value: "low"}, {Name: "2", Value: "medium"}, {Name: "3", Value: "xhigh"}},
 				EffortEnabled: true,
 			}
 			if tc.emptyEfforts {
@@ -506,8 +506,8 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 		t.Fatalf("reasoning_level 泄漏到上游: %v", got)
 	}
 
-	// 未声明的档号:不赋任何思考参数;reasoning_level 是网关扩展字段,
-	// 未命中也消费删除、不泄漏上游。
+	// 越界档号:钳到末行最高档(high);reasoning_level 是网关扩展字段,
+	// 无论命中与否都消费删除、不泄漏上游。
 	rec = doRequest(t, h, http.MethodPost, "/v1/chat/completions",
 		map[string]string{"Authorization": "Bearer " + testKey},
 		`{"model":"my-gpt","messages":[],"reasoning_level":"9"}`)
@@ -516,10 +516,10 @@ func TestReasoningLevelMappedIntoThinkingParams(t *testing.T) {
 	}
 	got = upstreamBody()
 	if _, leaked := got["reasoning_level"]; leaked {
-		t.Fatalf("未命中档位也不应泄漏 reasoning_level, got %v", got)
+		t.Fatalf("越界档位也不应泄漏 reasoning_level, got %v", got)
 	}
-	if _, assigned := got["reasoning_effort"]; assigned {
-		t.Fatalf("未命中档位不应赋 reasoning_effort: %v", got)
+	if got["reasoning_effort"] != "high" {
+		t.Fatalf("越界档位应钳到末行 high: %v", got)
 	}
 
 	// anthropic:1→high 进 output_config.effort;0→none 改写 thinking disabled
@@ -685,7 +685,8 @@ func doEntryRequest(t *testing.T, target resolve.ResolvedTarget, body string) ma
 
 // TestEntryFormatReadAndStrip 锁定显式入口格式主路径:harness 自带的 effort
 // 字段按 EffortIn 读成规范档,写成上游形态后剥离入口残留键(含空壳中层对象);
-// 入口==上游有效形态时不剥离(剥离会吃掉刚写入的字段);入口未命中不剥离。
+// 入口==上游有效形态时不剥离(剥离会吃掉刚写入的字段);预算未精确命中走
+// 矫正反查(就低钳制)。
 func TestEntryFormatReadAndStrip(t *testing.T) {
 	base := entryTargets("")["my-claude"]
 
@@ -729,16 +730,17 @@ func TestEntryFormatReadAndStrip(t *testing.T) {
 	}
 	base.Protocol = "anthropic"
 
-	// 入口字段未命中档位(预算 1000 不在映射):不写不剥离,原样透传。
+	// 入口预算未精确命中(1000 低于最小档 low 的 1024):矫正反查钳到
+	// 最小档,照写上游并剥入口残留键(就低不就高,不再静默丢字段)。
 	base.EffortIn = effort.FormatAnthropicBudget
 	base.EffortBudgets = map[string]int{"medium": 8000}
 	got = doEntryRequest(t, base, `{"model":"my-claude","max_tokens":4096,"messages":[],"thinking":{"type":"enabled","budget_tokens":1000}}`)
-	if _, assigned := got["output_config"]; assigned {
-		t.Fatalf("入口未命中不应写上游字段: %v", got)
+	output, _ = got["output_config"].(map[string]any)
+	if output["effort"] != "low" {
+		t.Fatalf("预算低于最小档应钳到 low 并写上游: %v", got)
 	}
-	thinking, _ := got["thinking"].(map[string]any)
-	if thinking["budget_tokens"] != float64(1000) {
-		t.Fatalf("入口未命中不应剥离入口字段: %v", got)
+	if _, leaked := got["thinking"]; leaked {
+		t.Fatalf("入口残留 thinking 应剥离: %v", got)
 	}
 }
 
@@ -893,7 +895,15 @@ func matrixExpectUpstream(format, value, off string) map[string]any {
 	case effort.FormatAnthropicAdaptive:
 		return map[string]any{"thinking": map[string]any{"type": "adaptive"}, "output_config": map[string]any{"effort": "high"}}
 	case effort.FormatAnthropicOff:
-		return map[string]any{}
+		// 无档位类:模型思考恒关,命中任何档都按 off 落关思考形态。
+		switch off {
+		case effort.OffOmit:
+			return map[string]any{}
+		case effort.OffBetweenTools:
+			return map[string]any{"thinking": map[string]any{"type": "between_tools"}}
+		default:
+			return map[string]any{"thinking": map[string]any{"type": "disabled"}}
+		}
 	case effort.FormatGeminiLevel:
 		return map[string]any{"generationConfig": map[string]any{"thinkingConfig": map[string]any{"thinkingLevel": "HIGH"}}}
 	case effort.FormatGeminiBudget:

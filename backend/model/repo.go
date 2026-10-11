@@ -343,6 +343,16 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		return Model{}, apperr.New(apperr.InvalidRequest,
 			"effort_in must be one of: auto, openai_chat, openai_responses, anthropic_effort, anthropic_budget, anthropic_adaptive, anthropic_off")
 	}
+	// 协议同族约束:双端格式必须属声明协议的格式族(空串=auto 放行),
+	// 跨族组合写出的字段上游不认识,保存即拒。
+	if !effort.CompatibleWithProtocol(format, in.Protocol) {
+		return Model{}, apperr.New(apperr.InvalidRequest, fmt.Sprintf(
+			"effort_format %q is not compatible with protocol %q", format, in.Protocol))
+	}
+	if !effort.CompatibleWithProtocol(effortIn, in.Protocol) {
+		return Model{}, apperr.New(apperr.InvalidRequest, fmt.Sprintf(
+			"effort_in %q is not compatible with protocol %q", effortIn, in.Protocol))
+	}
 	effortOff := ""
 	if in.EffortOff != nil {
 		effortOff = strings.TrimSpace(*in.EffortOff)

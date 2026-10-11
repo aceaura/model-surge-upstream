@@ -165,6 +165,9 @@ func applyEffort(target resolve.ResolvedTarget, body map[string]any, value strin
 	if !target.EffortEnabled {
 		return
 	}
+	// 防御性矫正:对话页选档恒命中声明表(chat.go 已 400 拦截表外值),
+	// 这里兜住其他调用路径,与转发面同一 Coerce。
+	value, _ = effort.Coerce(value, target.Efforts)
 	effort.Write(target.EffortFormat, target.Protocol, body, value,
 		target.EffortOff, target.EffortBudgets, effort.BodyMaxTokens(target.Protocol, body))
 }

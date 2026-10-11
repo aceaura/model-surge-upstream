@@ -101,8 +101,15 @@ func TestRead(t *testing.T) {
 		if !ok || v != "high" {
 			t.Errorf("预算反查 = %q,%v", v, ok)
 		}
-		if _, ok := Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(9999)}}, idxList, nil); ok {
-			t.Error("预算未精确命中应未命中")
+		// 矫正版区间反查:9999 钳到预算不超过它的最高档 medium(4000)。
+		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(9999)}}, idxList, nil)
+		if !ok || v != "medium" {
+			t.Errorf("预算 9999 应钳到 medium = %q,%v", v, ok)
+		}
+		// 低于最小档取最小档(low 1024)。
+		v, ok = Read(FormatAnthropicBudget, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(500)}}, idxList, nil)
+		if !ok || v != "low" {
+			t.Errorf("预算 500 应钳到 low = %q,%v", v, ok)
 		}
 		v, ok = Read(FormatAnthropicAdaptive, map[string]any{"thinking": map[string]any{"type": "adaptive"}, "output_config": map[string]any{"effort": "high"}}, nil, nil)
 		if !ok || v != "high" {
@@ -129,15 +136,7 @@ func TestWriteNoneSemantics(t *testing.T) {
 		}
 	})
 	t.Run("gemini 不动体", func(t *testing.T) {
-		for _, f := range []string{FormatGeminiLevel, FormatGeminiBudget, FormatAnthropicOff} {
-			body := map[string]any{"keep": 1}
-			Write(f, "gemini", body, "high", OffDisabled, nil, 0)
-			if f == FormatAnthropicOff {
-				if len(body) != 1 {
-					t.Errorf("anthropic_off 载档不应写: %v", body)
-				}
-				continue
-			}
+		for _, f := range []string{FormatGeminiLevel, FormatGeminiBudget} {
 			body2 := map[string]any{"keep": 1}
 			Write(f, "gemini", body2, "none", OffDisabled, nil, 0)
 			if !reflect.DeepEqual(body2, map[string]any{"keep": 1}) {
@@ -163,6 +162,48 @@ func TestWriteNoneSemantics(t *testing.T) {
 			t.Errorf("omit 不应写: %v", body)
 		}
 	})
+}
+
+// TestAnthropicOffAlwaysOff 无档位类(anthropic_off)模型思考恒关:命中任何
+// 档(含矫正后的非 none 值)都落关思考形态;off 恒为禁用写法。
+func TestAnthropicOffAlwaysOff(t *testing.T) {
+	for _, value := range []string{"none", "low", "high", "max"} {
+		body := map[string]any{"keep": 1}
+		Write(FormatAnthropicOff, "anthropic", body, value, OffDisabled, nil, 0)
+		thinking, ok := body["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Errorf("anthropic_off 命中 %q 应恒落 disabled: %v", value, body)
+		}
+		if body["keep"] != 1 {
+			t.Errorf("兄弟键不应动: %v", body)
+		}
+	}
+	body := map[string]any{"thinking": map[string]any{"display": "summarized"}}
+	Write(FormatAnthropicOff, "anthropic", body, "high", OffBetweenTools, nil, 0)
+	thinking := body["thinking"].(map[string]any)
+	if thinking["type"] != "between_tools" || len(thinking) != 1 {
+		t.Errorf("between_tools 应整对象替换: %v", body)
+	}
+}
+
+func TestCategoryOf(t *testing.T) {
+	cases := map[string]string{
+		FormatOpenAIChat: CategoryEffort, FormatOpenAIResponses: CategoryEffort,
+		FormatAnthropicEffort: CategoryEffort, FormatAnthropicAdaptive: CategoryEffort,
+		FormatGeminiLevel: CategoryEffort,
+		FormatAnthropicBudget: CategoryBudget, FormatGeminiBudget: CategoryBudget,
+		FormatAnthropicOff: CategoryOff,
+		// 旧值别名归一后同分类;auto/未知回空。
+		FormatChatCompletions: CategoryEffort, FormatAnthropic: CategoryEffort,
+		FormatGemini: CategoryEffort,
+		FormatAuto:  "",
+		"nonsense": "",
+	}
+	for format, want := range cases {
+		if got := CategoryOf(format); got != want {
+			t.Errorf("CategoryOf(%q) = %q, want %q", format, got, want)
+		}
+	}
 }
 
 func TestWriteCarriers(t *testing.T) {

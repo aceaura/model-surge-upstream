@@ -101,13 +101,13 @@ class _ModelFormState extends State<ModelForm> {
   late final ({bool off, List<_EffortRow> rows}) _effortInit = _initialEffort();
   late bool _disableThinking = _effortInit.off;
   late final List<_EffortRow> _effortRows = _effortInit.rows;
-  // effort 写入格式:表单无 auto 默认项,恒为显式格式(缺省=词表首项
-  // openai_chat),压过协议外形,承接「协议外壳+自家字段」的厂商差异。
-  // 存量旧值(空/四协议名)读时归一并落到词表首项,下次保存即迁移。
-  late String _effortFormat = _upstreamInit(_source?.effortFormat ?? '');
-  // 下游格式(effort_in):同样恒为显式格式,缺省=词表首项 openai_chat。
-  // 存量空值(auto)/gemini 入口值读时一并落到首项(下游 gemini 适配已删)。
-  late String _effortIn = _entryInit(_source?.effortIn ?? '');
+  // effort 写入格式:恒为显式格式,词表按声明协议过滤(协议同族约束,
+  // 跨族组合写出的字段上游不认识)。缺省与回落都取本协议上游族首项;
+  // 存量旧值(空/四协议名)读时归一,跨族存量落族首项,下次保存即迁移。
+  late String _effortFormat;
+  // 下游格式(effort_in):同样按协议族过滤;gemini 无下游形态(入口族
+  // 为空)→ 字段隐藏,恒存 ''(auto=透传,不破坏体里自带字段)。
+  late String _effortIn;
   // 0 档在 anthropic 族上游的关思考落定:空=disabled / between_tools / omit。
   late String _effortOff = _source?.effortOff ?? '';
   // 推理档转换总开关:false=转发面不读不写不剥离,对话页选档不落笔;
@@ -140,6 +140,8 @@ class _ModelFormState extends State<ModelForm> {
   void initState() {
     super.initState();
     _protocol = _source?.protocol ?? _protocols.firstOrNull;
+    _effortFormat = _upstreamInit(_source?.effortFormat ?? '');
+    _effortIn = _entryInit(_source?.effortIn ?? '');
   }
 
   @override
@@ -184,6 +186,7 @@ class _ModelFormState extends State<ModelForm> {
       if (!_protocols.contains(_protocol)) {
         _protocol = _protocols.firstOrNull;
       }
+      _syncFormatsToProtocol();
     });
   }
 
@@ -337,7 +340,10 @@ class _ModelFormState extends State<ModelForm> {
                 value: _protocol,
                 decoration: const InputDecoration(border: OutlineInputBorder()),
                 options: _protocols,
-                onChanged: (v) => setState(() => _protocol = v),
+                onChanged: (v) => setState(() {
+                  _protocol = v;
+                  _syncFormatsToProtocol();
+                }),
                 validator: (v) => v == null ? '请选择协议' : null,
               ),
             ),
@@ -426,8 +432,9 @@ class _ModelFormState extends State<ModelForm> {
                       key: const ValueKey('model-compact-switch'),
                       value: _compactMode == 'error',
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      onChanged: (v) =>
-                          setState(() => _compactMode = v ? 'error' : 'passive'),
+                      onChanged: (v) => setState(
+                        () => _compactMode = v ? 'error' : 'passive',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -493,7 +500,10 @@ class _ModelFormState extends State<ModelForm> {
   /// 收集提交条目:档位数字即条目名——0 档固定 {0, none}(关闭思考开关
   /// 开时),1..N 档按行号命名 {行号, 值};空值行视为未填丢弃(其后行档号
   /// 按当前位置算,与界面行标一致)。开关关且删掉所有行即声明不支持。
+  /// 无档位类上游(anthropic_off)无档位表,恒提交空声明;已填行保留在
+  /// 表单态里,切回载档格式即恢复。
   List<EffortEntry> get _efforts {
+    if (_offCategory) return const [];
     return [
       if (_disableThinking) const EffortEntry(name: '0', value: 'none'),
       for (var i = 0; i < _effortRows.length; i++)
@@ -507,40 +517,51 @@ class _ModelFormState extends State<ModelForm> {
 
   String get _effortSubtitle {
     final levels = [
-      if (_disableThinking) '0·关闭思考',
+      if (!_offCategory && _disableThinking) '0·关闭思考',
       for (var i = 0; i < _effortRows.length; i++)
-        if (_effortRows[i].value.text.trim().isNotEmpty)
+        if (!_offCategory && _effortRows[i].value.text.trim().isNotEmpty)
           '${i + 1}·${_effortRows[i].value.text.trim()}',
     ];
-    final base = levels.isEmpty ? '不支持' : levels.join(' / ');
-    // 双端格式恒显式(无 auto 默认项),折叠标题常驻转换方向。
-    return '$base · 下游 $_effortIn → 上游 $_effortFormat';
+    final base = _offCategory
+        ? '无档位（思考恒关）'
+        : (levels.isEmpty ? '不支持' : levels.join(' / '));
+    // 双端格式恒显式(无 auto 默认项),折叠标题常驻转换方向;
+    // gemini 无下游形态(字段隐藏),方向标注为透传。
+    final route = _entryFormats.isEmpty
+        ? '上游 $_effortFormat（下游透传）'
+        : '下游 $_effortIn → 上游 $_effortFormat';
+    return '$base · $route';
   }
 
-  /// 上游格式词表(value 与后端 effort.FormatXxx 枚举一致):八种,无 auto 项;
-  /// 缺省与回落都取首项 openai_chat。effort_index 已废:
-  /// reasoning_level 数字档是网关扩展字段,不走显式格式。
-  static const _effortFormats = [
-    'openai_chat',
-    'openai_responses',
-    'anthropic_effort',
-    'anthropic_budget',
-    'anthropic_adaptive',
-    'anthropic_off',
-    'gemini_level',
-    'gemini_budget',
-  ];
+  /// 协议同族约束(2026-10-10 映射重设计):双端格式词表由声明协议决定,
+  /// 值为 (下游族, 上游族),与后端 effort.FormatsForProtocol 同表。单选项族
+  /// 仍渲染(明示形态);gemini 不收下游形态(下游适配已删)→ 入口族为空 =
+  /// 下游格式字段隐藏,effort_in 恒存 ''(auto=透传)。
+  /// effort_index 已废:reasoning_level 数字档是网关扩展字段,不走显式格式。
+  static const _formatsByProtocol = <String, (List<String>, List<String>)>{
+    'chat_completions': (['openai_chat'], ['openai_chat']),
+    'responses': (['openai_responses'], ['openai_responses']),
+    'anthropic': (
+      [
+        'anthropic_effort',
+        'anthropic_budget',
+        'anthropic_adaptive',
+        'anthropic_off',
+      ],
+      [
+        'anthropic_effort',
+        'anthropic_budget',
+        'anthropic_adaptive',
+        'anthropic_off',
+      ],
+    ),
+    'gemini': (<String>[], ['gemini_level', 'gemini_budget']),
+  };
 
-  /// 入口(下游)格式词表:六种,无 auto 项,不收 gemini——gemini 下游适配
-  /// 已删,与后端 effort.ValidEntryFormat 同集。缺省与回落都取首项。
-  static const _entryFormats = [
-    'openai_chat',
-    'openai_responses',
-    'anthropic_effort',
-    'anthropic_budget',
-    'anthropic_adaptive',
-    'anthropic_off',
-  ];
+  List<String> get _entryFormats =>
+      _formatsByProtocol[_protocol]?.$1 ?? const [];
+  List<String> get _upstreamFormats =>
+      _formatsByProtocol[_protocol]?.$2 ?? const [];
 
   /// 存量旧值(四协议名)→ 双端词表别名,与后端 effort.NormalizeFormat 同表。
   static String _normalizeFormat(String f) => switch (f) {
@@ -551,17 +572,29 @@ class _ModelFormState extends State<ModelForm> {
     _ => f,
   };
 
-  /// 入口值初始化:归一后若不在入口词表(存量空值 auto/已删的 gemini)
-  /// 落到词表首项 openai_chat,保证 value 恒在 options 内。
-  static String _entryInit(String f) {
+  /// 入口值初始化:归一后若不在本协议入口族(存量空值 auto/跨族存量/已删的
+  /// gemini 入口)落到族首项;入口族为空(gemini)回 ''(透传)。
+  String _entryInit(String f) {
+    final fam = _entryFormats;
+    if (fam.isEmpty) return '';
     final n = _normalizeFormat(f);
-    return _entryFormats.contains(n) ? n : _entryFormats.first;
+    return fam.contains(n) ? n : fam.first;
   }
 
-  /// 上游值初始化:同理,存量空值(协议内置)/未知值落到词表首项。
-  static String _upstreamInit(String f) {
+  /// 上游值初始化:归一后若不在本协议上游族(存量空值/跨族存量/未知值)
+  /// 落到族首项。
+  String _upstreamInit(String f) {
+    final fam = _upstreamFormats;
     final n = _normalizeFormat(f);
-    return _effortFormats.contains(n) ? n : _effortFormats.first;
+    if (fam.contains(n)) return n;
+    return fam.isEmpty ? '' : fam.first;
+  }
+
+  /// 协议切换(含账号联动重置协议)时同步双端格式:族内值保留并归一,
+  /// 跨族落新族首项(gemini 下游落 ''=透传)。
+  void _syncFormatsToProtocol() {
+    _effortFormat = _upstreamInit(_effortFormat);
+    _effortIn = _entryInit(_effortIn);
   }
 
   /// 关思考落定选项与标签(0 档在 anthropic 族上游怎么写)。
@@ -572,25 +605,41 @@ class _ModelFormState extends State<ModelForm> {
     _ => 'disabled（标准：thinking 改写为 disabled）',
   };
 
+  /// 上游格式三分类(2026-10-11 映射重设计),与后端 effort.CategoryOf 同表:
+  /// effort 类档位直写、budget 类预算映射、off 类无档位(模型思考恒关)。
+  /// 分类驱动填写框显隐:off 类不显示档位表/0 档开关/关思考落定。
+  static const _formatCategories = <String, String>{
+    'openai_chat': 'effort',
+    'openai_responses': 'effort',
+    'anthropic_effort': 'effort',
+    'anthropic_adaptive': 'effort',
+    'gemini_level': 'effort',
+    'anthropic_budget': 'budget',
+    'gemini_budget': 'budget',
+    'anthropic_off': 'off',
+  };
+
   /// 显式选定的上游格式(归一后,恒在词表内)。配对专属字段(关思考落定/
   /// 预算列)只在选定对应格式时出现。
   String get _upstreamFormat => _normalizeFormat(_effortFormat);
 
-  /// 关思考落定:仅在选定 anthropic 族上游格式后出现;其余格式忽略
-  /// effort_off(转发面对非 anthropic 族不落关思考字段)。
+  String get _upstreamCategory => _formatCategories[_upstreamFormat] ?? '';
+
+  /// 无档位类上游(anthropic_off):模型思考恒关,无需档位表与关思考落定。
+  bool get _offCategory => _upstreamCategory == 'off';
+
+  /// 关思考落定:仅 anthropic 族载档上游格式出现(其余格式忽略 effort_off;
+  /// anthropic_off 本身即关思考,无需填)。
   bool get _offRelevant => const {
     'anthropic_effort',
     'anthropic_budget',
     'anthropic_adaptive',
-    'anthropic_off',
   }.contains(_upstreamFormat);
 
   /// 预算数输入:仅在选定预算类上游格式(anthropic_budget/gemini_budget)
   /// 后出现;其余格式无预算列。
-  bool get _budgetFamily => const {
-    'anthropic_budget',
-    'gemini_budget',
-  }.contains(_upstreamFormat);
+  bool get _budgetFamily =>
+      const {'anthropic_budget', 'gemini_budget'}.contains(_upstreamFormat);
 
   /// 收集预算覆盖:档位值→正整数;留空/非正/非数视为用内置映射,不入表。
   Map<String, int> get _effortBudgets {
@@ -606,6 +655,22 @@ class _ModelFormState extends State<ModelForm> {
   Widget _effortSection() {
     final rows = _effortRows;
     final budgetFamily = _budgetFamily;
+    final entryFormats = _entryFormats;
+    // 上游格式字段单选项族也渲染(明示形态);gemini 入口族为空时下游格式
+    // 字段隐藏,只渲染上游格式。
+    final upstreamField = LabeledField(
+      key: const ValueKey('model-effort-format-field'),
+      label: '上游格式',
+      hint: '读出的规范档按此形态写回体里发上游（决定上行字段结构）',
+      child: StyledDropdownFormField(
+        key: const ValueKey('model-effort-format'),
+        value: _effortFormat,
+        decoration: const InputDecoration(border: OutlineInputBorder()),
+        options: _upstreamFormats,
+        onChanged: (v) =>
+            setState(() => _effortFormat = v ?? _upstreamFormats.first),
+      ),
+    );
     return CollapsibleSection(
       icon: Icons.psychology_outlined,
       title: '推理档',
@@ -644,35 +709,31 @@ class _ModelFormState extends State<ModelForm> {
           ),
           const SizedBox(height: 18),
           // 双端声明:下游格式(harness 送进来的形态)→ 上游格式(写出去的形态)。
-          // 菜单项即格式名,无需 labelOf。
-          FormRow2(
-            LabeledField(
-              key: const ValueKey('model-effort-in-field'),
-              label: '下游格式',
-              hint: '体里已有的档位字段形态：网关按它读出规范档并剥掉原键',
-              child: StyledDropdownFormField(
-                key: const ValueKey('model-effort-in'),
-                value: _effortIn,
-                decoration: const InputDecoration(border: OutlineInputBorder()),
-                options: _entryFormats,
-                onChanged: (v) => setState(() => _effortIn = v ?? _entryFormats.first),
+          // 词表按协议同族过滤;菜单项即格式名,无需 labelOf。
+          if (entryFormats.isEmpty)
+            upstreamField
+          else
+            FormRow2(
+              LabeledField(
+                key: const ValueKey('model-effort-in-field'),
+                label: '下游格式',
+                hint: '体里已有的档位字段形态：网关按它读出规范档并剥掉原键',
+                child: StyledDropdownFormField(
+                  key: const ValueKey('model-effort-in'),
+                  value: _effortIn,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                  ),
+                  options: entryFormats,
+                  onChanged: (v) =>
+                      setState(() => _effortIn = v ?? entryFormats.first),
+                ),
               ),
+              upstreamField,
             ),
-            LabeledField(
-              key: const ValueKey('model-effort-format-field'),
-              label: '上游格式',
-              hint: '读出的规范档按此形态写回体里发上游（决定上行字段结构）',
-              child: StyledDropdownFormField(
-                key: const ValueKey('model-effort-format'),
-                value: _effortFormat,
-                decoration: const InputDecoration(border: OutlineInputBorder()),
-                options: _effortFormats,
-                onChanged: (v) => setState(() => _effortFormat = v ?? _effortFormats.first),
-              ),
-            ),
-          ),
           const SizedBox(height: 18),
-          // 关思考落定:仅 anthropic 族上游出现(其余格式忽略 effort_off)。
+          // 关思考落定:仅 anthropic 族载档上游出现(anthropic_off 本身即
+          // 关思考,无需填;openai/gemini 族忽略 effort_off)。
           if (_offRelevant) ...[
             LabeledField(
               key: const ValueKey('model-effort-off-field'),
@@ -689,59 +750,36 @@ class _ModelFormState extends State<ModelForm> {
             ),
             const SizedBox(height: 18),
           ],
-          LabeledField(
-            key: const ValueKey('model-effort-mode-field'),
-            label: '档位表',
-            hint: budgetFamily
-                ? '行号即档号；预算列留空=用内置映射（low 1024 / medium 4000 / high 10000 / xhigh 20000 / max 32000），上行自动钳到 < max_tokens'
-                : '行号即档号；0 档固定为关闭思考（上行值 none），由下方开关决定是否提供',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 与档位行同高(输入框实测 40),序号行距才一致;Switch 收缩包裹并
-                // 左移抵掉内置 4px 水平内边距,轨道左缘才能对齐输入框列
-                SizedBox(
-                  height: 40,
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 28,
-                        child: Text(
-                          '0',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            color: Theme.of(context).hintColor,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Transform.translate(
-                        offset: const Offset(-4, 0),
-                        child: Switch(
-                          key: const ValueKey('model-effort-off'),
-                          value: _disableThinking,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          onChanged: (v) => setState(() => _disableThinking = v),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                for (var i = 0; i < rows.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
+          // 无档位类上游(anthropic_off):模型思考恒关,剥掉下游档位字段后
+          // 按关思考形态发上游,无档位表可填;下游格式仍用于读档与剥键。
+          if (_offCategory)
+            Text(
+              '无档位：剥掉下游档位字段后按关思考形态（thinking disabled）发上游，命中任何档位都关思考',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).hintColor,
+              ),
+            )
+          else
+            LabeledField(
+              key: const ValueKey('model-effort-mode-field'),
+              label: '档位表',
+              hint: budgetFamily
+                  ? '行号即档号；预算列留空=用内置映射（low 1024 / medium 4000 / high 10000 / xhigh 20000 / max 32000），上行自动钳到 < max_tokens；表外请求档按就低原则自动矫正到最近声明档'
+                  : '行号即档号；0 档固定为关闭思考（上行值 none），由下方开关决定是否提供；表外请求档按就低原则自动矫正到最近声明档',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 与档位行同高(输入框实测 40),序号行距才一致;Switch 收缩包裹并
+                  // 左移抵掉内置 4px 水平内边距,轨道左缘才能对齐输入框列
+                  SizedBox(
+                    height: 40,
                     child: Row(
                       children: [
                         SizedBox(
                           width: 28,
                           child: Text(
-                            '${i + 1}',
+                            '0',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 12.5,
@@ -750,52 +788,91 @@ class _ModelFormState extends State<ModelForm> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Expanded(
-                          child: TextFormField(
-                            key: ValueKey('model-effort-value-$i'),
-                            controller: rows[i].value,
-                            decoration: const InputDecoration(hintText: '值（发上游）'),
+                        Transform.translate(
+                          offset: const Offset(-4, 0),
+                          child: Switch(
+                            key: const ValueKey('model-effort-off'),
+                            value: _disableThinking,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            onChanged: (v) =>
+                                setState(() => _disableThinking = v),
                           ),
                         ),
-                        // 预算列仅预算类上游格式出现:档位值→预算 token 覆盖。
-                        if (budgetFamily) ...[
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 132,
-                            child: TextFormField(
-                              key: ValueKey('model-effort-budget-$i'),
-                              controller: rows[i].budget,
-                              keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                hintText: '预算（留空=内置）',
-                              ),
-                            ),
-                          ),
-                        ],
-                        IconButton(
-                          key: ValueKey('model-effort-del-$i'),
-                          tooltip: '删除',
-                          icon: const Icon(Icons.remove_circle_outline),
-                          onPressed: () => setState(() {
-                            final r = _effortRows.removeAt(i);
-                            r.dispose();
-                          }),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text('关闭思考', style: TextStyle(fontSize: 12.5)),
                         ),
                       ],
                     ),
                   ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    key: const ValueKey('model-effort-add'),
-                    onPressed: () => setState(() => _effortRows.add(_EffortRow())),
-                    icon: const Icon(Icons.add, size: 16),
-                    label: const Text('添加档位'),
+                  const SizedBox(height: 8),
+                  for (var i = 0; i < rows.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 28,
+                            child: Text(
+                              '${i + 1}',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                color: Theme.of(context).hintColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              key: ValueKey('model-effort-value-$i'),
+                              controller: rows[i].value,
+                              decoration: const InputDecoration(
+                                hintText: '值（发上游）',
+                              ),
+                            ),
+                          ),
+                          // 预算列仅预算类上游格式出现:档位值→预算 token 覆盖。
+                          if (budgetFamily) ...[
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 132,
+                              child: TextFormField(
+                                key: ValueKey('model-effort-budget-$i'),
+                                controller: rows[i].budget,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  hintText: '预算（留空=内置）',
+                                ),
+                              ),
+                            ),
+                          ],
+                          IconButton(
+                            key: ValueKey('model-effort-del-$i'),
+                            tooltip: '删除',
+                            icon: const Icon(Icons.remove_circle_outline),
+                            onPressed: () => setState(() {
+                              final r = _effortRows.removeAt(i);
+                              r.dispose();
+                            }),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: const ValueKey('model-effort-add'),
+                      onPressed: () =>
+                          setState(() => _effortRows.add(_EffortRow())),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('添加档位'),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );

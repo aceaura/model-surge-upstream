@@ -621,8 +621,9 @@ func (h *Handler) listModels(w http.ResponseWriter, r *http.Request, fam family,
 // applyReasoningLevel 通用档位映射:reasoning_level 是本网关的扩展字段,
 // 消费即删(未命中也不得泄漏上游)。入口格式显式声明时先按它从体里读规范档
 // (harness 自带 effort 字段的主路径),未命中回退 reasoning_level 数字档;
-// 命中后先剥离入口残留键(声明了入口格式即剥;先剥后写才不会吃掉上游刚写的
-// 同名字段),再按模型的上游格式(effort_format,空=协议内置)格式化进请求体。
+// 命中后先矫正进声明表(Coerce 就低不就高,越界数字档钳末行,改写落
+// ringlog),再剥离入口残留键(声明了入口格式即剥;先剥后写才不会吃掉上游刚写的
+// 同名字段),最后按模型的上游格式(effort_format,空=协议内置)格式化进请求体。
 func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
 	// 总开关关闭:不读不写不剥离,但 reasoning_level 仍消费即删(扩展字段不泄漏)。
 	if !target.EffortEnabled {
@@ -637,9 +638,27 @@ func applyReasoningLevel(target resolve.ResolvedTarget, body map[string]any) {
 	delete(body, "reasoning_level")
 	if !hit && hasLevel {
 		value, hit = effort.LevelOf(target.Efforts, level)
+		if !hit && len(target.Efforts) > 0 {
+			// 数字档越界(超出声明行数)钳到末行最高档,不再静默吞没;
+			// 负数/非数在 reasoningLevel 已视为未提供,不走到这里。
+			if n, err := strconv.Atoi(level); err == nil && n >= len(target.Efforts) {
+				value = target.Efforts[len(target.Efforts)-1].Value
+				hit = true
+				ringlog.Push(ringlog.LevelInfo, "proxy", fmt.Sprintf(
+					"model effort coerced: reasoning_level %s→%s(越界钳末行) model=%s",
+					level, value, target.ModelID))
+			}
+		}
 	}
 	if !hit {
 		return
+	}
+	// 矫正进声明表(就低不就高):未声明值不再原样写给上游撞
+	// unsupported_value;发生改写即写 ringlog 告知实际用了哪档。
+	if coerced, changed := effort.Coerce(value, target.Efforts); changed {
+		ringlog.Push(ringlog.LevelInfo, "proxy", fmt.Sprintf(
+			"model effort coerced: %s→%s model=%s", value, coerced, target.ModelID))
+		value = coerced
 	}
 	// 先剥离入口残留再写上游:入口与上游共用键时(anthropic 族 output_config.effort /
 	// thinking.type),写后剥离会吃掉刚写入的字段;Read 已取到规范档,剥离不再依赖入口键。

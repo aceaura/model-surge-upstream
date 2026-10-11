@@ -153,6 +153,50 @@ func TestCreateRejects(t *testing.T) {
 	}
 }
 
+// TestCreateValidatesFormatProtocolFamily 协议同族约束:双端格式必须属声明
+// 协议的格式族,空串(auto)放行,旧值归一后判定;跨族组合保存即拒。
+func TestCreateValidatesFormatProtocolFamily(t *testing.T) {
+	repo, _ := fixtures(t)
+	ctx := context.Background()
+
+	str := func(s string) *string { return &s }
+	rejects := map[string]struct{ format, in *string }{
+		"effort_format 跨族":        {format: str("openai_chat")},
+		"effort_in 跨族":            {in: str("openai_chat")},
+		"effort_format gemini 跨族": {format: str("gemini_level")},
+	}
+	for name, tc := range rejects {
+		t.Run(name, func(t *testing.T) {
+			in := input() // anthropic 协议
+			in.EffortFormat, in.EffortIn = tc.format, tc.in
+			_, err := repo.Create(ctx, in)
+			if err == nil || apperr.CodeOf(err) != apperr.InvalidRequest {
+				t.Fatalf("跨族应拒 InvalidRequest, got %v", err)
+			}
+		})
+	}
+
+	accepts := []struct {
+		name       string
+		format, in *string
+	}{
+		{"空串放行", nil, nil},
+		{"同族格式", str("anthropic_budget"), str("anthropic_adaptive")},
+		{"旧值归一后同族", str("anthropic"), nil},
+		{"auto 入口放行", nil, str("")},
+	}
+	for i, tc := range accepts {
+		t.Run(tc.name, func(t *testing.T) {
+			in := input()
+			in.ID = fmt.Sprintf("kimi-1/ok-%d", i)
+			in.EffortFormat, in.EffortIn = tc.format, tc.in
+			if _, err := repo.Create(ctx, in); err != nil {
+				t.Fatalf("同族应放行: %v", err)
+			}
+		})
+	}
+}
+
 func TestProtocolErrorListsSupported(t *testing.T) {
 	repo, _ := fixtures(t)
 	in := input()
@@ -353,7 +397,8 @@ func TestUpdateRename(t *testing.T) {
 	}
 }
 
-func TestUpdateNotFound(t *testing.T) {	repo, _ := fixtures(t)
+func TestUpdateNotFound(t *testing.T) {
+	repo, _ := fixtures(t)
 	in := input()
 	in.ID = "ghost/x"
 	if _, err := repo.Update(context.Background(), in); !apperr.Is(err, apperr.NotFound) {

@@ -55,6 +55,51 @@ func ValidFormat(format string) bool {
 	return false
 }
 
+// FormatsForProtocol 协议同族约束(2026-10-10 映射重设计):声明协议决定
+// 双端格式的合法集合——跨族组合写出的字段上游根本不认识,纯属误配入口。
+// gemini 词表不收下游形态(下游适配已删),entry 回空=表单隐藏下游格式字段,
+// effort_in 恒存 ''(auto=透传,体里自带字段不破坏)。未知协议回空集合,
+// CompatibleWithProtocol 对其放行(协议合法性由 provider 校验承担)。
+func FormatsForProtocol(protocol string) (entry, upstream []string) {
+	switch protocol {
+	case provider.ProtocolChatCompletions:
+		return []string{FormatOpenAIChat}, []string{FormatOpenAIChat}
+	case provider.ProtocolResponses:
+		return []string{FormatOpenAIResponses}, []string{FormatOpenAIResponses}
+	case provider.ProtocolAnthropic:
+		family := []string{FormatAnthropicEffort, FormatAnthropicBudget,
+			FormatAnthropicAdaptive, FormatAnthropicOff}
+		return family, family
+	case provider.ProtocolGemini:
+		return nil, []string{FormatGeminiLevel, FormatGeminiBudget}
+	}
+	return nil, nil
+}
+
+// CompatibleWithProtocol 判定格式与协议是否同族:空串(auto)恒放行——
+// 兼容存量与 gemini 下游;旧值先归一再比对;未知协议不拦。
+func CompatibleWithProtocol(format, protocol string) bool {
+	if format == "" {
+		return true
+	}
+	entry, upstream := FormatsForProtocol(protocol)
+	if entry == nil && upstream == nil {
+		return true
+	}
+	n := NormalizeFormat(format)
+	for _, f := range entry {
+		if f == n {
+			return true
+		}
+	}
+	for _, f := range upstream {
+		if f == n {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidEntryFormat 圈定入口(下游,effort_in)词表:auto + 六种非 gemini。
 // gemini 不作入口——下游适配已删,gemini 仅保留为上游协议与上游格式;
 // 旧值别名归一后判定(legacy "gemini"→gemini_level 同样被入口拒绝)。
@@ -66,6 +111,29 @@ func ValidEntryFormat(format string) bool {
 		return true
 	}
 	return false
+}
+
+// 上游格式三分类(2026-10-11 映射重设计):分类驱动映射行为与表单填写框
+// 显隐——effort 类档位值原样直写协议字段;budget 类档位值经 BudgetOf 换
+// 预算 token;off 类无档位,模型思考恒关,命中任何档都落关思考形态。
+const (
+	CategoryEffort = "effort"
+	CategoryBudget = "budget"
+	CategoryOff    = "off"
+)
+
+// CategoryOf 上游格式 → 三分类;归一后判定,auto/未知值回空串。
+func CategoryOf(format string) string {
+	switch NormalizeFormat(format) {
+	case FormatOpenAIChat, FormatOpenAIResponses, FormatAnthropicEffort,
+		FormatAnthropicAdaptive, FormatGeminiLevel:
+		return CategoryEffort
+	case FormatAnthropicBudget, FormatGeminiBudget:
+		return CategoryBudget
+	case FormatAnthropicOff:
+		return CategoryOff
+	}
+	return ""
 }
 
 // 关思考落定(0 档在 anthropic 族上游的写法):空=disabled 标准写法;
@@ -117,9 +185,10 @@ func ClampBudget(n, maxTokens int) int {
 }
 
 // Read 按入口格式从上行体读规范档;读不到回 "",false(回退链由调用方接)。
-// 预算类按 BudgetOf 反查精确命中(不猜最近档);anthropic_off 认
-// disabled/between_tools 为 none。入口词表不收 gemini(见 ValidEntryFormat),
-// gemini 形态不再有入口读取路径。
+// 预算类按 BudgetOf 区间反查(就低钳制,见 tierByBudget);anthropic_off 认
+// disabled/between_tools 为 none。字符串类读出的原始值由调用方接 Coerce
+// 矫正进声明表。入口词表不收 gemini(见 ValidEntryFormat),gemini 形态
+// 不再有入口读取路径。
 func Read(format string, body map[string]any, list []Entry, budgets map[string]int) (string, bool) {
 	switch NormalizeFormat(format) {
 	case FormatOpenAIChat:
@@ -158,7 +227,8 @@ func Read(format string, body map[string]any, list []Entry, budgets map[string]i
 }
 
 // Write 按上游格式把规范档写进上行体;none 语义随格式:openai 族原样写、
-// gemini 族与 anthropic_off 不动体、anthropic 载档三格式按 off 落定。
+// gemini 族不动体、anthropic 载档三格式按 off 落定;anthropic_off 是无档位
+// 类(模型思考恒关),命中任何档都落关思考形态。
 // format=auto 委托 Apply(出站协议内置映射),与改动前逐字一致。
 func Write(format, protocol string, body map[string]any, value string, off string, budgets map[string]int, maxTokens int) {
 	switch NormalizeFormat(format) {
@@ -196,9 +266,9 @@ func Write(format, protocol string, body map[string]any, value string, off strin
 		sub(body, "thinking")["type"] = "adaptive"
 		sub(body, "output_config")["effort"] = value
 	case FormatAnthropicOff:
-		if value == "none" {
-			writeOff(body, off)
-		}
+		// 无档位类:模型思考恒关,命中任何档(含矫正后)都落关思考形态;
+		// 未命中不走到这里(调用方未命中即返回),协议默认不开思考。
+		writeOff(body, off)
 	case FormatGeminiLevel:
 		if value == "none" {
 			return
@@ -259,15 +329,29 @@ func writeOff(body map[string]any, off string) {
 	}
 }
 
-// tierByBudget 预算数反查规范档:精确命中才回,未命中视为未携带该字段。
+// tierByBudget 预算数反查规范档(矫正版,2026-10-10):不再要求精确命中——
+// 钳到预算不超过请求数的最高档,低于最小档取最小档(就低不就高,与 Coerce
+// 同原则);声明表无非 none 档才回未命中。
 func tierByBudget(n int, list []Entry, budgets map[string]int) (string, bool) {
+	best, bestB := "", -1
+	lowest, lowestB := "", 1<<30
 	for _, e := range list {
-		if e.Value == "none" {
+		if strings.EqualFold(strings.TrimSpace(e.Value), "none") {
 			continue
 		}
-		if BudgetOf(e.Value, budgets) == n {
-			return e.Value, true
+		b := BudgetOf(e.Value, budgets)
+		if b <= n && b > bestB {
+			best, bestB = e.Value, b
 		}
+		if b < lowestB {
+			lowest, lowestB = e.Value, b
+		}
+	}
+	if best != "" {
+		return best, true
+	}
+	if lowest != "" {
+		return lowest, true
 	}
 	return "", false
 }
