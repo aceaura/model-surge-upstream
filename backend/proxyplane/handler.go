@@ -18,7 +18,6 @@ import (
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/codex"
-	"github.com/aceaura/model-surge-upstream/backend/compact"
 	"github.com/aceaura/model-surge-upstream/backend/effort"
 	"github.com/aceaura/model-surge-upstream/backend/kiro"
 	"github.com/aceaura/model-surge-upstream/backend/provider"
@@ -43,11 +42,10 @@ const (
 )
 
 type Handler struct {
-	key       []byte
-	resolver  Resolver
-	client    *http.Client
-	sink      UsageSink
-	compactor *compact.Runner
+	key      []byte
+	resolver Resolver
+	client   *http.Client
+	sink     UsageSink
 	// invalidator 作废 OAuth 账号当前 access_token;nil 表示未装配
 	// OAuth(遇 oauth 账号 401 时只能透传,不能刷新重试)。
 	invalidator Invalidator
@@ -87,14 +85,6 @@ func NewHandler(apiKey string, resolver Resolver, sink UsageSink) *Handler {
 		client:   &http.Client{Transport: kiro.NewTransport(tr)},
 		sink:     sink,
 	}
-}
-
-// WithCompactor 挂上上下文压缩器（nil 表示关闭，默认）。
-// 压缩只在请求体定稿后作用：auto 模式改写 body，error 模式直接回 400，
-// passive 模式无操作；响应透传路径不受影响。
-func (h *Handler) WithCompactor(c *compact.Runner) *Handler {
-	h.compactor = c
-	return h
 }
 
 // WithInvalidator 挂上 OAuth token 作废器（nil 表示关闭，默认）:
@@ -270,16 +260,6 @@ func (h *Handler) forwardWithBodyModel(w http.ResponseWriter, r *http.Request, f
 				opts["include_usage"] = true
 				merged["stream_options"] = opts
 			}
-		}
-	}
-	// 上下文超限判定在请求体定稿后执行：error 模式超阈值直接回 400 让
-	// 客户端自行压缩、passive 无操作。
-	if h.compactor != nil {
-		estimated, reject := h.compactor.Run(target, merged)
-		if reject {
-			writeContextExceeded(w, fam, estimated, target.ContextWindow)
-			h.record(r.Context(), target, false, usage.Usage{}, http.StatusBadRequest, 0, 0)
-			return
 		}
 	}
 	// codex 订阅端点的硬约束(store/stream/剥采样参数/instructions)与

@@ -109,10 +109,8 @@ void main() {
           'account': 'kimi-1',
           'native_model': 'old-model',
           'protocol': 'anthropic',
-          'context_window': 128000,
           'defaults': {'temperature': 0.6},
           'overrides': {'max_tokens': 8192},
-          'compact': {'mode': 'passive'},
           'efforts': [
             {'name': '1', 'value': 'high'},
           ],
@@ -164,10 +162,10 @@ void main() {
             'kimi-1/new',
           );
         }
-        final oldContextPosition = tester.getTopLeft(find.text('上下文限制'));
+        final oldSectionPosition = tester.getTopLeft(find.text('推理档'));
         await tester.tap(find.byKey(const ValueKey('upstream-model-fetch')));
         await tester.pumpAndSettle();
-        expect(tester.getTopLeft(find.text('上下文限制')), oldContextPosition);
+        expect(tester.getTopLeft(find.text('推理档')), oldSectionPosition);
         await tester.enterText(
           find.byKey(const ValueKey('upstream-model-search')),
           '千问',
@@ -209,8 +207,9 @@ void main() {
         expect(submitted!['native_model'], 'qwen3.8-max');
         expect(submitted!['account'], 'kimi-1');
         expect(submitted!['protocol'], 'anthropic');
+        expect(submitted!.containsKey('context_window'), isFalse);
+        expect(submitted!.containsKey('compact'), isFalse);
         if (mode != 'create') {
-          expect(submitted!['context_window'], 128000);
           expect(submitted!['defaults'], {'temperature': 0.6});
           expect(submitted!['overrides'], {'max_tokens': 8192});
           expect(submitted!['efforts'], [
@@ -343,7 +342,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 262144,
       'defaults': {'temperature': 0.6},
       'overrides': {'max_tokens': 8192},
       'enabled': true,
@@ -351,8 +349,6 @@ void main() {
     await pumpForm(tester, editing: editing);
 
     expect(find.text('kimi-k2-turbo'), findsAtLeastNWidgets(1));
-    // 上下文窗口按 k 单位回显(262144 tokens = 262.144k)
-    expect(find.text('262.144'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
     // 编辑态标识字段可改(改名保存),预填当前标识。
@@ -370,7 +366,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 262144,
       'defaults': {'temperature': 0.6},
       'overrides': {'max_tokens': 8192},
       'enabled': true,
@@ -384,11 +379,6 @@ void main() {
     );
     expect(idField.controller!.text, 'kimi-1/k2-copy');
     expect(find.text('kimi-k2-turbo'), findsAtLeastNWidgets(1));
-    expect(
-      find.text('262.144'),
-      findsAtLeastNWidgets(1),
-      reason: '上下文窗口随源模型预填',
-    );
     expect(find.textContaining('"temperature": 0.6'), findsAtLeastNWidgets(1));
     expect(find.textContaining('"max_tokens": 8192'), findsAtLeastNWidgets(1));
     expect(
@@ -398,15 +388,12 @@ void main() {
     );
   });
 
-  testWidgets('form groups fields into three collapsible sections', (
-    tester,
-  ) async {
+  testWidgets('form groups fields into collapsible sections', (tester) async {
     final editing = UpstreamModel.fromJson(const {
       'id': 'kimi-1/k2',
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 262144,
       'defaults': {'temperature': 0.6},
       'overrides': <String, dynamic>{},
       'enabled': true,
@@ -414,14 +401,16 @@ void main() {
     await pumpForm(tester, editing: editing);
 
     expect(find.text('基本信息'), findsOneWidget);
-    expect(find.text('上下文限制'), findsOneWidget);
+    expect(find.text('推理档'), findsOneWidget);
     expect(find.text('附加参数'), findsOneWidget);
+    expect(find.text('上下文限制'), findsNothing);
+    expect(find.byKey(const ValueKey('model-context')), findsNothing);
+    expect(find.byKey(const ValueKey('model-compact-switch')), findsNothing);
     expect(
       find.text('kimi-1 · anthropic · kimi-k2-turbo'),
       findsOneWidget,
       reason: '收起也能靠副标题辨认基本信息',
     );
-    expect(find.text('窗口 262.144k · 已关闭'), findsOneWidget);
     expect(
       find.textContaining('"temperature": 0.6'),
       findsAtLeastNWidgets(1),
@@ -446,110 +435,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('model-defaults')), findsOneWidget);
     expect(find.byKey(const ValueKey('model-overrides')), findsOneWidget);
-  });
-
-  testWidgets('context window rejects non-numeric input', (tester) async {
-    await pumpForm(tester);
-    await tester.enterText(find.byKey(const ValueKey('model-context')), 'abc');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pump();
-    expect(find.text('请填写数字'), findsOneWidget);
-  });
-
-  testWidgets('context window rejects negative input', (tester) async {
-    await pumpForm(tester);
-    await tester.enterText(find.byKey(const ValueKey('model-context')), '-5');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pump();
-    expect(find.text('不能为负数'), findsOneWidget);
-  });
-
-  testWidgets('context window is submitted in tokens from k input', (
-    tester,
-  ) async {
-    Map<String, dynamic>? sentBody;
-    final client = ApiClient(
-      baseUrl: 'http://127.0.0.1:8080',
-      adminKey: 'adm',
-      httpClient: MockClient((req) async {
-        sentBody =
-            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
-        return http.Response('{}', 200);
-      }),
-    );
-    await pumpForm(tester, client: client);
-
-    await tester.enterText(find.byKey(const ValueKey('model-id')), 'kimi-1/k2');
-    await tester.enterText(
-      find.byKey(const ValueKey('model-native')),
-      'kimi-k2-turbo',
-    );
-    // 256k 应以 256000 tokens 提交
-    await tester.enterText(find.byKey(const ValueKey('model-context')), '256');
-    await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await tester.pumpAndSettle();
-
-    expect(sentBody, isNotNull);
-    expect(sentBody!['context_window'], 256000);
-
-    // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
-    await tester.pump(const Duration(seconds: 3));
-    await tester.pumpAndSettle();
-  });
-
-  testWidgets('上下文限制:存量 auto 归一为开启,阈值常驻,关掉开关保存落 passive 不带阈值', (tester) async {
-    Map<String, dynamic>? sentBody;
-    final client = ApiClient(
-      baseUrl: 'http://127.0.0.1:8080',
-      adminKey: 'adm',
-      httpClient: MockClient((req) async {
-        sentBody =
-            jsonDecode(utf8.decode(req.bodyBytes)) as Map<String, dynamic>;
-        return http.Response('{}', 200);
-      }),
-    );
-    final source = UpstreamModel.fromJson(const {
-      'id': 'kimi-1/legacy',
-      'account': 'kimi-1',
-      'native_model': 'k3-256k',
-      'protocol': 'chat_completions',
-      'context_window': 200000,
-      'compact': {'mode': 'auto', 'keep_turns': 3},
-      'enabled': true,
-    });
-    await pumpForm(tester, editing: source, client: client);
-
-    // 下拉已废弃:无元数据/拦截字样,开关按存量 auto 归一为开启。
-    expect(find.byKey(const ValueKey('model-compact-mode')), findsNothing);
-    expect(find.text('元数据'), findsNothing);
-    expect(
-      tester
-          .widget<Switch>(find.byKey(const ValueKey('model-compact-switch')))
-          .value,
-      isTrue,
-    );
-    // 保留轮数随 auto 一并消失;阈值常驻不随开关隐藏。
-    expect(find.byKey(const ValueKey('model-compact-keep')), findsNothing);
-    expect(
-      find.byKey(const ValueKey('model-compact-threshold')),
-      findsOneWidget,
-    );
-
-    // 关掉开关:阈值框仍在场,保存落 passive 且不带阈值。
-    await tester.tap(find.byKey(const ValueKey('model-compact-switch')));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('model-compact-threshold')),
-      findsOneWidget,
-    );
-    await tester.tap(find.widgetWithText(FilledButton, '保存'));
-    await tester.pumpAndSettle();
-    expect(sentBody, isNotNull);
-    expect(sentBody!['compact'], const {'mode': 'passive'});
-
-    // 冲刷提示框的 2.4s 驻留定时器与滑出动画,避免遗留 Timer。
-    await tester.pump(const Duration(seconds: 3));
-    await tester.pumpAndSettle();
   });
 
   testWidgets('推理档:新建默认无映射行,行式映射对动态增删随提交上行', (tester) async {
@@ -644,7 +529,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
       'efforts': [
@@ -710,7 +594,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
       'efforts': null,
@@ -941,7 +824,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
       'efforts': [
@@ -1006,7 +888,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'chat_completions',
-      'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
       'efforts': [
@@ -1056,7 +937,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
       'efforts': [
@@ -1121,7 +1001,6 @@ void main() {
       'account': 'kimi-1',
       'native_model': 'kimi-k2-turbo',
       'protocol': 'anthropic',
-      'context_window': 0,
       'defaults': <String, dynamic>{},
       'overrides': <String, dynamic>{},
       'efforts': [

@@ -12,14 +12,12 @@ import (
 )
 
 type modelRequest struct {
-	ID            string          `json:"id"`
-	Account       string          `json:"account"`
-	NativeModel   string          `json:"native_model"`
-	Protocol      string          `json:"protocol"`
-	ContextWindow int             `json:"context_window"`
-	Defaults      json.RawMessage `json:"defaults"`
-	Overrides     json.RawMessage `json:"overrides"`
-	Compact       json.RawMessage `json:"compact"`
+	ID          string          `json:"id"`
+	Account     string          `json:"account"`
+	NativeModel string          `json:"native_model"`
+	Protocol    string          `json:"protocol"`
+	Defaults    json.RawMessage `json:"defaults"`
+	Overrides   json.RawMessage `json:"overrides"`
 	// Efforts 推理档支持列表:null=自动(跟随上游声明),数组=显式声明;缺省不改现状。
 	Efforts json.RawMessage `json:"efforts"`
 	// EffortFormat effort 写入格式:缺省(null)不改现状,空串=协议内置映射,
@@ -44,10 +42,8 @@ func (r modelRequest) input(id string) model.Input {
 		Account:       r.Account,
 		NativeModel:   r.NativeModel,
 		Protocol:      r.Protocol,
-		ContextWindow: r.ContextWindow,
 		Defaults:      r.Defaults,
 		Overrides:     r.Overrides,
-		Compact:       r.Compact,
 		Efforts:       r.Efforts,
 		EffortFormat:  r.EffortFormat,
 		EffortIn:      r.EffortIn,

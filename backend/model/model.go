@@ -10,17 +10,12 @@ import (
 )
 
 type Model struct {
-	ID          string `json:"id"`
-	Account     string `json:"account"`
-	NativeModel string `json:"native_model"`
-	Protocol    string `json:"protocol"`
-	// ContextWindow 为 0 表示未声明。
-	ContextWindow int             `json:"context_window"`
-	Defaults      json.RawMessage `json:"defaults"`
-	Overrides     json.RawMessage `json:"overrides"`
-	// Compact 上下文压缩配置：{"mode":"passive|error", "threshold"}，
-	// 缺项回落到全局 env 默认。
-	Compact json.RawMessage `json:"compact"`
+	ID          string          `json:"id"`
+	Account     string          `json:"account"`
+	NativeModel string          `json:"native_model"`
+	Protocol    string          `json:"protocol"`
+	Defaults    json.RawMessage `json:"defaults"`
+	Overrides   json.RawMessage `json:"overrides"`
 	// Efforts 推理档支持列表的原始配置：null=自动（跟随上游 /models 声明的
 	// supported_reasoning_levels），数组=管理员显式声明的 [{name,value}]
 	// 条目（空数组即不支持；value 是发上游的档位字符串，不限固定词表）。

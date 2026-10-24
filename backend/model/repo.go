@@ -20,7 +20,7 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/strip"
 )
 
-const columns = `id, account, native_model, protocol, context_window, defaults, overrides, compact, efforts, effort_format, effort_in, effort_off, effort_budgets, effort_enabled, strip, enabled, created_at, updated_at, sort_order`
+const columns = `id, account, native_model, protocol, defaults, overrides, efforts, effort_format, effort_in, effort_off, effort_budgets, effort_enabled, strip, enabled, created_at, updated_at, sort_order`
 
 // AccountLookup 提供账号存在性与其 provider 规格。由上层注入，
 // 避免 model 包横向依赖 account 包。
@@ -37,14 +37,12 @@ func NewRepo(pool *pgxpool.Pool, c *cache.Cache, lookup AccountLookup) *Repo {
 }
 
 type Input struct {
-	ID            string
-	Account       string
-	NativeModel   string
-	Protocol      string
-	ContextWindow int
-	Defaults      json.RawMessage
-	Overrides     json.RawMessage
-	Compact       json.RawMessage
+	ID          string
+	Account     string
+	NativeModel string
+	Protocol    string
+	Defaults    json.RawMessage
+	Overrides   json.RawMessage
 	// Efforts 原始配置：空=跟随现状（Create 落 null 自动，Update 保留旧值），
 	// "null"=恢复自动，数组=显式声明。
 	Efforts json.RawMessage
@@ -86,9 +84,9 @@ func (r *Repo) Create(ctx context.Context, in Input) (Model, error) {
 
 	persist := func() error {
 		_, err := r.pool.Exec(ctx, `INSERT INTO models (`+columns+`)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-			m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			m.ID, m.Account, m.NativeModel, m.Protocol,
+			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Efforts),
 			m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
 			m.EffortEnabled, []byte(marshalStrip(m.Strip)), m.Enabled, m.CreatedAt, m.UpdatedAt, m.SortOrder)
 		return mapWriteErr(err, m.ID)
@@ -189,12 +187,12 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 	persist := func() error {
 		if !rename {
 			tag, err := r.pool.Exec(ctx, `UPDATE models SET
-				account=$2, native_model=$3, protocol=$4, context_window=$5,
-				defaults=$6, overrides=$7, compact=$8, efforts=$9, effort_format=$10,
-				effort_in=$11, effort_off=$12, effort_budgets=$13, effort_enabled=$14,
-				strip=$15, enabled=$16, updated_at=$17 WHERE id=$1`,
-				m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-				[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
+				account=$2, native_model=$3, protocol=$4,
+				defaults=$5, overrides=$6, efforts=$7, effort_format=$8,
+				effort_in=$9, effort_off=$10, effort_budgets=$11, effort_enabled=$12,
+				strip=$13, enabled=$14, updated_at=$15 WHERE id=$1`,
+				m.ID, m.Account, m.NativeModel, m.Protocol,
+				[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Efforts),
 				m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
 				m.EffortEnabled, []byte(marshalStrip(m.Strip)), m.Enabled, m.UpdatedAt)
 			if err != nil {
@@ -212,12 +210,12 @@ func (r *Repo) Update(ctx context.Context, in Input) (Model, error) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		tag, err := tx.Exec(ctx, `UPDATE models SET
-			id=$2, account=$3, native_model=$4, protocol=$5, context_window=$6,
-			defaults=$7, overrides=$8, compact=$9, efforts=$10, effort_format=$11,
-			effort_in=$12, effort_off=$13, effort_budgets=$14, effort_enabled=$15,
-			strip=$16, enabled=$17, updated_at=$18 WHERE id=$1`,
-			existing.ID, m.ID, m.Account, m.NativeModel, m.Protocol, m.ContextWindow,
-			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Compact), []byte(m.Efforts),
+			id=$2, account=$3, native_model=$4, protocol=$5,
+			defaults=$6, overrides=$7, efforts=$8, effort_format=$9,
+			effort_in=$10, effort_off=$11, effort_budgets=$12, effort_enabled=$13,
+			strip=$14, enabled=$15, updated_at=$16 WHERE id=$1`,
+			existing.ID, m.ID, m.Account, m.NativeModel, m.Protocol,
+			[]byte(m.Defaults), []byte(m.Overrides), []byte(m.Efforts),
 			m.EffortFormat, m.EffortIn, m.EffortOff, []byte(marshalBudgets(m.EffortBudgets)),
 			m.EffortEnabled, []byte(marshalStrip(m.Strip)), m.Enabled, m.UpdatedAt)
 		if err != nil {
@@ -298,10 +296,6 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 	if native == "" {
 		return Model{}, apperr.New(apperr.InvalidRequest, "native_model is required")
 	}
-	if in.ContextWindow < 0 {
-		return Model{}, apperr.New(apperr.InvalidRequest, "context_window must not be negative")
-	}
-
 	spec, err := r.account(ctx, accountName)
 	if err != nil {
 		return Model{}, err
@@ -317,10 +311,6 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		return Model{}, err
 	}
 	overrides, err := normalizeObject(in.Overrides, "overrides")
-	if err != nil {
-		return Model{}, err
-	}
-	compactCfg, err := normalizeCompact(in.Compact)
 	if err != nil {
 		return Model{}, err
 	}
@@ -379,10 +369,8 @@ func (r *Repo) validate(ctx context.Context, in Input) (Model, error) {
 		Account:       accountName,
 		NativeModel:   native,
 		Protocol:      in.Protocol,
-		ContextWindow: in.ContextWindow,
 		Defaults:      defaults,
 		Overrides:     overrides,
-		Compact:       compactCfg,
 		Efforts:       efforts,
 		EffortFormat:  format,
 		EffortIn:      effortIn,
@@ -525,34 +513,6 @@ func normalizeEfforts(raw json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(s), nil
 }
 
-// normalizeCompact 校验 compact JSON：必须是对象；mode 只允许
-// passive/error；数值项给出合理范围。mode 的取值集合定义在此
-// 而非 compact 包——compact 依赖 resolve、resolve 依赖本包，
-// 反向引用会成环，故取值集合随存储校验落在这里。
-func normalizeCompact(raw json.RawMessage) (json.RawMessage, error) {
-	obj, err := normalizeObject(raw, "compact")
-	if err != nil {
-		return nil, err
-	}
-	var probe struct {
-		Mode      string   `json:"mode"`
-		Threshold *float64 `json:"threshold"`
-	}
-	if err := json.Unmarshal(obj, &probe); err != nil {
-		return nil, apperr.New(apperr.InvalidJSON, "compact must be a json object")
-	}
-	switch probe.Mode {
-	case "", "passive", "error":
-	default:
-		return nil, apperr.New(apperr.InvalidRequest,
-			"compact.mode must be one of: passive, error")
-	}
-	if probe.Threshold != nil && (*probe.Threshold <= 0 || *probe.Threshold > 1) {
-		return nil, apperr.New(apperr.InvalidRequest, "compact.threshold must be in (0, 1]")
-	}
-	return obj, nil
-}
-
 // normalizeObject 把空值补成 {}，并要求内容是 JSON object。
 func normalizeObject(raw json.RawMessage, field string) (json.RawMessage, error) {
 	if len(raw) == 0 {
@@ -565,11 +525,11 @@ func normalizeObject(raw json.RawMessage, field string) (json.RawMessage, error)
 	if probe == nil {
 		return json.RawMessage(`{}`), nil
 	}
-	compact, err := json.Marshal(probe)
+	normalized, err := json.Marshal(probe)
 	if err != nil {
 		return nil, apperr.New(apperr.InvalidJSON, fmt.Sprintf("%s must be a json object", field))
 	}
-	return compact, nil
+	return normalized, nil
 }
 
 type scanner interface {
@@ -581,19 +541,17 @@ func scan(s scanner) (Model, error) {
 		m         Model
 		defaults  []byte
 		overrides []byte
-		compact   []byte
 		efforts   []byte
 		budgets   []byte
 		stripRaw  []byte
 	)
-	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol, &m.ContextWindow,
-		&defaults, &overrides, &compact, &efforts, &m.EffortFormat, &m.EffortIn, &m.EffortOff,
+	if err := s.Scan(&m.ID, &m.Account, &m.NativeModel, &m.Protocol,
+		&defaults, &overrides, &efforts, &m.EffortFormat, &m.EffortIn, &m.EffortOff,
 		&budgets, &m.EffortEnabled, &stripRaw, &m.Enabled, &m.CreatedAt, &m.UpdatedAt, &m.SortOrder); err != nil {
 		return Model{}, err
 	}
 	m.Defaults = json.RawMessage(defaults)
 	m.Overrides = json.RawMessage(overrides)
-	m.Compact = json.RawMessage(compact)
 	m.Efforts = json.RawMessage(efforts)
 	m.EffortBudgets = map[string]int{}
 	if len(budgets) > 0 {
@@ -612,9 +570,6 @@ func scan(s scanner) (Model, error) {
 	}
 	if len(m.Overrides) == 0 {
 		m.Overrides = json.RawMessage(`{}`)
-	}
-	if len(m.Compact) == 0 {
-		m.Compact = json.RawMessage(`{}`)
 	}
 	if len(m.Efforts) == 0 {
 		m.Efforts = json.RawMessage(`null`)

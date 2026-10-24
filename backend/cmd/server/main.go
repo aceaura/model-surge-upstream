@@ -18,7 +18,6 @@ import (
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
 	"github.com/aceaura/model-surge-upstream/backend/cache"
 	"github.com/aceaura/model-surge-upstream/backend/chat"
-	"github.com/aceaura/model-surge-upstream/backend/compact"
 	"github.com/aceaura/model-surge-upstream/backend/config"
 	"github.com/aceaura/model-surge-upstream/backend/httpapi"
 	"github.com/aceaura/model-surge-upstream/backend/model"
@@ -85,7 +84,7 @@ func run() error {
 	// 启动时按已存配置开监听；应用失败（如端口被占）只告警，
 	// 管理面不可用才是致命问题，转发面不是。
 	proxyRepo := proxysettings.NewRepo(db.Pool())
-	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db, act), compact.NewRunner(cfg.Compact), tokens)}
+	proxySup := loggedApply{inner: proxyplane.NewSupervisor(resolver, proxyUsage(db, act), tokens)}
 	defer proxySup.inner.Close()
 	if s, err := proxyRepo.Get(ctx); err != nil {
 		log.Printf("proxyplane: load settings: %v", err)

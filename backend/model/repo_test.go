@@ -50,12 +50,11 @@ func fixtures(t *testing.T) (*Repo, *account.Repo) {
 
 func input() Input {
 	return Input{
-		ID:            "kimi-1/k2",
-		Account:       "kimi-1",
-		NativeModel:   "kimi-k2-turbo",
-		Protocol:      provider.ProtocolAnthropic,
-		ContextWindow: 262144,
-		Enabled:       true,
+		ID:          "kimi-1/k2",
+		Account:     "kimi-1",
+		NativeModel: "kimi-k2-turbo",
+		Protocol:    provider.ProtocolAnthropic,
+		Enabled:     true,
 	}
 }
 
@@ -94,7 +93,7 @@ func TestCreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.NativeModel != "kimi-k2-turbo" || got.ContextWindow != 262144 || got.Protocol != provider.ProtocolAnthropic {
+	if got.NativeModel != "kimi-k2-turbo" || got.Protocol != provider.ProtocolAnthropic {
 		t.Errorf("round trip mismatch: %+v", got)
 	}
 }
@@ -193,7 +192,6 @@ func TestCreateRejects(t *testing.T) {
 		"empty id":          {func(in *Input) { in.ID = "" }, apperr.InvalidRequest},
 		"empty account":     {func(in *Input) { in.Account = "" }, apperr.InvalidRequest},
 		"empty native":      {func(in *Input) { in.NativeModel = "" }, apperr.InvalidRequest},
-		"negative window":   {func(in *Input) { in.ContextWindow = -1 }, apperr.InvalidRequest},
 		"missing account":   {func(in *Input) { in.Account = "ghost" }, apperr.NotFound},
 		"bad protocol":      {func(in *Input) { in.Protocol = provider.ProtocolResponses }, apperr.InvalidProtocol},
 		"empty protocol":    {func(in *Input) { in.Protocol = "" }, apperr.InvalidProtocol},
@@ -311,13 +309,13 @@ func TestUpdate(t *testing.T) {
 
 	in := input()
 	in.Enabled = false
-	in.ContextWindow = 131072
+	in.NativeModel = "kimi-k2-updated"
 	in.Overrides = json.RawMessage(`{"thinking":{"budget_tokens":65535}}`)
 	updated, err := repo.Update(ctx, in)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if updated.Enabled || updated.ContextWindow != 131072 {
+	if updated.Enabled || updated.NativeModel != "kimi-k2-updated" {
 		t.Errorf("update did not apply: %+v", updated)
 	}
 	if !updated.CreatedAt.Equal(created.CreatedAt) {
@@ -328,7 +326,7 @@ func TestUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Enabled || got.ContextWindow != 131072 {
+	if got.Enabled || got.NativeModel != "kimi-k2-updated" {
 		t.Errorf("cache and db disagree: %+v", got)
 	}
 }

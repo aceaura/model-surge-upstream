@@ -24,21 +24,18 @@ import (
 // 因此 String() 脱敏而 MarshalJSON 输出原值——响应带凭据、日志不带凭据
 // 由类型本身保证，不依赖调用点自觉。
 //
-// Defaults、Overrides 与 Compact 都原样下发而不在此合并：三者语义各异
-// （缺失才填 / 强制压盖 / 压缩策略），调用方要把它们作用到自己构造的
-// 上游请求体或处置逻辑上，合并后就分不清了。
+// Defaults 与 Overrides 原样下发而不在此合并：缺失才填与强制压盖语义不同，
+// 调用方要把它们作用到自己构造的上游请求体上。
 type ResolvedTarget struct {
-	ModelID       string            `json:"model_id"`
-	Account       string            `json:"account"`
-	ProviderID    string            `json:"provider_id"`
-	Protocol      string            `json:"protocol"`
-	BaseURL       string            `json:"base_url"`
-	NativeModel   string            `json:"native_model"`
-	ContextWindow int               `json:"context_window,omitempty"`
-	Headers       map[string]string `json:"headers"`
-	Defaults      json.RawMessage   `json:"defaults"`
-	Overrides     json.RawMessage   `json:"overrides"`
-	Compact       json.RawMessage   `json:"compact,omitempty"`
+	ModelID     string            `json:"model_id"`
+	Account     string            `json:"account"`
+	ProviderID  string            `json:"provider_id"`
+	Protocol    string            `json:"protocol"`
+	BaseURL     string            `json:"base_url"`
+	NativeModel string            `json:"native_model"`
+	Headers     map[string]string `json:"headers"`
+	Defaults    json.RawMessage   `json:"defaults"`
+	Overrides   json.RawMessage   `json:"overrides"`
 	// Efforts 是模型的有效推理档列表（自动模式=上游声明，显式数组=管理员
 	// 声明），对话页发送侧按它校验所选档位；空列表表示该模型不支持 effort。
 	Efforts []effort.Entry `json:"efforts,omitempty"`
@@ -178,11 +175,9 @@ func (r *Resolver) Resolve(ctx context.Context, modelID string) (ResolvedTarget,
 		Protocol:      m.Protocol,
 		BaseURL:       acc.EffectiveBaseURL(spec),
 		NativeModel:   m.NativeModel,
-		ContextWindow: m.ContextWindow,
 		Headers:       headers,
 		Defaults:      m.Defaults,
 		Overrides:     m.Overrides,
-		Compact:       m.Compact,
 		Efforts:       r.effectiveEfforts(ctx, acc.Name, m),
 		EffortFormat:  effort.NormalizeFormat(m.EffortFormat),
 		EffortIn:      m.EffortIn,
@@ -283,13 +278,12 @@ func AuthHeaders(spec provider.Spec, acc account.Account) map[string]string {
 
 // Listing 是下发面模型列举形态：不含凭据。
 type Listing struct {
-	ID            string `json:"id"`
-	Account       string `json:"account"`
-	ProviderID    string `json:"provider_id"`
-	Protocol      string `json:"protocol"`
-	NativeModel   string `json:"native_model"`
-	ContextWindow int    `json:"context_window,omitempty"`
-	Enabled       bool   `json:"enabled"`
+	ID          string `json:"id"`
+	Account     string `json:"account"`
+	ProviderID  string `json:"provider_id"`
+	Protocol    string `json:"protocol"`
+	NativeModel string `json:"native_model"`
+	Enabled     bool   `json:"enabled"`
 	// Efforts 是模型的有效推理档列表(与 Resolve 同口径现算),下游客户端
 	// 按它渲染/校验档位;空列表表示该模型不支持 effort。
 	Efforts []effort.Entry `json:"efforts"`
@@ -316,14 +310,13 @@ func (r *Resolver) List(ctx context.Context) ([]Listing, error) {
 			enabledByAccount[m.Account] = acc.Enabled
 		}
 		out = append(out, Listing{
-			ID:            m.ID,
-			Account:       m.Account,
-			ProviderID:    providerID,
-			Protocol:      m.Protocol,
-			NativeModel:   m.NativeModel,
-			ContextWindow: m.ContextWindow,
-			Enabled:       m.Enabled && enabledByAccount[m.Account],
-			Efforts:       r.effectiveEfforts(ctx, m.Account, m),
+			ID:          m.ID,
+			Account:     m.Account,
+			ProviderID:  providerID,
+			Protocol:    m.Protocol,
+			NativeModel: m.NativeModel,
+			Enabled:     m.Enabled && enabledByAccount[m.Account],
+			Efforts:     r.effectiveEfforts(ctx, m.Account, m),
 		})
 	}
 	return out, nil

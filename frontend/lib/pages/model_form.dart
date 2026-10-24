@@ -57,36 +57,12 @@ class _ModelFormState extends State<ModelForm> {
   late final TextEditingController _nativeModel = TextEditingController(
     text: _source?.nativeModel ?? '',
   );
-  // 上下文窗口按 k 单位录入/回显(1k = 1000 tokens),提交时换回 token 数
-  late final TextEditingController _contextWindow = TextEditingController(
-    text: tokensToK(_source?.contextWindow ?? 0),
-  );
   late final TextEditingController _defaults = TextEditingController(
     text: prettyJson(_source?.defaults ?? const {}),
   );
   late final TextEditingController _overrides = TextEditingController(
     text: prettyJson(_source?.overrides ?? const {}),
   );
-
-  // 上下文限制开关:开=error(估算超窗即拦截,回 400 让客户端自压缩)、
-  // 关=passive(不拦截);UI 不再暴露 passive/error 词表。阈值按百分比录入
-  // (85 = 窗口的 85%),提交时换回比例。存量 auto(网关代压,已废)载入归一为开。
-  late String _compactMode = _normalizeCompactMode(_source?.compact['mode']);
-  late final TextEditingController _compactThreshold = TextEditingController(
-    text: _compactThresholdText(_source?.compact),
-  );
-
-  static String _normalizeCompactMode(Object? mode) {
-    // 存量 auto(网关代压,已废)载入归一为 error;新建/未知值落 passive。
-    if (mode == 'error' || mode == 'auto') return 'error';
-    return 'passive';
-  }
-
-  static String _compactThresholdText(Map<String, dynamic>? compact) {
-    final t = compact?['threshold'];
-    if (t is num) return '${(t * 100).round()}';
-    return '85';
-  }
 
   late String _account = _source?.account ?? widget.initialAccount;
   String? _protocol;
@@ -162,10 +138,8 @@ class _ModelFormState extends State<ModelForm> {
   void dispose() {
     _id.dispose();
     _nativeModel.dispose();
-    _contextWindow.dispose();
     _defaults.dispose();
     _overrides.dispose();
-    _compactThreshold.dispose();
     super.dispose();
   }
 
@@ -200,17 +174,6 @@ class _ModelFormState extends State<ModelForm> {
     });
   }
 
-  /// 组装 compact JSON 提交:模式必带;阈值仅 error 下生效。
-  /// 缺项回落服务端全局默认。
-  Map<String, dynamic> _buildCompact() {
-    final out = <String, dynamic>{'mode': _compactMode};
-    if (_compactMode != 'passive') {
-      final pct = double.tryParse(_compactThreshold.text.trim());
-      if (pct != null) out['threshold'] = pct / 100;
-    }
-    return out;
-  }
-
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final (defaults, defaultsErr) = parseJsonObject(_defaults.text);
@@ -232,10 +195,8 @@ class _ModelFormState extends State<ModelForm> {
           account: _account,
           nativeModel: _nativeModel.text.trim(),
           protocol: _protocol,
-          contextWindow: kToTokens(_contextWindow.text),
           defaults: defaults!,
           overrides: overrides!,
-          compact: _buildCompact(),
           efforts: _efforts,
           effortFormat: _effortFormat,
           effortIn: _effortIn,
@@ -251,10 +212,8 @@ class _ModelFormState extends State<ModelForm> {
           account: _account,
           nativeModel: _nativeModel.text.trim(),
           protocol: _protocol!,
-          contextWindow: kToTokens(_contextWindow.text),
           defaults: defaults!,
           overrides: overrides!,
-          compact: _buildCompact(),
           efforts: _efforts,
           effortFormat: _effortFormat,
           effortIn: _effortIn,
@@ -303,8 +262,6 @@ class _ModelFormState extends State<ModelForm> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _basicSection(),
-            const SizedBox(height: 26),
-            _contextSection(),
             const SizedBox(height: 26),
             _effortSection(),
             const SizedBox(height: 26),
@@ -404,105 +361,6 @@ class _ModelFormState extends State<ModelForm> {
                 onChanged: (_) => setState(() {}),
                 validator: (v) =>
                     (v == null || v.trim().isEmpty) ? '上游模型名不能为空' : null,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── 上下文限制(窗口/压缩策略/触发阈值)──
-
-  String get _contextSubtitle {
-    final window = _contextWindow.text.trim();
-    final mode = _compactMode == 'error' ? '已开启' : '已关闭';
-    final w = window.isEmpty || window == '0' ? '窗口未声明' : '窗口 ${window}k';
-    return '$w · $mode';
-  }
-
-  Widget _contextSection() {
-    return CollapsibleSection(
-      icon: Icons.compress_outlined,
-      title: '上下文限制',
-      subtitle: _contextSubtitle,
-      initiallyExpanded: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 开关独占第一排;上下文大小与触发阈值并排第二排常驻(阈值仅开启时生效,
-          // 关闭时保存不落 threshold,但值保留在框里供开启即用)
-          LabeledField(
-            key: const ValueKey('model-compact-mode-field'),
-            label: '开启上下文限制',
-            hint: '估算输入超过窗口比例时拦截，回 400 让客户端自压缩',
-            child: SizedBox(
-              height: 40,
-              child: Row(
-                children: [
-                  // Switch 收缩包裹并左移抵掉内置 4px 水平内边距,轨道左缘
-                  // 才能对齐输入框列(与推理档开关同款处理)
-                  Transform.translate(
-                    offset: const Offset(-4, 0),
-                    child: Switch(
-                      key: const ValueKey('model-compact-switch'),
-                      value: _compactMode == 'error',
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      onChanged: (v) => setState(
-                        () => _compactMode = v ? 'error' : 'passive',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _compactMode == 'error' ? '已开启' : '已关闭',
-                    style: const TextStyle(fontSize: 12.5),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          FormRow2(
-            LabeledField(
-              label: '上下文大小',
-              child: TextFormField(
-                key: const ValueKey('model-context'),
-                controller: _contextWindow,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(
-                  suffixText: 'k',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) {
-                  final n = double.tryParse(v?.trim() ?? '');
-                  if (n == null) return '请填写数字';
-                  if (n < 0) return '不能为负数';
-                  return null;
-                },
-              ),
-            ),
-            LabeledField(
-              key: const ValueKey('model-compact-threshold-field'),
-              label: '触发阈值',
-              child: TextFormField(
-                key: const ValueKey('model-compact-threshold'),
-                controller: _compactThreshold,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(
-                  suffixText: '%',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (v) {
-                  final n = double.tryParse(v?.trim() ?? '');
-                  if (n == null) return '请填写数字';
-                  if (n <= 0 || n > 100) return '须在 1–100 之间';
-                  return null;
-                },
               ),
             ),
           ),
@@ -726,7 +584,7 @@ class _ModelFormState extends State<ModelForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 总开关独占第一排(与上下文限制区同款):关闭=不读不写不剥离,
+          // 总开关独占第一排:关闭=不读不写不剥离,
           // 其余字段常驻显示,值保留供重新开启即用。
           LabeledField(
             key: const ValueKey('model-effort-enabled-field'),

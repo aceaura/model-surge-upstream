@@ -147,7 +147,7 @@ func (s *stubModels) Create(_ context.Context, in model.Input) (model.Model, err
 	}
 	m := model.Model{
 		ID: in.ID, Account: in.Account, NativeModel: in.NativeModel, Protocol: in.Protocol,
-		ContextWindow: in.ContextWindow, Enabled: in.Enabled,
+		Enabled:  in.Enabled,
 		Defaults: json.RawMessage(`{}`), Overrides: json.RawMessage(`{}`),
 	}
 	s.data[in.ID] = m
@@ -321,7 +321,7 @@ func newFixture(t *testing.T) *fixture {
 	models := &stubModels{data: map[string]model.Model{
 		"kimi-1/k2": {
 			ID: "kimi-1/k2", Account: "kimi-1", NativeModel: "kimi-k2-turbo",
-			Protocol: provider.ProtocolAnthropic, ContextWindow: 262144, Enabled: true,
+			Protocol: provider.ProtocolAnthropic, Enabled: true,
 			Defaults: json.RawMessage(`{}`), Overrides: json.RawMessage(`{}`),
 		},
 	}}
@@ -913,7 +913,7 @@ func TestModelCRUD(t *testing.T) {
 	f := newFixture(t)
 
 	rec := f.do(t, "POST", "/admin/models", adminKey,
-		`{"id":"kimi-1/k3","account":"kimi-1","native_model":"kimi-k3","protocol":"chat_completions","context_window":262144}`)
+		`{"id":"kimi-1/k3","account":"kimi-1","native_model":"kimi-k3","protocol":"chat_completions"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d: %s", rec.Code, rec.Body)
 	}

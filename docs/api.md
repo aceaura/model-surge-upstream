@@ -123,7 +123,7 @@ Authorization: Bearer <密钥>
 | `invalid_credential` | 400 | 凭据非法：kind 缺失/不支持、与 provider 声明不符、api_key 为空 |
 | `invalid_protocol` | 400 | 协议不被账号所属 provider 支持 |
 | `invalid_json` | 400 | 请求体不是合法 JSON、含未知字段、defaults/overrides 不是 JSON 对象 |
-| `invalid_request` | 400 | 必填字段缺失、`base_url` 非法、`context_window` 为负等 |
+| `invalid_request` | 400 | 必填字段缺失、`base_url` 非法等 |
 | `quota_unavailable` | 502 | 上游额度接口请求失败或返回非 2xx |
 | `upstream_unavailable` | 502 | 上游自身接口（如模型列举）请求失败或返回非 2xx |
 | `storage_error` | 500 | PostgreSQL 故障；其他非领域错误的兜底 |
@@ -226,7 +226,7 @@ Authorization: Bearer <密钥>
 
 > `opencode.global.api.zen` 为 Zen 按量服务，`opencode.global.subscribe.go` 为 Go 订阅服务（Go / Go Plus 是订阅档位，不拆供应商规格）。两者使用 API Key、支持三种协议，并从各自 `GET /v1/models` 拉取模型清单；每个模型实际支持的协议应以官方清单为准，不做协议转换。Messages 使用 `x-api-key`，Chat Completions、Responses、Models 和额度查询使用 Bearer。Go 请求保留客户端原生会话头，缺失时补充稳定的 `x-opencode-session` 与应用 User-Agent。Go 内置额度查询调用 `GET /v1/usage`，读取 `usage.rolling`、`usage.weekly`、`usage.monthly` 的已用百分比及 `resetsAt`；不推算美元金额。Zen 未发现 API Key 可调用的余额契约，不声明内置额度查询。
 
-> `deepseek.global.api.standard` 的 Chat Completions、模型清单和余额继续使用根地址；Anthropic 消息请求使用 `/anthropic/v1/messages`，转发、管理端对话、连通性检测和压缩摘要使用同一映射。
+> `deepseek.global.api.standard` 的 Chat Completions、模型清单和余额继续使用根地址；Anthropic 消息请求使用 `/anthropic/v1/messages`，转发、管理端对话和连通性检测使用同一映射。
 
 > `ark.global.api.standard` 不声明 `models`：其列举端点实测各路径恒返回 `401`，声明了也只会稳定失败。同理其 `responses` 协议实测不可用，故未列入 `protocols`。
 
@@ -264,7 +264,6 @@ Authorization: Bearer <密钥>
 | `account` | string | 恒有 | 归属账号名；账号删除时模型级联删除 |
 | `native_model` | string | 恒有 | 上游真实模型名，构造上游请求体时使用 |
 | `protocol` | 枚举 | 恒有 | 见 2.8 `protocol`；创建/更新时须被账号 provider 支持 |
-| `context_window` | int | 恒有（管理面形态） | 上下文窗口 token 数声明；`0` 表示未声明 |
 | `defaults` | object | 恒有 | 缺省填充参数：调用方缺什么补什么；空对象表示无 |
 | `overrides` | object | 恒有 | 强制覆盖参数：无论调用方给什么都压盖；空对象表示无 |
 | `strip` | array&lt;string&gt; | 恒有（管理面形态） | 清除配置：点路径列表（如 `metadata.user_id`），上行请求体定稿后按路径整键删除字段——最后施加，优先级高于 `defaults`/`overrides` 与协议整形（如 codex 硬约束）；删除后回收变空的中层对象。空数组表示不清除 |
@@ -284,7 +283,6 @@ Authorization: Bearer <密钥>
 | `provider_id` | string | 恒有 | 由账号推导 |
 | `protocol` | 枚举 | 恒有 | 见 2.8 |
 | `native_model` | string | 恒有 | 上游真实模型名 |
-| `context_window` | int | 非 0 时 | `0`（未声明）时字段缺省 |
 | `enabled` | bool | 恒有 | `model.enabled && account.enabled`——账号停用会使其下全部模型不可用 |
 
 ### 3.5 ResolvedTarget（解析结果）
@@ -299,7 +297,6 @@ Authorization: Bearer <密钥>
 | `protocol` | 枚举 | 恒有 | 见 2.8；决定调用方构造哪种协议的请求体 |
 | `base_url` | string | 恒有 | 生效根地址 = 账号 `base_url` 非空则用之，否则 provider 默认；无尾部 `/` |
 | `native_model` | string | 恒有 | 写入上游请求体的模型名 |
-| `context_window` | int | 非 0 时 | `0`（未声明）时字段缺省 |
 | `headers` | map[string]string | 恒有 | **含真实凭据**的认证头 + 账号自定义头，构成规则见下 |
 | `defaults` | object | 恒有 | 原样下发，不与服务端任何参数预合并 |
 | `overrides` | object | 恒有 | 同上 |
@@ -879,7 +876,6 @@ POST /admin/models
 | `account` | string | 是 | 首尾空白剥除后非空；须为已存在账号 | 归属账号 |
 | `native_model` | string | 是 | 首尾空白剥除后非空 | 上游真实模型名 |
 | `protocol` | 枚举 | 是 | 2.8 的 `protocol` 取值之一，且须被账号所属 provider 支持 | 出站协议 |
-| `context_window` | int | 否 | ≥ 0；缺省或 `0` = 未声明 | 上下文窗口 token 数 |
 | `defaults` | object | 否 | 须为 JSON 对象（数组/标量返回 `400 invalid_json`）；缺省或 `null` 落库为 `{}` | 缺省填充参数 |
 | `overrides` | object | 否 | 同 `defaults` | 强制覆盖参数 |
 | `strip` | array&lt;string&gt; | 否 | 点路径字符串数组，每条路径点分隔且每段非空（非法返回 `400 invalid_request`）；缺省落库为 `[]` | 清除配置：上行请求体定稿后按路径整键删除字段，最后施加、优先级最高 |
@@ -894,7 +890,6 @@ POST /admin/models
   "account": "ds-1",
   "native_model": "deepseek-v4.1-flash",
   "protocol": "chat_completions",
-  "context_window": 1000000,
   "defaults": {"temperature": 0.6, "top_p": 0.9},
   "overrides": {"max_tokens": 8192},
   "enabled": true
@@ -914,7 +909,7 @@ POST /admin/models
 | HTTP | code | 触发条件 |
 |---|---|---|
 | 400 | `invalid_json` | 请求体非法、含未知字段、`defaults`/`overrides` 不是 JSON 对象 |
-| 400 | `invalid_request` | `id` / `account` / `native_model` 空白；`context_window` 为负 |
+| 400 | `invalid_request` | `id` / `account` / `native_model` 空白 |
 | 404 | `not_found` | 引用的账号不存在（预检失败，或写入时被并发删除触发外键约束） |
 | 400 | `invalid_protocol` | `protocol` 不被账号所属 provider 支持，message 列出可选集 |
 | 409 | `already_exists` | 同名模型已存在 |
@@ -930,7 +925,6 @@ curl -X POST http://localhost:8080/admin/models \
     "account": "ds-1",
     "native_model": "deepseek-v4.1-flash",
     "protocol": "chat_completions",
-    "context_window": 1000000,
     "defaults": {"temperature": 0.6, "top_p": 0.9},
     "overrides": {"max_tokens": 8192}
   }'
@@ -986,7 +980,6 @@ PUT /admin/models/{id...}
 | 字段 | 省略或为空时 |
 |---|---|
 | `account` / `native_model` / `protocol` | **保留原值** |
-| `context_window` | 置 `0`（清除声明） |
 | `defaults` / `overrides` | 置 `{}`（清除） |
 | `effort_format` | **省略（`null`）保留原值**；显式空串 = 回协议内置映射 |
 | `strip` | **省略保留原值**；显式数组替换（空数组 = 清空清除配置） |
@@ -999,14 +992,13 @@ PUT /admin/models/{id...}
   "account": "ds-1",
   "native_model": "deepseek-v4.1-flash",
   "protocol": "chat_completions",
-  "context_window": 1000000,
   "defaults": {"temperature": 0.6, "top_p": 0.9},
   "overrides": {"max_tokens": 16384},
   "enabled": true
 }
 ```
 
-> **`context_window`、`defaults`、`overrides`、`enabled` 是替换语义**：只改其中一项时须把其余项一并带上。
+> **`defaults`、`overrides`、`enabled` 是替换语义**：只改其中一项时须把其余项一并带上。
 
 > 迁移 `account` 时按**新账号**的 provider 校验 `protocol`；新账号不存在返回 `404 not_found`。
 
@@ -1024,7 +1016,7 @@ PUT /admin/models/{id...}
 | 400 | `invalid_protocol` | `protocol` 不被（新）账号所属 provider 支持 |
 | 400 | `invalid_request` / `invalid_json` | 同 5.10 |
 
-**示例**（只把 `max_tokens` 从 8192 调到 16384；因替换语义，`context_window`、`defaults`、`enabled` 等其余替换字段须一并带回当前值）：
+**示例**（只把 `max_tokens` 从 8192 调到 16384；因替换语义，`defaults`、`enabled` 等其余替换字段须一并带回当前值）：
 
 ```bash
 curl -X PUT http://localhost:8080/admin/models/ds-1/v4 \
@@ -1034,7 +1026,6 @@ curl -X PUT http://localhost:8080/admin/models/ds-1/v4 \
     "account": "ds-1",
     "native_model": "deepseek-v4.1-flash",
     "protocol": "chat_completions",
-    "context_window": 1000000,
     "defaults": {"temperature": 0.6, "top_p": 0.9},
     "overrides": {"max_tokens": 16384},
     "enabled": true
@@ -1199,7 +1190,7 @@ curl -X POST http://localhost:8080/admin/models/reorder \
 
 ### 6.1 列举可用模型
 
-**使用场景**：调用方（数据面服务）启动或定期同步时发现可下发的模型清单——拿到 id、协议与上下文窗口声明，据此构建自己的路由表。只含启用中的模型信息，**不含任何凭据**。
+**使用场景**：调用方（数据面服务）启动或定期同步时发现可下发的模型清单——拿到 id、协议与原生模型名，据此构建自己的路由表。只含启用中的模型信息，**不含任何凭据**。
 
 ```
 GET /v1/models
@@ -1231,7 +1222,6 @@ curl http://localhost:8080/v1/models \
       "provider_id": "deepseek.global.api.standard",
       "protocol": "chat_completions",
       "native_model": "deepseek-v4.1-flash",
-      "context_window": 1000000,
       "enabled": true
     }
   ]
@@ -1289,7 +1279,6 @@ curl -X POST http://localhost:8080/v1/resolve \
   "protocol": "chat_completions",
   "base_url": "https://api.deepseek.com",
   "native_model": "deepseek-v4.1-flash",
-  "context_window": 1000000,
   "headers": {
     "Authorization": "Bearer sk-…"
   },
@@ -1412,7 +1401,7 @@ curl -X POST http://localhost:8080/admin/accounts \
 # 3. 建模型
 curl -X POST http://localhost:8080/admin/models \
   -H "Authorization: Bearer admin-key" -H "Content-Type: application/json" \
-  -d '{"id":"ds-1/v4","account":"ds-1","native_model":"deepseek-v4.1-flash","protocol":"chat_completions","context_window":1000000,"defaults":{"temperature":0.6},"overrides":{"max_tokens":8192}}'
+  -d '{"id":"ds-1/v4","account":"ds-1","native_model":"deepseek-v4.1-flash","protocol":"chat_completions","defaults":{"temperature":0.6},"overrides":{"max_tokens":8192}}'
 
 # 4. 调用方解析目标（数据面每次转发前调用）
 curl -X POST http://localhost:8080/v1/resolve \

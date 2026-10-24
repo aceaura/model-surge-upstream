@@ -36,6 +36,23 @@ func (s *scriptedResolver) Resolve(_ context.Context, _ string) (resolve.Resolve
 
 func (s *scriptedResolver) List(context.Context) ([]resolve.Listing, error) { return nil, nil }
 
+type recordSink struct {
+	mu   sync.Mutex
+	recs []UsageRecord
+}
+
+func (s *recordSink) add(_ context.Context, rec UsageRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recs = append(s.recs, rec)
+}
+
+func (s *recordSink) all() []UsageRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]UsageRecord{}, s.recs...)
+}
+
 type fakeInvalidator struct {
 	mu      sync.Mutex
 	account string

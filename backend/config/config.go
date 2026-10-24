@@ -5,11 +5,8 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/aceaura/model-surge-upstream/backend/compact"
 )
 
 type Config struct {
@@ -20,8 +17,6 @@ type Config struct {
 	Listen      string
 	CacheTTL    time.Duration
 	QuotaTTL    time.Duration
-	// Compact 是上下文压缩的全局默认，模型级 compact JSON 可逐项覆盖。
-	Compact compact.Defaults
 }
 
 const (
@@ -68,32 +63,7 @@ func LoadFrom(getenv Getenv) (Config, error) {
 	if cfg.QuotaTTL, err = duration(getenv, "MSU_QUOTA_TTL", defaultQuotaTTL); err != nil {
 		return Config{}, err
 	}
-	if cfg.Compact, err = compactDefaults(getenv); err != nil {
-		return Config{}, err
-	}
 	return cfg, nil
-}
-
-// compactDefaults 解析 MSU_COMPACT_* 环境变量为压缩全局默认。
-// 模式默认 passive（只记录不生效），模型级配置可覆盖每一项。
-func compactDefaults(getenv Getenv) (compact.Defaults, error) {
-	d := compact.DefaultConfig()
-	if v := strings.TrimSpace(getenv("MSU_COMPACT_MODE")); v != "" {
-		switch m := compact.Mode(v); m {
-		case compact.ModePassive, compact.ModeError:
-			d.Mode = m
-		default:
-			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_MODE: %q (want passive|error)", v)
-		}
-	}
-	if v := strings.TrimSpace(getenv("MSU_COMPACT_THRESHOLD")); v != "" {
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || f <= 0 || f > 1 {
-			return compact.Defaults{}, fmt.Errorf("invalid MSU_COMPACT_THRESHOLD: %q (want 0<x<=1)", v)
-		}
-		d.Threshold = f
-	}
-	return d, nil
 }
 
 func duration(getenv Getenv, key string, fallback time.Duration) (time.Duration, error) {

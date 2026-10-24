@@ -78,14 +78,13 @@ func acct(name, providerID string) account.Account {
 
 func mdl(id, accountName, protocol string) model.Model {
 	return model.Model{
-		ID:            id,
-		Account:       accountName,
-		NativeModel:   "kimi-k2-turbo",
-		Protocol:      protocol,
-		ContextWindow: 262144,
-		Defaults:      json.RawMessage(`{}`),
-		Overrides:     json.RawMessage(`{}`),
-		Enabled:       true,
+		ID:          id,
+		Account:     accountName,
+		NativeModel: "kimi-k2-turbo",
+		Protocol:    protocol,
+		Defaults:    json.RawMessage(`{}`),
+		Overrides:   json.RawMessage(`{}`),
+		Enabled:     true,
 	}
 }
 
@@ -213,9 +212,6 @@ func TestResolve(t *testing.T) {
 	}
 	if got.NativeModel != "kimi-k2-turbo" || got.Protocol != provider.ProtocolAnthropic {
 		t.Errorf("target = %+v", got)
-	}
-	if got.ContextWindow != 262144 {
-		t.Errorf("context_window = %d", got.ContextWindow)
 	}
 	if got.Headers[headerAnthropicAPIKey] != secret {
 		t.Error("delivery response must carry the real key")

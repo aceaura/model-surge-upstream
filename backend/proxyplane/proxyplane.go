@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
-	"github.com/aceaura/model-surge-upstream/backend/compact"
 	"github.com/aceaura/model-surge-upstream/backend/proxysettings"
 	"github.com/aceaura/model-surge-upstream/backend/resolve"
 )
@@ -34,7 +33,6 @@ const stopGrace = 5 * time.Second
 type Supervisor struct {
 	resolver    Resolver
 	sink        UsageSink
-	compactor   *compact.Runner
 	invalidator Invalidator
 
 	mu       sync.Mutex
@@ -42,11 +40,10 @@ type Supervisor struct {
 	settings proxysettings.Settings
 }
 
-// NewSupervisor 装配转发面运行时。compactor 为 nil 表示上下文压缩关闭
-// （全局默认未配 MSU_COMPACT_MODE 时即 passive，行为等价关闭）。
-// invalidator 为 nil 表示 OAuth 账号 401 不刷新重试,原样透传。
-func NewSupervisor(resolver Resolver, sink UsageSink, compactor *compact.Runner, invalidator Invalidator) *Supervisor {
-	return &Supervisor{resolver: resolver, sink: sink, compactor: compactor, invalidator: invalidator}
+// NewSupervisor 装配转发面运行时。invalidator 为 nil 表示 OAuth 账号 401
+// 不刷新重试,原样透传。
+func NewSupervisor(resolver Resolver, sink UsageSink, invalidator Invalidator) *Supervisor {
+	return &Supervisor{resolver: resolver, sink: sink, invalidator: invalidator}
 }
 
 // Apply 使一份配置生效。密钥为空 = 关闭转发面；配置与当前一致 = 无操作，
@@ -93,7 +90,7 @@ func (s *Supervisor) Apply(settings proxysettings.Settings) error {
 // serveLocked 在已绑定的监听上起服务并记录为当前配置。
 func (s *Supervisor) serveLocked(ln net.Listener, settings proxysettings.Settings) {
 	srv := &http.Server{
-		Handler:           NewHandler(settings.APIKey, s.resolver, s.sink).WithCompactor(s.compactor).WithInvalidator(s.invalidator),
+		Handler:           NewHandler(settings.APIKey, s.resolver, s.sink).WithInvalidator(s.invalidator),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	go func() {

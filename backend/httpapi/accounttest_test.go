@@ -67,7 +67,7 @@ func TestAccountTestUsesModelProbe(t *testing.T) {
 	f.addTestableAccount(t, "probe-acc", upstream.URL)
 	f.models.data["probe-acc/k2"] = model.Model{
 		ID: "probe-acc/k2", Account: "probe-acc", NativeModel: "kimi-k2-turbo",
-		Protocol: provider.ProtocolAnthropic, ContextWindow: 262144, Enabled: false,
+		Protocol: provider.ProtocolAnthropic, Enabled: false,
 		Defaults: json.RawMessage(`{}`), Overrides: json.RawMessage(`{}`),
 	}
 
@@ -95,7 +95,7 @@ func TestAccountTestModelProbeErrorStatusFails(t *testing.T) {
 	f.addTestableAccount(t, "probe-acc", upstream.URL)
 	f.models.data["probe-acc/k2"] = model.Model{
 		ID: "probe-acc/k2", Account: "probe-acc", NativeModel: "kimi-k2-turbo",
-		Protocol: provider.ProtocolAnthropic, ContextWindow: 262144, Enabled: true,
+		Protocol: provider.ProtocolAnthropic, Enabled: true,
 		Defaults: json.RawMessage(`{}`), Overrides: json.RawMessage(`{}`),
 	}
 
