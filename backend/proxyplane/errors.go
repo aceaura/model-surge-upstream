@@ -1,6 +1,7 @@
 package proxyplane
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -37,6 +38,37 @@ func statusOf(code apperr.Code) int {
 // writeFamilyError 按协议族输出原生错误形态。非领域错误只回通用文案，
 // 不把底层细节（连接串、内部地址）泄露给数据面调用方。
 func writeFamilyError(w http.ResponseWriter, fam family, err error) {
+	status, payload := familyErrorPayload(fam, err)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeStreamFamilyError(w http.ResponseWriter, fam family, err error) {
+	_, _ = w.Write(streamFamilyErrorEvent(fam, err))
+}
+
+func streamFamilyErrorEvent(fam family, err error) []byte {
+	_, payload := familyErrorPayload(fam, err)
+	data, _ := json.Marshal(payload)
+	return streamErrorEvent(fam, data)
+}
+
+func streamErrorEvent(fam family, data []byte) []byte {
+	var out bytes.Buffer
+	if fam == familyAnthropic {
+		out.WriteString("event: error\n")
+	}
+	out.WriteString("data: ")
+	out.Write(data)
+	out.WriteString("\n\n")
+	if fam == familyOpenAI {
+		out.WriteString("data: [DONE]\n\n")
+	}
+	return out.Bytes()
+}
+
+func familyErrorPayload(fam family, err error) (int, map[string]any) {
 	code := apperr.CodeOf(err)
 	status := statusOf(code)
 
@@ -46,33 +78,31 @@ func writeFamilyError(w http.ResponseWriter, fam family, err error) {
 		message = domain.Message
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
 	switch fam {
 	case familyAnthropic:
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		return status, map[string]any{
 			"type": "error",
 			"error": map[string]any{
 				"type":    anthropicErrorType(status),
 				"message": message,
 			},
-		})
+		}
 	case familyGemini:
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		return status, map[string]any{
 			"error": map[string]any{
 				"code":    status,
 				"message": message,
 				"status":  geminiErrorStatus(status),
 			},
-		})
+		}
 	default: // openai
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		return status, map[string]any{
 			"error": map[string]any{
 				"message": message,
 				"type":    openaiErrorType(status),
 				"code":    string(code),
 			},
-		})
+		}
 	}
 }
 

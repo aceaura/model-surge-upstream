@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
@@ -30,6 +31,11 @@ import (
 // bodyLimit 是转发请求的体上限。聊天请求体（含长上下文）远小于此；
 // 限制只为挡住误传的大文件，不为裁剪正常流量。
 const bodyLimit = 32 << 20
+
+var (
+	streamKeepaliveInitialDelay = 30 * time.Second
+	streamKeepaliveInterval     = 15 * time.Second
+)
 
 // family 是路径形状决定的协议族。不做协议转化：族只用来校验模型的
 // 出站协议与客户端期望一致，以及决定错误响应与模型列举的原生形态。
@@ -392,23 +398,37 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "build upstream request", err))
 		return
 	}
+	var keepalive *streamKeepalive
+	if target.ProviderID == kiro.ProviderID && isStream {
+		keepalive = newStreamKeepalive(w)
+		w = keepalive
+		keepalive.start()
+		defer keepalive.stop()
+	}
+	writeError := func(err error) {
+		if keepalive != nil && keepalive.stopAndCommitted() {
+			writeStreamFamilyError(w, fam, err)
+			return
+		}
+		writeFamilyError(w, fam, err)
+	}
 	resp, err := h.client.Do(up)
 	if err != nil {
 		ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s account=%s: %v", target.ModelID, target.Account, err))
 		// kiro 传输层的请求校验错误(unsupported path/超长度/max_tokens 缺失等)
 		// 归为 400,与 FastAPI 422 一致;其余仍按上游不可用 502。
 		if apperr.Is(err, apperr.InvalidRequest) {
-			writeFamilyError(w, fam, err)
+			writeError(err)
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadRequest, 0, time.Since(start))
 			return
 		}
 		// network_errors.py: 超时类网络错误(含首 token 耗尽)回 504。
 		if errors.Is(err, kiro.ErrUpstreamTimeout) {
-			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream request timed out", err))
+			writeError(apperr.Wrap(apperr.UpstreamTimeout, "upstream request timed out", err))
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
 			return
 		}
-		writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
+		writeError(apperr.Wrap(apperr.UpstreamUnavailable, "upstream request failed", err))
 		h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 		return
 	}
@@ -426,7 +446,7 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		h.invalidator.Invalidate(target.Account, bearerTokenValue(target.Headers))
 		fresh, rerr := h.resolver.Resolve(r.Context(), target.ModelID)
 		if rerr != nil {
-			writeFamilyError(w, fam, rerr)
+			writeError(rerr)
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusUnauthorized, 0, time.Since(start))
 			return
 		}
@@ -441,31 +461,54 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, fam family, ta
 		if err != nil {
 			ringlog.Push(ringlog.LevelWarn, "proxy", fmt.Sprintf("← error model=%s account=%s: %v", target.ModelID, target.Account, err))
 			if errors.Is(err, kiro.ErrUpstreamTimeout) {
-				writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamTimeout, "upstream retry timed out", err))
+				writeError(apperr.Wrap(apperr.UpstreamTimeout, "upstream retry timed out", err))
 				h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusGatewayTimeout, 0, time.Since(start))
 				return
 			}
-			writeFamilyError(w, fam, apperr.Wrap(apperr.UpstreamUnavailable, "upstream retry failed", err))
+			writeError(apperr.Wrap(apperr.UpstreamUnavailable, "upstream retry failed", err))
 			h.record(r.Context(), target, isStream, usage.Usage{}, http.StatusBadGateway, 0, time.Since(start))
 			return
 		}
 	}
 	defer resp.Body.Close()
 
+	keepaliveCommitted := false
+	if keepalive != nil {
+		keepalive.stop()
+		keepaliveCommitted = keepalive.committed()
+	}
 	contentType := resp.Header.Get("Content-Type")
 	// Codex 强制 SSE，但上游可能标为 text/plain。
 	if target.ProviderID == codex.ProviderID {
 		contentType = "text/event-stream"
 	}
+	if keepaliveCommitted {
+		contentType = "text/event-stream"
+	}
 	sniffer := usage.NewSniffer(target.Protocol, contentType)
 	out := &usageWriter{ResponseWriter: w, sniffer: sniffer, start: start}
 
-	copyHeaders(w.Header(), resp.Header, stripResponseHeaders)
+	if !keepaliveCommitted {
+		copyHeaders(w.Header(), resp.Header, stripResponseHeaders)
+	}
 	w.WriteHeader(resp.StatusCode)
+	var responseBody io.Reader = resp.Body
+	if keepaliveCommitted && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if readErr == nil && json.Valid(data) {
+			responseBody = bytes.NewReader(streamErrorEvent(fam, data))
+		} else {
+			if readErr == nil {
+				readErr = errors.New("upstream error response is not valid JSON")
+			}
+			responseBody = bytes.NewReader(streamFamilyErrorEvent(fam,
+				apperr.Wrap(apperr.UpstreamUnavailable, "upstream returned an unreadable error response", readErr)))
+		}
+	}
 	// 每次写入后立即 flush：SSE 逐事件到达客户端，不等缓冲区填满。
 	// 旁路捕获响应字节(限长)供调试日志,不影响透传本身。
 	capBody := &cappedWriter{}
-	n, _ := io.Copy(out, io.TeeReader(resp.Body, capBody))
+	n, _ := io.Copy(out, io.TeeReader(responseBody, capBody))
 
 	u, _ := sniffer.Result()
 	h.record(r.Context(), target, isStream, u, resp.StatusCode, out.latency, time.Since(start))
@@ -542,6 +585,112 @@ func (u *usageWriter) Write(p []byte) (int, error) {
 		f.Flush()
 	}
 	return n, err
+}
+
+// streamKeepalive 在 Kiro 等原生首块期间先建立下游 SSE。首块前的快速错误仍
+// 保留原 HTTP 状态；保活一旦提交，后续错误只能按流内事件交付。
+type streamKeepalive struct {
+	writer http.ResponseWriter
+
+	mu          sync.Mutex
+	headersSent bool
+	sent        bool
+	done        chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
+}
+
+func newStreamKeepalive(w http.ResponseWriter) *streamKeepalive {
+	return &streamKeepalive{writer: w, done: make(chan struct{})}
+}
+
+func (s *streamKeepalive) start() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		timer := time.NewTimer(streamKeepaliveInitialDelay)
+		defer timer.Stop()
+		for {
+			select {
+			case <-s.done:
+				return
+			case <-timer.C:
+				s.writeHeartbeat()
+				timer.Reset(streamKeepaliveInterval)
+			}
+		}
+	}()
+}
+
+func (s *streamKeepalive) stop() {
+	s.stopOnce.Do(func() { close(s.done) })
+	s.wg.Wait()
+}
+
+func (s *streamKeepalive) stopAndCommitted() bool {
+	s.stop()
+	return s.committed()
+}
+
+func (s *streamKeepalive) committed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sent
+}
+
+func (s *streamKeepalive) writeHeartbeat() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.headersSent && !s.sent {
+		return
+	}
+	if !s.headersSent {
+		h := s.writer.Header()
+		h.Set("Content-Type", "text/event-stream")
+		h.Set("Cache-Control", "no-cache")
+		h.Set("X-Accel-Buffering", "no")
+		s.headersSent = true
+		s.sent = true
+		s.writer.WriteHeader(http.StatusOK)
+	}
+	_, _ = io.WriteString(s.writer, ": keep-alive\n\n")
+	if f, ok := s.writer.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *streamKeepalive) Header() http.Header { return s.writer.Header() }
+
+func (s *streamKeepalive) WriteHeader(status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.headersSent {
+		return
+	}
+	s.headersSent = true
+	s.writer.WriteHeader(status)
+}
+
+func (s *streamKeepalive) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.headersSent {
+		s.headersSent = true
+		s.writer.WriteHeader(http.StatusOK)
+	}
+	n, err := s.writer.Write(p)
+	if f, ok := s.writer.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
+}
+
+func (s *streamKeepalive) Flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f, ok := s.writer.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // listModels 按族输出原生形态的命名模型清单。只列启用中且协议匹配的：

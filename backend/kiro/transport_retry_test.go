@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/ringlog"
 )
 
 func TestRound28WireHTTPErrorLength(t *testing.T) {
@@ -790,6 +791,29 @@ func stubTimeout(t *testing.T, d time.Duration) {
 	orig := firstTokenTimeout
 	firstTokenTimeout = func(string) time.Duration { return d }
 	t.Cleanup(func() { firstTokenTimeout = orig })
+}
+
+func TestNativeTimelineLogs(t *testing.T) {
+	seq := ringlog.LastSeq()
+	wire := joinedFrames(frame("assistantResponseEvent", object{"content": "hi"}), endFrame())
+	upstream := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(wire)), Request: r}, nil
+	})
+	r := clientRequest(tbOf(t), "http://unused", "openai", true)
+	resp, err := NewTransport(upstream).RoundTrip(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	var headers, firstByte bool
+	for _, entry := range ringlog.Since(seq) {
+		headers = headers || entry.Source == "kiro" && strings.Contains(entry.Msg, "native headers status=200")
+		firstByte = firstByte || entry.Source == "kiro" && strings.Contains(entry.Msg, "native first-byte bytes=")
+	}
+	if !headers || !firstByte {
+		t.Fatalf("headers=%v firstByte=%v", headers, firstByte)
+	}
 }
 
 func TestFirstTokenTimeoutRetry(t *testing.T) {

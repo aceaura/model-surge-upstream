@@ -1,6 +1,7 @@
 package proxyplane
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/chat"
 	"github.com/aceaura/model-surge-upstream/backend/kiro"
@@ -968,5 +970,172 @@ func TestRound25KiroBudgetNumberIdentity(t *testing.T) {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body)
 			}
 		})
+	}
+}
+
+func stubStreamKeepalive(t *testing.T) {
+	t.Helper()
+	initial, interval := streamKeepaliveInitialDelay, streamKeepaliveInterval
+	streamKeepaliveInitialDelay = 20 * time.Millisecond
+	streamKeepaliveInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		streamKeepaliveInitialDelay = initial
+		streamKeepaliveInterval = interval
+	})
+}
+
+func keepaliveTestHandler(target resolve.ResolvedTarget, transport http.RoundTripper) *Handler {
+	h := NewHandler(testKey, fakeResolver{targets: map[string]resolve.ResolvedTarget{target.ModelID: target}}, nil)
+	h.client.Transport = transport
+	return h
+}
+
+func TestKiroStreamKeepaliveBeforeFirstUpstreamResponse(t *testing.T) {
+	stubStreamKeepalive(t)
+	release := make(chan struct{})
+	target := resolve.ResolvedTarget{ModelID: "kiro-keepalive", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions,
+		BaseURL: "http://unused", NativeModel: "claude-opus-5", Headers: kiro.Headers("test-access", "")}
+	h := keepaliveTestHandler(target, round29RoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-release
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader("data: {\"choices\":[]}\n\ndata: [DONE]\n\n")), Request: r}, nil
+	}))
+	proxy := httptest.NewServer(h)
+	defer proxy.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	r, _ := http.NewRequest(http.MethodPost, proxy.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"kiro-keepalive","stream":true,"messages":[{"role":"user","content":"q"}]}`))
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	resp, err := proxy.Client().Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("status=%d headers=%v", resp.StatusCode, resp.Header)
+	}
+	reader := bufio.NewReader(resp.Body)
+	line, err := reader.ReadString('\n')
+	if err != nil || line != ": keep-alive\n" {
+		t.Fatalf("first line=%q err=%v", line, err)
+	}
+	close(release)
+	data, err := io.ReadAll(reader)
+	if err != nil || !strings.Contains(string(data), `"choices":[]`) || !strings.Contains(string(data), "data: [DONE]") {
+		t.Fatalf("body=%s err=%v", data, err)
+	}
+}
+
+func TestKiroStreamKeepaliveDeliversLateErrorAsSSE(t *testing.T) {
+	stubStreamKeepalive(t)
+	target := resolve.ResolvedTarget{ModelID: "kiro-keepalive-error", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions,
+		BaseURL: "http://unused", NativeModel: "claude-opus-5", Headers: kiro.Headers("test-access", "")}
+	h := keepaliveTestHandler(target, round29RoundTripFunc(func(*http.Request) (*http.Response, error) {
+		time.Sleep(40 * time.Millisecond)
+		return nil, fmt.Errorf("native wait: %w", kiro.ErrUpstreamTimeout)
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"kiro-keepalive-error","stream":true,"messages":[{"role":"user","content":"q"}]}`))
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.Contains(body, ": keep-alive") ||
+		!strings.Contains(body, `"type":"server_error"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("status=%d body=%s", w.Code, body)
+	}
+}
+
+func TestKiroStreamKeepaliveConvertsLateHTTPErrorToSSE(t *testing.T) {
+	stubStreamKeepalive(t)
+	target := resolve.ResolvedTarget{ModelID: "kiro-late-status", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions,
+		BaseURL: "http://unused", NativeModel: "claude-opus-5", Headers: kiro.Headers("test-access", "")}
+	h := keepaliveTestHandler(target, round29RoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		time.Sleep(40 * time.Millisecond)
+		return &http.Response{StatusCode: 429, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"slow down","type":"rate_limit_error"}}`)), Request: r}, nil
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"kiro-late-status","stream":true,"messages":[{"role":"user","content":"q"}]}`))
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.Contains(body, ": keep-alive") ||
+		!strings.Contains(body, `data: {"error":{"message":"slow down","type":"rate_limit_error"}}`) ||
+		!strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("status=%d body=%s", w.Code, body)
+	}
+}
+
+func TestKiroStreamFastErrorKeepsHTTPStatus(t *testing.T) {
+	stubStreamKeepalive(t)
+	target := resolve.ResolvedTarget{ModelID: "kiro-fast-error", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions,
+		BaseURL: "http://unused", NativeModel: "claude-opus-5", Headers: kiro.Headers("test-access", "")}
+	h := keepaliveTestHandler(target, round29RoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("native wait: %w", kiro.ErrUpstreamTimeout)
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"kiro-fast-error","stream":true,"messages":[{"role":"user","content":"q"}]}`))
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusGatewayTimeout || strings.Contains(w.Body.String(), "keep-alive") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body)
+	}
+}
+
+func TestKiroNonStreamDoesNotKeepAlive(t *testing.T) {
+	stubStreamKeepalive(t)
+	target := resolve.ResolvedTarget{ModelID: "kiro-nonstream", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions,
+		BaseURL: "http://unused", NativeModel: "claude-opus-5", Headers: kiro.Headers("test-access", "")}
+	h := keepaliveTestHandler(target, round29RoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		time.Sleep(40 * time.Millisecond)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"choices":[]}`)), Request: r}, nil
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"kiro-nonstream","messages":[{"role":"user","content":"q"}]}`))
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 || w.Body.String() != `{"choices":[]}` {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body)
+	}
+}
+
+func TestKiroStreamKeepaliveCancellationReachesUpstream(t *testing.T) {
+	stubStreamKeepalive(t)
+	canceled := make(chan struct{})
+	target := resolve.ResolvedTarget{ModelID: "kiro-keepalive-cancel", ProviderID: kiro.ProviderID, Protocol: provider.ProtocolChatCompletions,
+		BaseURL: "http://unused", NativeModel: "claude-opus-5", Headers: kiro.Headers("test-access", "")}
+	h := keepaliveTestHandler(target, round29RoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		close(canceled)
+		return nil, r.Context().Err()
+	}))
+	proxy := httptest.NewServer(h)
+	defer proxy.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	r, _ := http.NewRequestWithContext(ctx, http.MethodPost, proxy.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"kiro-keepalive-cancel","stream":true,"messages":[{"role":"user","content":"q"}]}`))
+	r.Header.Set("Authorization", "Bearer "+testKey)
+	resp, err := proxy.Client().Do(r)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancel()
+	resp.Body.Close()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("upstream request context was not canceled")
 	}
 }

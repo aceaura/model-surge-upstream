@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/aceaura/model-surge-upstream/backend/apperr"
+	"github.com/aceaura/model-surge-upstream/backend/ringlog"
 )
 
 const (
@@ -297,13 +298,19 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		var firstChunk []byte
 	send:
 		for ft := 0; ; ft++ {
+			nativeAttempt := 0
 			for attempt := 0; ; attempt++ {
+				nativeAttempt = attempt + 1
 				upstream.Header.Set("Amz-Sdk-Invocation-Id", newID())
 				upstream.Body = io.NopCloser(bytes.NewReader(encoded))
 				upstream.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(encoded)), nil }
 				upstream.ContentLength = int64(len(encoded))
+				attemptStart := time.Now()
 				resp, err = t.kiroBase.RoundTrip(upstream)
 				if err != nil {
+					ringlog.Push(ringlog.LevelWarn, "kiro", fmt.Sprintf(
+						"native error protocol=%s effort=%s first_attempt=%d attempt=%d header_elapsed=%s: %v",
+						protocol, options.effort, ft+1, attempt+1, time.Since(attemptStart).Round(time.Millisecond), err))
 					if !retryableNetErr(err) || attempt >= maxRetryAttempts-1 {
 						return nil, nil, markUpstreamTimeout(err)
 					}
@@ -315,6 +322,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				if resp == nil {
 					return nil, nil, fmt.Errorf("kiro: upstream transport returned no response")
 				}
+				ringlog.Push(ringlog.LevelInfo, "kiro", fmt.Sprintf(
+					"native headers status=%d protocol=%s effort=%s first_attempt=%d attempt=%d elapsed=%s",
+					resp.StatusCode, protocol, options.effort, ft+1, attempt+1, time.Since(attemptStart).Round(time.Millisecond)))
 				retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 				if !retryable || attempt >= maxRetryAttempts-1 {
 					break
@@ -328,7 +338,15 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				break send // 错误响应原样透传,不参与首 token 重试
 			}
+			firstStart := time.Now()
 			firstChunk, err = peekFirstChunk(ctx, resp.Body, firstTokenTimeout(options.effort))
+			level := ringlog.LevelInfo
+			if err != nil && !errors.Is(err, io.EOF) {
+				level = ringlog.LevelWarn
+			}
+			ringlog.Push(level, "kiro", fmt.Sprintf(
+				"native first-byte bytes=%d protocol=%s effort=%s first_attempt=%d attempt=%d elapsed=%s err=%v",
+				len(firstChunk), protocol, options.effort, ft+1, nativeAttempt, time.Since(firstStart).Round(time.Millisecond), err))
 			switch {
 			case err == nil, errors.Is(err, io.EOF):
 				// 空响应在 Python 里是正常结束,交给 finalize 判定。
