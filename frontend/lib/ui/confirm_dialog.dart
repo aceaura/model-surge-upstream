@@ -24,6 +24,7 @@ class ConfirmDialog extends StatelessWidget {
     required this.title,
     required this.message,
     this.confirmLabel = '删除',
+    this.cancelLabel = '取消',
     this.severity = ConfirmSeverity.danger,
   });
 
@@ -32,6 +33,7 @@ class ConfirmDialog extends StatelessWidget {
 
   /// 危险确认钮文案(删除/清除/清空/确认删除)。
   final String confirmLabel;
+  final String cancelLabel;
 
   /// 严重程度,默认 [ConfirmSeverity.danger]。
   final ConfirmSeverity severity;
@@ -56,7 +58,7 @@ class ConfirmDialog extends StatelessWidget {
       actions: [
         OutlinedButton(
           onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
+          child: Text(cancelLabel),
         ),
         FilledButton(
           style: FilledButton.styleFrom(

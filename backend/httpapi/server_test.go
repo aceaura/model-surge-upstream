@@ -32,8 +32,9 @@ const (
 // ---- 内存桩 ----
 
 type stubAccounts struct {
-	data  map[string]account.Account
-	order []string
+	data       map[string]account.Account
+	order      []string
+	lastUpdate account.Input
 }
 
 func (s *stubAccounts) Create(_ context.Context, in account.Input) (account.Account, error) {
@@ -106,6 +107,7 @@ func (s *stubAccounts) Update(_ context.Context, in account.Input) (account.Acco
 	if !ok {
 		return account.Account{}, apperr.New(apperr.NotFound, "account "+in.Name+" not found")
 	}
+	s.lastUpdate = in
 	existing.Enabled = in.Enabled
 	if in.BaseURL != "" {
 		existing.BaseURL = in.BaseURL
@@ -620,6 +622,18 @@ func TestGetAccountReportsModelCount(t *testing.T) {
 	}
 	if body.ModelCount != 1 {
 		t.Errorf("model_count = %d, want 1 (drives the cascade warning)", body.ModelCount)
+	}
+}
+
+func TestUpdateAccountEnableModelsOption(t *testing.T) {
+	f := newFixture(t)
+	rec := f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":true,"enable_models":true}`)
+	if rec.Code != http.StatusOK || !f.accounts.lastUpdate.EnableModels {
+		t.Fatalf("explicit model enable was not forwarded: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":true}`)
+	if rec.Code != http.StatusOK || f.accounts.lastUpdate.EnableModels {
+		t.Fatalf("plain account enable must not enable models: %d %s", rec.Code, rec.Body)
 	}
 }
 

@@ -257,6 +257,92 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateModelAvailability(t *testing.T) {
+	repo := newRepo(t)
+	ctx := context.Background()
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"kimi-1/k2", "kimi-1/k3"} {
+		if _, err := repo.pool.Exec(ctx, `INSERT INTO models (id, account, native_model, protocol, enabled) VALUES ($1,$2,$3,$4,true)`,
+			id, "kimi-1", "kimi-k2", "anthropic"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	states := func() map[string]bool {
+		rows, err := repo.pool.Query(ctx, `SELECT id, enabled FROM models WHERE account=$1 ORDER BY id`, "kimi-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		out := map[string]bool{}
+		for rows.Next() {
+			var id string
+			var enabled bool
+			if err := rows.Scan(&id, &enabled); err != nil {
+				t.Fatal(err)
+			}
+			out[id] = enabled
+		}
+		return out
+	}
+
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	if got := states(); got["kimi-1/k2"] || got["kimi-1/k3"] {
+		t.Fatalf("disable must cascade to every model: %v", got)
+	}
+
+	if _, err := repo.pool.Exec(ctx, `UPDATE models SET enabled=true WHERE id=$1`, "kimi-1/k2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := states(); !got["kimi-1/k2"] || got["kimi-1/k3"] {
+		t.Fatalf("plain enable must preserve model states: %v", got)
+	}
+
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: true, EnableModels: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := states(); !got["kimi-1/k2"] || !got["kimi-1/k3"] {
+		t.Fatalf("explicit enable must cascade to every model: %v", got)
+	}
+
+	if _, err := repo.Create(ctx, input("empty", "kimi.global.subscribe.coding")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Update(ctx, Input{Name: "empty", Enabled: false}); err != nil {
+		t.Fatalf("account without models: %v", err)
+	}
+}
+
+func TestUpdateAvailabilityInvalidatesModelCache(t *testing.T) {
+	backend := testenv.RedisRequired(t)
+	s := testenv.Store(t)
+	repo := NewRepo(s.Pool(), cache.New(backend, time.Minute))
+	ctx := context.Background()
+	if _, err := repo.Create(ctx, input("kimi-1", "kimi.global.subscribe.coding")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.pool.Exec(ctx, `INSERT INTO models (id, account, native_model, protocol, enabled) VALUES ($1,$2,$3,$4,true)`,
+		"kimi-1/k2", "kimi-1", "kimi-k2", "anthropic"); err != nil {
+		t.Fatal(err)
+	}
+	key := cache.ModelKey("kimi-1/k2")
+	if err := backend.Set(ctx, key, []byte(`{"id":"kimi-1/k2","enabled":true}`), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := backend.Get(ctx, key); err == nil && len(raw) > 0 {
+		t.Fatal("changed model cache entry was not invalidated")
+	}
+}
+
 func TestUpdateKeepsCredentialWhenOmitted(t *testing.T) {
 	repo := newRepo(t)
 	ctx := context.Background()

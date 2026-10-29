@@ -39,6 +39,7 @@ type Input struct {
 	Headers       map[string]string
 	QuotaSettings *QuotaSettings
 	Enabled       bool
+	EnableModels  bool
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
@@ -165,22 +166,65 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
+	changedModelIDs := []string{}
 	persist := func() error {
-		tag, err := r.pool.Exec(ctx, `UPDATE accounts SET
-			provider_id=$2, credential=$3, base_url=$4, headers=$5, quota_settings=$6, enabled=$7, updated_at=$8
-			WHERE name=$1`,
-			acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, settingsRaw, acc.Enabled, acc.UpdatedAt)
-		if err != nil {
-			return apperr.Wrap(apperr.StorageError, "update account", err)
+		updateAccount := func(exec interface {
+			Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+		}) error {
+			tag, err := exec.Exec(ctx, `UPDATE accounts SET
+				provider_id=$2, credential=$3, base_url=$4, headers=$5, quota_settings=$6, enabled=$7, updated_at=$8
+				WHERE name=$1`,
+				acc.Name, acc.ProviderID, credRaw, acc.BaseURL, headersRaw, settingsRaw, acc.Enabled, acc.UpdatedAt)
+			if err != nil {
+				return apperr.Wrap(apperr.StorageError, "update account", err)
+			}
+			if tag.RowsAffected() == 0 {
+				return apperr.New(apperr.NotFound, fmt.Sprintf("account %q not found", acc.Name))
+			}
+			return nil
 		}
-		if tag.RowsAffected() == 0 {
-			return apperr.New(apperr.NotFound, fmt.Sprintf("account %q not found", acc.Name))
+		if acc.Enabled && !in.EnableModels {
+			return updateAccount(r.pool)
+		}
+
+		tx, err := r.pool.Begin(ctx)
+		if err != nil {
+			return apperr.Wrap(apperr.StorageError, "begin tx", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if err := updateAccount(tx); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `UPDATE models SET enabled=$2, updated_at=$3
+			WHERE account=$1 AND enabled<>$2 RETURNING id`, acc.Name, acc.Enabled, acc.UpdatedAt)
+		if err != nil {
+			return apperr.Wrap(apperr.StorageError, "cascade account availability", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return apperr.Wrap(apperr.StorageError, "scan changed model", err)
+			}
+			changedModelIDs = append(changedModelIDs, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return apperr.Wrap(apperr.StorageError, "cascade account availability", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return apperr.Wrap(apperr.StorageError, "commit account availability", err)
 		}
 		return nil
 	}
 	if err := cache.WriteThrough(ctx, r.cache, cache.AccountKey(acc.Name), acc, persist); err != nil {
 		return Account{}, err
 	}
+	keys := make([]string, 0, len(changedModelIDs))
+	for _, id := range changedModelIDs {
+		keys = append(keys, cache.ModelKey(id))
+	}
+	r.cache.Invalidate(ctx, keys...)
 	return acc, nil
 }
 

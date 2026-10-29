@@ -184,8 +184,31 @@ class _AccountsPageState extends State<AccountsPage> {
   Future<void> _toggle(Account account) async {
     setState(() => _toggling.add(account.name));
     try {
-      await widget.client
-          .updateAccount(name: account.name, enabled: !account.enabled);
+      final enabled = !account.enabled;
+      var enableModels = false;
+      if (enabled) {
+        final (_, modelCount) = await widget.client.getAccount(account.name);
+        if (!mounted) return;
+        if (modelCount > 0) {
+          enableModels = await showDialog<bool>(
+                context: context,
+                builder: (context) => ConfirmDialog(
+                  title: '打开账号 ${account.name}？',
+                  message: '该账号关联 $modelCount 个模型，是否同时打开全部模型？',
+                  confirmLabel: '同时打开',
+                  cancelLabel: '仅打开账号',
+                  severity: ConfirmSeverity.warning,
+                ),
+              ) ??
+              false;
+        }
+      }
+      if (!mounted) return;
+      await widget.client.updateAccount(
+        name: account.name,
+        enabled: enabled,
+        enableModels: enableModels,
+      );
       _reload();
     } catch (e) {
       if (mounted) showError(context, e);

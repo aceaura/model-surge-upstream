@@ -252,6 +252,22 @@ void main() {
     expect(sent!['enabled'], isFalse);
   });
 
+  test('update only sends enable_models after explicit confirmation', () async {
+    final sent = <Map<String, dynamic>>[];
+    final mock = MockClient((request) async {
+      sent.add(jsonDecode(request.body) as Map<String, dynamic>);
+      return http.Response(
+          jsonEncode({'account': {'name': 'kimi-1', 'enabled': true}}), 200);
+    });
+    final client = ApiClient(
+        baseUrl: 'http://127.0.0.1:8080', adminKey: 'adm', httpClient: mock);
+    await client.updateAccount(name: 'kimi-1', enabled: true);
+    await client.updateAccount(
+        name: 'kimi-1', enabled: true, enableModels: true);
+    expect(sent[0].containsKey('enable_models'), isFalse);
+    expect(sent[1]['enable_models'], isTrue);
+  });
+
   test('quota report parses the not-queryable shape', () async {
     final client = clientReturning(200,
         jsonEncode({'account': 'kimi-1', 'queryable': false, 'meters': []}));
