@@ -57,6 +57,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
   final _testing = <String>{};
   final _searchController = TextEditingController();
   String _query = '';
+  bool _hideDisabled = false;
 
   /// 拖拽排序的用户序(全量模型 id)。非空时乐观覆盖服务器返回顺序,
   /// 后台落库失败即清掉回落服务器序;按 id 合并,服务器侧新增模型随其
@@ -337,8 +338,10 @@ class _AllModelsPageState extends State<AllModelsPage> {
           return keywords.every((k) => fields.any((f) => f.contains(k)));
         }
 
-        final visible =
-            keywords.isEmpty ? models : models.where(hit).toList();
+        final visible = models
+            .where((m) =>
+                (!_hideDisabled || m.enabled) && (keywords.isEmpty || hit(m)))
+            .toList();
 
         final Widget content;
         if (!loaded) {
@@ -356,7 +359,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
               style: TextStyle(color: t.faint),
             ),
           );
-        } else if (_query.isEmpty) {
+        } else if (_query.isEmpty && !_hideDisabled) {
           content = ReorderableListView.builder(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
             // 拖拽柄只在行首;默认柄会让整行抢占滚动手势
@@ -413,6 +416,21 @@ class _AllModelsPageState extends State<AllModelsPage> {
                 controller: _searchController,
                 clickableStats: true,
                 onSearch: (v) => setState(() => _query = v),
+                trailing: IconButton(
+                  key: const Key('toggle-disabled-models'),
+                  tooltip: _hideDisabled ? '显示已停用模型' : '隐藏已停用模型',
+                  icon: Icon(
+                    _hideDisabled
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    size: 18,
+                    color: t.faint,
+                  ),
+                  splashRadius: 18,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () =>
+                      setState(() => _hideDisabled = !_hideDisabled),
+                ),
               ),
             Expanded(child: content),
           ],

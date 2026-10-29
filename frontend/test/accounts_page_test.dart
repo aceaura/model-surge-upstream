@@ -116,6 +116,69 @@ Future<List<Map<String, dynamic>>> pumpTogglePage(
 }
 
 void main() {
+  testWidgets('眼睛开关只隐藏本页停用账号,再点击恢复且不写服务端', (tester) async {
+    var writes = 0;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        if (request.method != 'GET') writes++;
+        final Map<String, dynamic> payload;
+        if (request.url.path == '/admin/accounts') {
+          payload = {
+            'accounts': [
+              for (final (name, enabled) in [
+                ('enabled-1', true),
+                ('disabled-1', false),
+              ])
+                {
+                  'name': name,
+                  'provider_id': 'deepseek.global.api.standard',
+                  'credential': {'api_key': 'sk-***'},
+                  'base_url': 'https://api.deepseek.com',
+                  'headers': <String, dynamic>{},
+                  'enabled': enabled,
+                },
+            ],
+          };
+        } else if (request.url.path == '/admin/providers') {
+          payload = {'providers': <dynamic>[]};
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: AccountsPage(
+          client: client,
+          onOpenSettings: () {},
+          onOpenModels: (_) {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('enabled-1'), findsOneWidget);
+    expect(find.text('disabled-1'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('toggle-disabled-accounts')));
+    await tester.pump();
+    expect(find.text('enabled-1'), findsOneWidget);
+    expect(find.text('disabled-1'), findsNothing);
+    expect(find.byType(ReorderableDragStartListener), findsNothing);
+
+    await tester.tap(find.byKey(const Key('toggle-disabled-accounts')));
+    await tester.pump();
+    expect(find.text('disabled-1'), findsOneWidget);
+    expect(writes, 0);
+  });
+
   testWidgets('拖拽柄行首常驻,拖拽换序乐观换行并落库全量新顺序', (tester) async {
     final captured = <String>[];
     // 有状态桩:reorder 落库后的重拉按新顺序供数,贴近真实服务端。

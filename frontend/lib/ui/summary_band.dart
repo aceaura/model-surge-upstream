@@ -31,11 +31,13 @@ class SummaryBand extends StatefulWidget {
     required this.onSearch,
     this.controller,
     this.clickableStats = false,
+    this.trailing,
   });
 
   final String summary;
   final List<BandStat> stats;
   final String searchHint;
+  final Widget? trailing;
 
   /// 统计 chips 是否可点击:点击把标签加入/移出搜索关键字,
   /// 仅在页面搜索支持多关键字交集且标签本身可被搜索命中时开启。
@@ -203,6 +205,10 @@ class _SummaryBandState extends State<SummaryBand> {
                   ],
                 ),
               ),
+              if (widget.trailing case final trailing?) ...[
+                const SizedBox(width: 8),
+                trailing,
+              ],
             ],
           ),
           const SizedBox(height: 10),

@@ -42,6 +42,7 @@ class _AccountsPageState extends State<AccountsPage> {
   final _toggling = <String>{};
   final _testing = <String>{};
   String _query = '';
+  bool _hideDisabled = false;
 
   /// 拖拽排序的用户序(全量账号名)。非空时乐观覆盖服务器返回顺序,
   /// 后台落库失败即清掉回落服务器序;按名合并,服务器侧新增账号随其
@@ -328,8 +329,10 @@ class _AccountsPageState extends State<AccountsPage> {
           return keywords.every((k) => fields.any((f) => f.contains(k)));
         }
 
-        final visible =
-            keywords.isEmpty ? accounts : accounts.where(hit).toList();
+        final visible = accounts
+            .where((a) =>
+                (!_hideDisabled || a.enabled) && (keywords.isEmpty || hit(a)))
+            .toList();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -354,6 +357,21 @@ class _AccountsPageState extends State<AccountsPage> {
               searchHint: '搜索账号名、提供商或请求地址，空格分隔多关键字取交集',
               clickableStats: true,
               onSearch: (v) => setState(() => _query = v),
+              trailing: IconButton(
+                key: const Key('toggle-disabled-accounts'),
+                tooltip: _hideDisabled ? '显示已停用账号' : '隐藏已停用账号',
+                icon: Icon(
+                  _hideDisabled
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  size: 18,
+                  color: t.faint,
+                ),
+                splashRadius: 18,
+                visualDensity: VisualDensity.compact,
+                onPressed: () =>
+                    setState(() => _hideDisabled = !_hideDisabled),
+              ),
             ),
             Expanded(
               child: visible.isEmpty
@@ -361,7 +379,7 @@ class _AccountsPageState extends State<AccountsPage> {
                       child: Text(
                           accounts.isEmpty ? '还没有账号，先新建一个。' : '没有匹配的账号。',
                           style: TextStyle(color: t.faint)))
-                  : _query.isEmpty
+                  : _query.isEmpty && !_hideDisabled
                       ? ReorderableListView.builder(
                           padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                           // 拖拽柄只在行首;默认柄会让整行抢占滚动手势

@@ -64,6 +64,68 @@ Future<void> pumpPage(WidgetTester tester, Map<String, dynamic> testResult,
 }
 
 void main() {
+  testWidgets('眼睛开关只隐藏本页停用模型,再点击恢复且不写服务端', (tester) async {
+    var writes = 0;
+    final client = ApiClient(
+      baseUrl: 'http://127.0.0.1:8080',
+      adminKey: 'adm',
+      httpClient: MockClient((request) async {
+        if (request.method != 'GET') writes++;
+        final Map<String, dynamic> payload;
+        if (request.url.path == '/admin/models') {
+          payload = {
+            'models': [
+              for (final (id, enabled) in [
+                ('ds-1/enabled', true),
+                ('ds-1/disabled', false),
+              ])
+                {
+                  'id': id,
+                  'account': 'ds-1',
+                  'native_model': 'deepseek-v4.1-flash',
+                  'protocol': 'chat_completions',
+                  'defaults': <String, dynamic>{},
+                  'overrides': <String, dynamic>{},
+                  'enabled': enabled,
+                },
+            ],
+          };
+        } else if (request.url.path == '/admin/accounts') {
+          payload = {'accounts': <dynamic>[]};
+        } else if (request.url.path == '/admin/providers') {
+          payload = {'providers': <dynamic>[]};
+        } else {
+          payload = {};
+        }
+        return http.Response(jsonEncode(payload), 200,
+            headers: {'content-type': 'application/json'});
+      }),
+    );
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAppTheme(),
+      home: Scaffold(
+        body: AllModelsPage(client: client, onOpenSettings: () {}),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ds-1/enabled'), findsOneWidget);
+    expect(find.text('ds-1/disabled'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('toggle-disabled-models')));
+    await tester.pump();
+    expect(find.text('ds-1/enabled'), findsOneWidget);
+    expect(find.text('ds-1/disabled'), findsNothing);
+    expect(find.byType(ReorderableDragStartListener), findsNothing);
+
+    await tester.tap(find.byKey(const Key('toggle-disabled-models')));
+    await tester.pump();
+    expect(find.text('ds-1/disabled'), findsOneWidget);
+    expect(writes, 0);
+  });
+
   testWidgets('拖拽柄行首常驻,拖拽换序乐观换行并落库全量新顺序', (tester) async {
     final captured = <String>[];
     // 有状态桩:reorder 落库后的重拉按新顺序供数,贴近真实服务端。
