@@ -186,7 +186,7 @@ class ApiClient {
     Map<String, dynamic>? quotaSettings,
     required bool enabled,
     Map<String, dynamic>? credential,
-    bool enableModels = false,
+    bool updateModels = false,
     bool verifyBailian = false,
   }) async {
     final body = await _send(
@@ -202,7 +202,7 @@ class ApiClient {
         'headers': ?headers,
         'quota_settings': ?quotaSettings,
         'enabled': enabled,
-        if (enableModels) 'enable_models': true,
+        if (updateModels) 'update_models': true,
         if (verifyBailian) 'verify_bailian': true,
       },
       // 新 AK/SK 的普通保存也会签发并验证三个额度端点。

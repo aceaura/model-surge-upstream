@@ -39,7 +39,7 @@ type Input struct {
 	Headers       map[string]string
 	QuotaSettings *QuotaSettings
 	Enabled       bool
-	EnableModels  bool
+	UpdateModels  bool
 }
 
 func (r *Repo) Create(ctx context.Context, in Input) (Account, error) {
@@ -183,7 +183,7 @@ func (r *Repo) Update(ctx context.Context, in Input) (Account, error) {
 			}
 			return nil
 		}
-		if acc.Enabled && !in.EnableModels {
+		if !in.UpdateModels {
 			return updateAccount(r.pool)
 		}
 

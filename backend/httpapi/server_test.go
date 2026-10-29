@@ -625,15 +625,19 @@ func TestGetAccountReportsModelCount(t *testing.T) {
 	}
 }
 
-func TestUpdateAccountEnableModelsOption(t *testing.T) {
+func TestUpdateAccountUpdateModelsOption(t *testing.T) {
 	f := newFixture(t)
-	rec := f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":true,"enable_models":true}`)
-	if rec.Code != http.StatusOK || !f.accounts.lastUpdate.EnableModels {
+	rec := f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":true,"update_models":true}`)
+	if rec.Code != http.StatusOK || !f.accounts.lastUpdate.UpdateModels {
 		t.Fatalf("explicit model enable was not forwarded: %d %s", rec.Code, rec.Body)
 	}
 	rec = f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":true}`)
-	if rec.Code != http.StatusOK || f.accounts.lastUpdate.EnableModels {
-		t.Fatalf("plain account enable must not enable models: %d %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusOK || f.accounts.lastUpdate.UpdateModels {
+		t.Fatalf("plain account enable must not update models: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, "PUT", "/admin/accounts/kimi-1", adminKey, `{"enabled":false,"update_models":true}`)
+	if rec.Code != http.StatusOK || !f.accounts.lastUpdate.UpdateModels {
+		t.Fatalf("explicit model disable was not forwarded: %d %s", rec.Code, rec.Body)
 	}
 }
 

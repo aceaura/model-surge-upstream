@@ -23,7 +23,7 @@ type accountRequest struct {
 	Headers       map[string]string      `json:"headers"`
 	QuotaSettings *account.QuotaSettings `json:"quota_settings"`
 	Enabled       *bool                  `json:"enabled"`
-	EnableModels  bool                   `json:"enable_models,omitempty"`
+	UpdateModels  bool                   `json:"update_models,omitempty"`
 	VerifyBailian bool                   `json:"verify_bailian,omitempty"`
 }
 
@@ -37,7 +37,7 @@ func (r accountRequest) input(name string) (account.Input, error) {
 		Headers:       r.Headers,
 		QuotaSettings: r.QuotaSettings,
 		Enabled:       true,
-		EnableModels:  r.EnableModels,
+		UpdateModels:  r.UpdateModels,
 	}
 	if r.Enabled != nil {
 		in.Enabled = *r.Enabled

@@ -475,14 +475,29 @@ void main() {
     expect(accountsCalls, 2); // 激活沿重拉一次
   });
 
-  testWidgets('停用账号直接提交,不显示模型联动弹框', (tester) async {
+  testWidgets('停用账号选择仅关闭账号时保留模型状态', (tester) async {
     final updates = await pumpTogglePage(tester, enabled: true, modelCount: 2);
     await tester.tap(find.byType(Switch));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('该账号关联 2 个模型，是否同时关闭全部模型？'), findsOneWidget);
+    await tester.tap(find.text('仅关闭账号'));
     await tester.pumpAndSettle();
-    expect(find.text('同时打开'), findsNothing);
     expect(updates, hasLength(1));
     expect(updates.single['enabled'], isFalse);
-    expect(updates.single.containsKey('enable_models'), isFalse);
+    expect(updates.single.containsKey('update_models'), isFalse);
+  });
+
+  testWidgets('停用账号确认后同时关闭全部模型', (tester) async {
+    final updates = await pumpTogglePage(tester, enabled: true, modelCount: 2);
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('同时关闭'));
+    await tester.pumpAndSettle();
+    expect(updates, hasLength(1));
+    expect(updates.single['enabled'], isFalse);
+    expect(updates.single['update_models'], isTrue);
   });
 
   testWidgets('启用账号确认后同时打开全部模型', (tester) async {
@@ -495,7 +510,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(updates, hasLength(1));
     expect(updates.single['enabled'], isTrue);
-    expect(updates.single['enable_models'], isTrue);
+    expect(updates.single['update_models'], isTrue);
   });
 
   testWidgets('启用账号选择仅打开账号时保留模型状态', (tester) async {
@@ -507,7 +522,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(updates, hasLength(1));
     expect(updates.single['enabled'], isTrue);
-    expect(updates.single.containsKey('enable_models'), isFalse);
+    expect(updates.single.containsKey('update_models'), isFalse);
   });
 
   testWidgets('启用无模型账号不弹框', (tester) async {
@@ -517,6 +532,6 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
     expect(updates, hasLength(1));
     expect(updates.single['enabled'], isTrue);
-    expect(updates.single.containsKey('enable_models'), isFalse);
+    expect(updates.single.containsKey('update_models'), isFalse);
   });
 }

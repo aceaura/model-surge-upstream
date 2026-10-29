@@ -290,8 +290,14 @@ func TestUpdateModelAvailability(t *testing.T) {
 	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: false}); err != nil {
 		t.Fatal(err)
 	}
+	if got := states(); !got["kimi-1/k2"] || !got["kimi-1/k3"] {
+		t.Fatalf("account-only disable must preserve model states: %v", got)
+	}
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: false, UpdateModels: true}); err != nil {
+		t.Fatal(err)
+	}
 	if got := states(); got["kimi-1/k2"] || got["kimi-1/k3"] {
-		t.Fatalf("disable must cascade to every model: %v", got)
+		t.Fatalf("explicit disable must cascade to every model: %v", got)
 	}
 
 	if _, err := repo.pool.Exec(ctx, `UPDATE models SET enabled=true WHERE id=$1`, "kimi-1/k2"); err != nil {
@@ -304,7 +310,7 @@ func TestUpdateModelAvailability(t *testing.T) {
 		t.Fatalf("plain enable must preserve model states: %v", got)
 	}
 
-	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: true, EnableModels: true}); err != nil {
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: true, UpdateModels: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := states(); !got["kimi-1/k2"] || !got["kimi-1/k3"] {
@@ -335,7 +341,7 @@ func TestUpdateAvailabilityInvalidatesModelCache(t *testing.T) {
 	if err := backend.Set(ctx, key, []byte(`{"id":"kimi-1/k2","enabled":true}`), time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: false}); err != nil {
+	if _, err := repo.Update(ctx, Input{Name: "kimi-1", Enabled: false, UpdateModels: true}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err := backend.Get(ctx, key); err == nil && len(raw) > 0 {
