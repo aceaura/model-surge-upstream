@@ -9,6 +9,7 @@ import 'package:msu_admin/api_client.dart';
 import 'package:msu_admin/models.dart';
 import 'package:msu_admin/pages/all_models_page.dart';
 import 'package:msu_admin/theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 列表数据固定一条模型;model-test 的响应由 testResult 参数注入。
 ApiClient fakeClient(Map<String, dynamic> testResult) => ApiClient(
@@ -64,7 +65,9 @@ Future<void> pumpPage(WidgetTester tester, Map<String, dynamic> testResult,
 }
 
 void main() {
-  testWidgets('眼睛开关只隐藏本页停用模型,再点击恢复且不写服务端', (tester) async {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('眼睛过滤写入用户配置,重建后恢复隐藏或显示且不写服务端', (tester) async {
     var writes = 0;
     final client = ApiClient(
       baseUrl: 'http://127.0.0.1:8080',
@@ -104,12 +107,13 @@ void main() {
     tester.view.physicalSize = const Size(1400, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(
-      theme: buildAppTheme(),
-      home: Scaffold(
-        body: AllModelsPage(client: client, onOpenSettings: () {}),
-      ),
-    ));
+    Widget host() => MaterialApp(
+          theme: buildAppTheme(),
+          home: Scaffold(
+            body: AllModelsPage(client: client, onOpenSettings: () {}),
+          ),
+        );
+    await tester.pumpWidget(host());
     await tester.pumpAndSettle();
 
     expect(find.text('ds-1/enabled'), findsOneWidget);
@@ -119,10 +123,27 @@ void main() {
     expect(find.text('ds-1/enabled'), findsOneWidget);
     expect(find.text('ds-1/disabled'), findsNothing);
     expect(find.byType(ReorderableDragStartListener), findsNothing);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('msu.models.hide_disabled'), isTrue);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(host());
+    await tester.pumpAndSettle();
+    expect(find.text('ds-1/disabled'), findsNothing);
+    expect(find.byTooltip('显示已停用模型'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('toggle-disabled-models')));
     await tester.pump();
     expect(find.text('ds-1/disabled'), findsOneWidget);
+    expect(prefs.getBool('msu.models.hide_disabled'), isFalse);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(host());
+    await tester.pumpAndSettle();
+    expect(find.text('ds-1/disabled'), findsOneWidget);
+    expect(find.byTooltip('隐藏已停用模型'), findsOneWidget);
     expect(writes, 0);
   });
 

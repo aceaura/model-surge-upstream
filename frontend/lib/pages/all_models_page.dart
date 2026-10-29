@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_client.dart';
 import '../models.dart';
@@ -58,6 +59,23 @@ class _AllModelsPageState extends State<AllModelsPage> {
   final _searchController = TextEditingController();
   String _query = '';
   bool _hideDisabled = false;
+  static const _hideDisabledStoreKey = 'msu.models.hide_disabled';
+
+  Future<void> _restoreHideDisabled() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool(_hideDisabledStoreKey);
+      if (!mounted || saved == null || saved == _hideDisabled) return;
+      setState(() => _hideDisabled = saved);
+    } catch (_) {}
+  }
+
+  void _toggleHideDisabled() {
+    final hideDisabled = !_hideDisabled;
+    setState(() => _hideDisabled = hideDisabled);
+    SharedPreferences.getInstance().then((prefs) =>
+        prefs.setBool(_hideDisabledStoreKey, hideDisabled));
+  }
 
   /// 拖拽排序的用户序(全量模型 id)。非空时乐观覆盖服务器返回顺序,
   /// 后台落库失败即清掉回落服务器序;按 id 合并,服务器侧新增模型随其
@@ -79,6 +97,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
   void initState() {
     super.initState();
     widget.searchSeed?.addListener(_onSearchSeed);
+    _restoreHideDisabled();
   }
 
   @override
@@ -428,8 +447,7 @@ class _AllModelsPageState extends State<AllModelsPage> {
                   ),
                   splashRadius: 18,
                   visualDensity: VisualDensity.compact,
-                  onPressed: () =>
-                      setState(() => _hideDisabled = !_hideDisabled),
+                  onPressed: _toggleHideDisabled,
                 ),
               ),
             Expanded(child: content),
